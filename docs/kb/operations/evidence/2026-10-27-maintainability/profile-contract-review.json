@@ -1,0 +1,343 @@
+{
+  "baseline": "bd651fd4eaa82200bc06545c133ce9339de248ca",
+  "scope": "C1: profile preparation/apply only; no App A or request-identity B changes; no repository Rust changes.",
+  "decision": "A bounded local candidate: remove independently built profile lists and positional consumption while keeping existing types/modules/input boundary. Do not generalize to whole PreparedShellStep or other resources from this evidence.",
+  "implementation": {
+    "files": [
+      {
+        "file": "core/src/runtime/shell_action_executor.rs",
+        "added": 2,
+        "deleted": 5,
+        "net": -3
+      },
+      {
+        "file": "core/src/runtime/shell_action_executor/apply/prepare.rs",
+        "added": 11,
+        "deleted": 16,
+        "net": -5
+      },
+      {
+        "file": "core/src/runtime/shell_action_executor/apply.rs",
+        "added": 15,
+        "deleted": 17,
+        "net": -2
+      }
+    ],
+    "production": {
+      "added": 28,
+      "deleted": 38,
+      "net": -10
+    },
+    "tests_support": {
+      "added": 0,
+      "deleted": 0,
+      "net": 0
+    },
+    "type_count_delta": 0,
+    "module_count_delta": 0,
+    "function_count_delta": 0,
+    "public_api_changes": 0,
+    "source_partition": {
+      "baseline": [
+        {
+          "file": "core/src/runtime/shell_action_executor.rs",
+          "production": 1373,
+          "test_support": 295,
+          "selected_defs": [
+            {
+              "name": "PreparedShellProfileFile",
+              "kind": "struct",
+              "start": 208,
+              "end": 214
+            }
+          ]
+        },
+        {
+          "file": "core/src/runtime/shell_action_executor/apply/prepare.rs",
+          "production": 671,
+          "test_support": 0,
+          "selected_defs": [
+            {
+              "name": "prepare_profiles",
+              "kind": "method",
+              "start": 367,
+              "end": 472
+            }
+          ]
+        },
+        {
+          "file": "core/src/runtime/shell_action_executor/apply.rs",
+          "production": 357,
+          "test_support": 0,
+          "selected_defs": [
+            {
+              "name": "reconcile_shell_launchers_approved",
+              "kind": "method",
+              "start": 18,
+              "end": 356
+            }
+          ]
+        }
+      ],
+      "prototype": [
+        {
+          "file": "core/src/runtime/shell_action_executor.rs",
+          "production": 1370,
+          "test_support": 295,
+          "selected_defs": [
+            {
+              "name": "PreparedShellProfileFile",
+              "kind": "struct",
+              "start": 208,
+              "end": 211
+            }
+          ]
+        },
+        {
+          "file": "core/src/runtime/shell_action_executor/apply/prepare.rs",
+          "production": 666,
+          "test_support": 0,
+          "selected_defs": [
+            {
+              "name": "prepare_profiles",
+              "kind": "method",
+              "start": 367,
+              "end": 467
+            }
+          ]
+        },
+        {
+          "file": "core/src/runtime/shell_action_executor/apply.rs",
+          "production": 355,
+          "test_support": 0,
+          "selected_defs": [
+            {
+              "name": "reconcile_shell_launchers_approved",
+              "kind": "method",
+              "start": 18,
+              "end": 354
+            }
+          ]
+        }
+      ]
+    },
+    "patch_sha256": "dee4009169fbeffd38cf638438888ed894c57a9b110abe0bd9e78bb1144211d9"
+  },
+  "maintenance": {
+    "independent_profile_append_sites": [
+      2,
+      1
+    ],
+    "profile_positional_zip_sites": [
+      1,
+      0
+    ],
+    "profile_variant_shape_check": "retained",
+    "field_mirrors_removed": [
+      "destination",
+      "rollback",
+      "ownership",
+      "unix_mode (now read from desired identity)"
+    ],
+    "read_scope": "Same three implementation files and existing contract definition; apply reads one contract plus separately named desired_bytes.",
+    "projection": "Complete contract clone at existing Action constructor, no per-field converter, new trait, generic engine or helper dispatch.",
+    "remaining_constraints": [
+      "Action projection and execution record still both exist; clone carries extra identity/hash copies in prepared record.",
+      "No current mutation after projection. Adding one later would require explicit revalidation/redesign.",
+      "desired_bytes and desired identity are still related by preparation; not statically enforced.",
+      "Other resource lists, outer action/prepared pairing and shape checks retained."
+    ]
+  },
+  "history": [
+    "c3bf48cc7df4872ecab707826aa9c7e3584351a8 paired outer steps; retained",
+    "9028fdd889016aa37af760c1d705b056e134c925 retained local preparation boundaries",
+    "25dcfb6d retained cleanup/profile-only receipt and recovery fixes"
+  ],
+  "validation": {
+    "toolchain": "mise; offline; different baseline/prototype target directories",
+    "runner_platform": "macOS; Core selected tests include virtual platform fixtures; CLI cases use macOS native filesystem",
+    "core_filter": "test(shell)",
+    "core_baseline": {
+      "passed": 137,
+      "skipped": 594
+    },
+    "core_prototype": {
+      "passed": 137,
+      "skipped": 594
+    },
+    "trace_filter": "test(mixed_shell_actions_keep_journal_order) | test(profile_only_removal_recovery) | test(shell_profile_recovery_preserves)",
+    "trace_baseline": {
+      "passed": 3,
+      "skipped": 728
+    },
+    "trace_prototype": {
+      "passed": 3,
+      "skipped": 728
+    },
+    "trace_instrumentation": {
+      "same_on_both_sides": true,
+      "temporary_added_lines": 56,
+      "restored_after_comparison": true,
+      "permanent_test_inclusion": false,
+      "methods": [
+        "canonicalize",
+        "read",
+        "metadata",
+        "read_dir",
+        "read_link",
+        "acquire_operation_lock",
+        "write_atomic",
+        "create_dir_all",
+        "remove_file",
+        "remove_dir_all",
+        "set_executable",
+        "set_mode",
+        "rename",
+        "symlink",
+        "acquire_privileged_operation"
+      ],
+      "recorded": "call entry and arguments (including all attempted write bytes), existing HostOperation trace, BTreeMap nodes and modes at checkpoints",
+      "caveat": "Call-entry order, not OS scheduling or lock-release timing. Checkpoints contain cumulative prefixes, not 14 independent scenarios."
+    },
+    "trace_comparison": [
+      {
+        "checkpoint": "mixed-0-interrupted.json",
+        "equal": true,
+        "calls": 97,
+        "journal_write_attempts": 2,
+        "sha256": "42c43e86942606736a3b4145cfa8782ad649db7f0875150e139d860cd18bf090"
+      },
+      {
+        "checkpoint": "mixed-0-recovered.json",
+        "equal": true,
+        "calls": 219,
+        "journal_write_attempts": 2,
+        "sha256": "988c743cd17627c736d23e7ffc9909d52ed530adf0ca73e84265ca5968f1e0fa"
+      },
+      {
+        "checkpoint": "mixed-0-retried.json",
+        "equal": true,
+        "calls": 377,
+        "journal_write_attempts": 8,
+        "sha256": "9befcb496775a6f5f2c91e8fd61ae06d95410b51da97d6b99148f7dc6fec7563"
+      },
+      {
+        "checkpoint": "mixed-1-interrupted.json",
+        "equal": true,
+        "calls": 100,
+        "journal_write_attempts": 3,
+        "sha256": "0b5f3ed79929b03e0475f4c6a06ff8eb1ccbf7e78b3827236bb01dbb97774da8"
+      },
+      {
+        "checkpoint": "mixed-1-recovered.json",
+        "equal": true,
+        "calls": 230,
+        "journal_write_attempts": 3,
+        "sha256": "6394c88fa8e78a0e922e5f7f2a81e3d09e2e8ef0582fe62ff9f86db6333a9a22"
+      },
+      {
+        "checkpoint": "mixed-1-retried.json",
+        "equal": true,
+        "calls": 388,
+        "journal_write_attempts": 9,
+        "sha256": "ca56d4fac5213577d24e6fd93078a7fd620d4ffaa2bc3c1ef7c4094a11ae6016"
+      },
+      {
+        "checkpoint": "mixed-2-interrupted.json",
+        "equal": true,
+        "calls": 110,
+        "journal_write_attempts": 4,
+        "sha256": "fd6b70801031f8897ac976bbb7428a02e1455d751d7495d6415c2eb90660aacd"
+      },
+      {
+        "checkpoint": "mixed-2-recovered.json",
+        "equal": true,
+        "calls": 261,
+        "journal_write_attempts": 4,
+        "sha256": "192ff1c64b7fe8acfbfa6b6518cc9368b6d91686e4268e7052a88d677dec1ab0"
+      },
+      {
+        "checkpoint": "mixed-2-retried.json",
+        "equal": true,
+        "calls": 419,
+        "journal_write_attempts": 10,
+        "sha256": "a36789c1a0cfb4dc9982304a5cb428e0e56df3e354a83b1b90a9312aefb38bb0"
+      },
+      {
+        "checkpoint": "mixed-3-interrupted.json",
+        "equal": true,
+        "calls": 113,
+        "journal_write_attempts": 5,
+        "sha256": "3b5f51f501ff7467c120d6ee2c05c8d6b278a7918dce2b3a56c4916dbd49f3c1"
+      },
+      {
+        "checkpoint": "mixed-3-recovered.json",
+        "equal": true,
+        "calls": 269,
+        "journal_write_attempts": 5,
+        "sha256": "420180025ed98bfddbb8fde209f1153b06f097c7287f4c9c783c80ff6c6ea66e"
+      },
+      {
+        "checkpoint": "mixed-3-retried.json",
+        "equal": true,
+        "calls": 427,
+        "journal_write_attempts": 11,
+        "sha256": "5fe7330fec027f82e36c20e028d4bc9d880e2f9a55966b9ec65fdb194cfd2f60"
+      },
+      {
+        "checkpoint": "profile_only_removal_recovery_requires_empty_manifest_and_exact_identities.json",
+        "equal": true,
+        "calls": 593,
+        "journal_write_attempts": 14,
+        "sha256": "9bbfebd78bdf4c1c18c2ae9eb2164b04c9bc6a83c4a38bc8d7063c8abfb114de"
+      },
+      {
+        "checkpoint": "shell_profile_recovery_preserves_unrelated_post_interruption_edits.json",
+        "equal": true,
+        "calls": 402,
+        "journal_write_attempts": 9,
+        "sha256": "ab219f01b23ab6d43fe7646b1cc0e26fdeb035d2f8e8ede3f36eb2426bcc47cb"
+      }
+    ],
+    "cli_filter": "test(completion_install_encodes_paths) | test(shell_category_then_whole_uninstall) | test(shell_uninstall_defaults_to_cleanup)",
+    "cli_baseline": {
+      "passed": 3,
+      "skipped": 106
+    },
+    "cli_prototype": {
+      "passed": 3,
+      "skipped": 106
+    },
+    "fmt": "passed; uninstrumented prototype",
+    "clippy": "passed; shine-core --lib --all-features -- -D warnings; uninstrumented prototype",
+    "limits": [
+      "not full workspace or dependency audit",
+      "not native Linux/Windows",
+      "no new task cancellation/process kill/lock contention experiment",
+      "no exhaustive failure injection at every profile rename/write/mode boundary",
+      "no whole prepared-model rewrite or cache/snapshot generalization"
+    ]
+  },
+  "documentation": {
+    "round_prose_diff": [
+      {
+        "file": "docs/kb/operations/architecture-necessity-review-2026-10-27.md",
+        "added": 97,
+        "deleted": 20,
+        "net": 77
+      },
+      {
+        "file": "docs/kb/README.md",
+        "added": 1,
+        "deleted": 1,
+        "net": 0
+      }
+    ],
+    "evidence_files": [
+      "profile-contract-review.json (new)",
+      "architecture-review.json (followup pointer)"
+    ],
+    "note": "Review documentation, not Rust or formal implementation ADR synchronization."
+  },
+  "followup_decision": "Deferred by user; retain existing C1 source design. Historical isolated prototype evidence is not implementation authorization or current priority."
+}

@@ -1,0 +1,105 @@
+{
+  "baseline": "bd651fd4eaa82200bc06545c133ce9339de248ca",
+  "mode": "source/history review only; no new Rust prototype or runtime tests",
+  "deferred": [
+    "A",
+    "B",
+    "C1",
+    "original B1-B4 micro-refactors"
+  ],
+  "D1": {
+    "rule": "Sys profile executable-code classification",
+    "matches": [
+      {
+        "path": "core/src/runtime/trust.rs",
+        "line": 179,
+        "normalized_predicate": "!integration.eval_argv.is_empty()||integration.source.is_some()||integration.fragment.is_some()"
+      },
+      {
+        "path": "core/src/runtime/planner/sys_support.rs",
+        "line": 238,
+        "normalized_predicate": "!integration.eval_argv.is_empty()||integration.source.is_some()||integration.fragment.is_some()"
+      },
+      {
+        "path": "core/src/runtime/sys_profile/compose.rs",
+        "line": 111,
+        "normalized_predicate": "!integration.eval_argv.is_empty()||integration.source.is_some()||integration.fragment.is_some()"
+      },
+      {
+        "path": "core/src/runtime/pack.rs",
+        "line": 385,
+        "normalized_predicate": "!integration.eval_argv.is_empty()||integration.source.is_some()||integration.fragment.is_some()"
+      }
+    ],
+    "same_input_type": "SysShellIntegration",
+    "current_divergence_found": false,
+    "proposed_owner": "core/src/runtime/sys_model.rs; internal has_executable_code method",
+    "rule_definitions_before": 4,
+    "rule_definitions_proposed": 1,
+    "unchanged_consumers": [
+      "trust source/complete snapshot/grants",
+      "planner selected enabled items/base-profile special handling",
+      "compose shell/phase/external-code authorization",
+      "pack full-source summary and separate install-script branch"
+    ],
+    "history": [
+      "b35caf433e8d97f9fe72ab8519161f9e376c52ee",
+      "eb665189e1e12687c75d731f9693f7922522ae4f"
+    ],
+    "status": "Isolated consumer-contract prototype validated; see d1-consumer-contract-review.json. Not landed.",
+    "verification_gap": "Full platform/CLI/external execution verification remains outside isolated matrix.",
+    "followup": "d1-consumer-contract-review.json"
+  },
+  "D2": {
+    "source": "core/src/runtime/pack.rs:205",
+    "partial_metadata_types": 8,
+    "raw_queries": [
+      "declared_executable_paths",
+      "declares_unrestricted_opaque_code",
+      "has_unisolated_code",
+      "has_author_capabilities"
+    ],
+    "risk": "New source-schema entry can require parallel parser/query maintenance. No recurrent synchronization bug established.",
+    "status": "defer; no prototype",
+    "blockers": [
+      "full-source vs platform-selected domain models",
+      "legacy autodiscovery vs explicit executable declaration",
+      "validation ordering and detailed errors",
+      "risk of third DTO/API layer"
+    ]
+  },
+  "retained_rule_owners": {
+    "workspace_precedence": "cli/src/env/workspace/sources.rs",
+    "sealed_payload_validation": "cli/src/env/workspace/source_payload.rs",
+    "config_env_layers": "cli/src/config/env_resolution.rs",
+    "directed_write": "cli/src/config/env_write.rs",
+    "ciphertext_routing": "cli/src/secret/mod.rs",
+    "ssh_reserved_keys": "cli/src/env/mod.rs",
+    "structured_preset_env": "core/src/env.rs",
+    "atomic_persistence": "core/src/persist.rs",
+    "analysis_binding_resolution": "core/src/analysis/syntax.rs"
+  },
+  "change_history_recheck": {
+    "analysis": [
+      "c781b1ec",
+      "5ec6e17e",
+      "14eac507"
+    ],
+    "analysis_conclusion": "Main algorithm edits in syntax.rs plus rule-version bump; test/docs co-change is not duplicated production policy.",
+    "config": "960f9e4d; current config_parse_error is shared",
+    "hybrid": [
+      "7d462294",
+      "c3f19d2f",
+      "9787bd28"
+    ],
+    "hybrid_conclusion": "tag routing and captured source hash now shared; context-specific cache and broker authorization remain different."
+  },
+  "production_delta": 0,
+  "test_support_delta": 0,
+  "limitations": [
+    "selected rule-chain review, not line-by-line full-module proof",
+    "no runtime tests",
+    "no native platform validation",
+    "no public API or persisted format changes"
+  ]
+}

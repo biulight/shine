@@ -1,0 +1,519 @@
+{
+  "baseline": "bd651fd4eaa82200bc06545c133ce9339de248ca",
+  "status": "architecture review; no repository Rust implementation changes",
+  "app_commit_prototype": {
+    "production_before": 661,
+    "production_after": 391,
+    "test_before": 23,
+    "test_after": 37,
+    "net_rust": -256,
+    "removed_enum_types": 1,
+    "removed_struct_types": 8,
+    "removed_source_files": 2,
+    "resource_body_comparison": "Each original method body after let Self destructuring appears token-identically in the prototype exhaustive match arm. This is not a proof of complete runtime equivalence.",
+    "resource_bodies": [
+      {
+        "variant": "UpdateManagedFile",
+        "fields": "rollback , original_mode , original_hash , requires_admin ,",
+        "token_sha256": "b7216e8427e4aa19af1b621e7151b9765124d889aea459d1ee8c46535f43d60e"
+      },
+      {
+        "variant": "RelocateManagedFile",
+        "fields": "previous_rollback , previous_present , previous_mode , previous_hash , previous_requires_admin ,",
+        "token_sha256": "355f0b9a0ab2d0d92e6c61c96780b0ac8161020858806e2ad695f8d9b7e5b1e3"
+      },
+      {
+        "variant": "RemoveManagedFile",
+        "fields": "destination , rollback , original_mode , original_hash , requires_admin ,",
+        "token_sha256": "702ee24569ce6a4c1684ef98683101f4f558e36e8cb5c64257d1ea370045beb2"
+      },
+      {
+        "variant": "RemoveManagedFileWithBackup",
+        "fields": "destination , backup , rollback , managed_mode , managed_hash , backup_mode , backup_hash , requires_admin ,",
+        "token_sha256": "468906831eb7a302bc58a8bb755956f2840cbba4410b99edecdbf2c5fcebcd23"
+      },
+      {
+        "variant": "ForceRemoveManagedFile",
+        "fields": "destination , persistent_backup , rollback , current_mode , current_hash , requires_admin ,",
+        "token_sha256": "adf37b54125a0250d69712a16a7ea453830491f7f7c6008ef4845666428b850b"
+      },
+      {
+        "variant": "RelocateManagedJson",
+        "fields": "previous_destination , previous_rollback , desired_destination , previous_present , previous_mode , previous_original_hash , previous_managed_keys , desired_managed_hash , desired_managed_keys ,",
+        "token_sha256": "a45780d4522f2cf286bd1e83a54b18e765568aa6d485217f7fedb5856574d3d9"
+      },
+      {
+        "variant": "MergeManagedJson",
+        "fields": "rollback , original_mode , original_hash ,",
+        "token_sha256": "bf7328cf5f170d83ef7b07f7ea1a21df8f65507ccf68f7aef8e950f2370f68ea"
+      },
+      {
+        "variant": "RemoveManagedJson",
+        "fields": "rollback , original_mode , original_hash ,",
+        "token_sha256": "035693f2f42d5b4234a85a290e40d101c6dd7f00f2860a068154947a542b1a75"
+      }
+    ],
+    "files": [
+      {
+        "file": "core/src/runtime/action_executor/commit.rs",
+        "before_prod": 72,
+        "after_prod": 68,
+        "before_test": 0,
+        "after_test": 0
+      },
+      {
+        "file": "core/src/runtime/action_executor/commit/action.rs",
+        "before_prod": 175,
+        "after_prod": 323,
+        "before_test": 23,
+        "after_test": 37
+      },
+      {
+        "file": "core/src/runtime/action_executor/commit/files.rs",
+        "before_prod": 275,
+        "after_prod": 0,
+        "before_test": 0,
+        "after_test": 0
+      },
+      {
+        "file": "core/src/runtime/action_executor/commit/json.rs",
+        "before_prod": 139,
+        "after_prod": 0,
+        "before_test": 0,
+        "after_test": 0
+      }
+    ],
+    "tests": {
+      "filter": "commit",
+      "runner": "cargo test -p shine-core --lib --offline; --test-threads=1",
+      "baseline": {
+        "passed": 34,
+        "failed": 0,
+        "filtered_out": 697
+      },
+      "prototype": {
+        "passed": 34,
+        "failed": 0,
+        "filtered_out": 697
+      },
+      "limitations": [
+        "macOS only",
+        "not all workspace tests",
+        "not CLI integration or native Windows/Linux",
+        "foreign-domain test changed from conversion rejection to async handler rejection plus zero Host operations"
+      ]
+    },
+    "artifact_isolation": "Baseline independently rebuilt in target/architecture-review-baseline. Prototype initially used normal target; its core test-unit stamp was invalidated, baseline was rebuilt there, and commit/files.rs and commit/json.rs membership was verified in the depfile. Use separate targets for any future comparisons.",
+    "decision": "Deferred by user; preserve small reading scope, explicit inputs and local changes. Feasibility and net line reduction do not establish maintainability superiority."
+  },
+  "change_surface_method": "Exact symbol occurrences on baseline production lines from the earlier inventory; not a resolved call graph and not the full change set. Constructors and indirectly dispatched handlers may have no symbol occurrence.",
+  "symbol_occurrences": {
+    "RelocateManagedJson": {
+      "core/src/action.rs": [
+        321,
+        820
+      ],
+      "core/src/action/contracts.rs": [
+        28
+      ],
+      "core/src/action/contracts/json.rs": [
+        33,
+        57,
+        117
+      ],
+      "core/src/runtime/action_executor.rs": [
+        171
+      ],
+      "core/src/runtime/action_executor/commit/action.rs": [
+        10,
+        48,
+        59,
+        166
+      ],
+      "core/src/runtime/action_executor/receipts.rs": [
+        79,
+        155,
+        273,
+        453,
+        529
+      ],
+      "core/src/runtime/action_executor/recovery_apply.rs": [
+        33,
+        62
+      ],
+      "core/src/runtime/action_executor/recovery_apply_relocation.rs": [
+        121,
+        134
+      ],
+      "core/src/runtime/action_executor/recovery_plan.rs": [
+        95
+      ],
+      "core/src/runtime/action_executor/recovery_plan_relocation.rs": [
+        180,
+        193
+      ],
+      "core/src/runtime/action_executor/relocation_apply.rs": [
+        225
+      ],
+      "core/src/runtime/app/upgrade.rs": [
+        401,
+        409
+      ],
+      "core/src/runtime/shell_action_executor/action.rs": [
+        165
+      ]
+    },
+    "RemoveShellRenderedFile": {
+      "core/src/action.rs": [
+        580,
+        922
+      ],
+      "core/src/action/contracts.rs": [
+        40
+      ],
+      "core/src/action/contracts/shell.rs": [
+        181,
+        194,
+        344
+      ],
+      "core/src/runtime/action_executor/commit/action.rs": [
+        152
+      ],
+      "core/src/runtime/action_executor/receipts.rs": [
+        127,
+        554
+      ],
+      "core/src/runtime/action_executor/recovery_apply.rs": [
+        106
+      ],
+      "core/src/runtime/action_executor/recovery_plan.rs": [
+        161
+      ],
+      "core/src/runtime/shell_action_executor/action.rs": [
+        56,
+        146,
+        151,
+        186
+      ],
+      "core/src/runtime/shell_action_executor/apply.rs": [
+        202
+      ],
+      "core/src/runtime/shell_action_executor/commit.rs": [
+        184,
+        455,
+        578
+      ],
+      "core/src/runtime/shell_action_executor/recovery_apply.rs": [
+        28,
+        154
+      ],
+      "core/src/runtime/shell_action_executor/recovery_apply/resources.rs": [
+        741
+      ],
+      "core/src/runtime/shell_action_executor/recovery_plan.rs": [
+        32,
+        187
+      ],
+      "core/src/runtime/shell_action_executor/recovery_plan/rendered.rs": [
+        119
+      ]
+    },
+    "AppCommitAction": {
+      "core/src/runtime/action_executor/commit.rs": [
+        66
+      ],
+      "core/src/runtime/action_executor/commit/action.rs": [
+        6,
+        17
+      ]
+    },
+    "ShellAction": {
+      "core/src/runtime/shell_action_executor.rs": [
+        10,
+        263,
+        282
+      ],
+      "core/src/runtime/shell_action_executor/action.rs": [
+        4,
+        64
+      ],
+      "core/src/runtime/shell_action_executor/commit.rs": [
+        20,
+        21,
+        36,
+        48,
+        82,
+        102,
+        121,
+        142,
+        164,
+        184,
+        206,
+        207,
+        228,
+        229,
+        243,
+        268,
+        295,
+        318,
+        345,
+        366,
+        386,
+        407,
+        432,
+        455,
+        479,
+        480,
+        481,
+        491,
+        492,
+        502,
+        517,
+        528,
+        541,
+        552,
+        563,
+        578
+      ],
+      "core/src/runtime/shell_action_executor/recovery_apply.rs": [
+        27,
+        28,
+        29,
+        30,
+        47,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        113,
+        114,
+        118,
+        122,
+        126,
+        130,
+        134,
+        138,
+        142,
+        146,
+        150,
+        154
+      ],
+      "core/src/runtime/shell_action_executor/recovery_plan.rs": [
+        31,
+        32,
+        33,
+        34,
+        49,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98,
+        99,
+        148,
+        149,
+        153,
+        157,
+        161,
+        165,
+        169,
+        172,
+        175,
+        179,
+        183,
+        187
+      ]
+    },
+    "SysAction": {
+      "cli/src/sys/managed.rs": [
+        17,
+        33,
+        76,
+        107,
+        130,
+        157,
+        195,
+        271,
+        272,
+        273,
+        316,
+        317,
+        399,
+        448,
+        457,
+        459,
+        460,
+        471,
+        476,
+        477,
+        478,
+        479
+      ],
+      "core/src/runtime/sys_action_executor.rs": [
+        3,
+        146
+      ],
+      "core/src/runtime/sys_action_executor/action.rs": [
+        5,
+        58
+      ],
+      "core/src/runtime/sys_action_executor/observations.rs": [
+        10,
+        11,
+        12,
+        17,
+        22,
+        27,
+        33,
+        49,
+        67
+      ],
+      "core/src/runtime/sys_action_executor/resources.rs": [
+        13,
+        14,
+        15,
+        16,
+        17,
+        23,
+        24,
+        25,
+        26,
+        31,
+        32,
+        33,
+        34,
+        43,
+        44,
+        49,
+        78,
+        85,
+        126,
+        132,
+        149,
+        152,
+        161,
+        162,
+        175,
+        190,
+        205,
+        241,
+        247,
+        257,
+        260,
+        270,
+        271,
+        281,
+        296,
+        312,
+        351,
+        363,
+        380,
+        383,
+        391,
+        392,
+        398,
+        404,
+        419,
+        425,
+        433,
+        434,
+        435,
+        436
+      ]
+    },
+    "LifecyclePlanRequest": {
+      "cli/src/apps/build.rs": [
+        30
+      ],
+      "cli/src/apps/install.rs": [
+        70
+      ],
+      "cli/src/apps/recovery.rs": [
+        10
+      ],
+      "cli/src/apps/refresh.rs": [
+        32
+      ],
+      "cli/src/apps/uninstall.rs": [
+        61
+      ],
+      "cli/src/apps/upgrade.rs": [
+        96
+      ],
+      "cli/src/lifecycle_plan.rs": [
+        23,
+        39,
+        134,
+        146,
+        164,
+        183,
+        208,
+        248,
+        412,
+        462,
+        682
+      ],
+      "cli/src/lifecycle_plan/prepared.rs": [
+        2,
+        33,
+        42,
+        43,
+        45,
+        46,
+        142
+      ],
+      "cli/src/lifecycle_plan/render/compact.rs": [
+        12,
+        35
+      ],
+      "cli/src/lifecycle_plan/render/detailed.rs": [
+        5,
+        13
+      ],
+      "cli/src/self_install/config_upgrade.rs": [
+        159,
+        160,
+        167,
+        177,
+        188,
+        204,
+        205,
+        217,
+        236,
+        251,
+        297,
+        309,
+        322
+      ],
+      "cli/src/shells/install.rs": [
+        130,
+        332
+      ],
+      "cli/src/shells/recovery.rs": [
+        9
+      ],
+      "cli/src/shells/uninstall.rs": [
+        55
+      ],
+      "cli/src/sys/commands.rs": [
+        442
+      ],
+      "cli/src/sys/managed.rs": [
+        282
+      ],
+      "cli/src/sys/profile_commands.rs": [
+        45
+      ],
+      "cli/src/sys/recovery.rs": [
+        9
+      ]
+    }
+  },
+  "request_identity_followup": "request-identity-review.json",
+  "profile_contract_followup": "profile-contract-review.json",
+  "rule_ownership_followup": "rule-ownership-review.json"
+}

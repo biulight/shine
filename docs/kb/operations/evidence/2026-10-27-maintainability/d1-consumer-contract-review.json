@@ -1,0 +1,134 @@
+{
+  "baseline": "bd651fd4eaa82200bc06545c133ce9339de248ca",
+  "status": "Isolated D1 validation only; no repository Rust changes; D2 remains deferred.",
+  "change": {
+    "owner": "SysShellIntegration::has_executable_code in core/src/runtime/sys_model.rs",
+    "visibility": "pub(in crate::runtime)",
+    "scope": "Only replace the same three-term predicate in four consumers; no selection, authorization, observation or serialization changes.",
+    "files": [
+      {
+        "file": "core/src/runtime/sys_model.rs",
+        "added": 7,
+        "deleted": 0,
+        "net": 7
+      },
+      {
+        "file": "core/src/runtime/trust.rs",
+        "added": 1,
+        "deleted": 3,
+        "net": -2
+      },
+      {
+        "file": "core/src/runtime/planner/sys_support.rs",
+        "added": 1,
+        "deleted": 3,
+        "net": -2
+      },
+      {
+        "file": "core/src/runtime/sys_profile/compose.rs",
+        "added": 1,
+        "deleted": 3,
+        "net": -2
+      },
+      {
+        "file": "core/src/runtime/pack.rs",
+        "added": 1,
+        "deleted": 3,
+        "net": -2
+      }
+    ],
+    "production": {
+      "added": 11,
+      "deleted": 12,
+      "net": -1
+    },
+    "existing_tests_delta": 0,
+    "new_types": 0,
+    "new_methods": 1,
+    "public_api_delta": 0,
+    "rule_definition_locations": [
+      4,
+      1
+    ],
+    "one_time_changed_files": 5,
+    "patch_sha256": "d25000b7663100cf0d0af6b82abe3e9035cfdad6032051ef9ab9fb31ad9ccd72"
+  },
+  "consumer_boundaries": {
+    "trust": "All integrations of requested item, regardless of active shell/enabled state; source origin and category snapshot, external base and trust grants remain separate.",
+    "planner": "Profile explicit target plus effective enabled set; bootstrap selected and previously enabled items. Existing grant checks, live state/detection capture, base-profile and script-install branches retained.",
+    "compose": "Enabled items, matching shell, phase/priority/manifest ordering; current config trust and fragment/base checks remain at original call points.",
+    "pack": "Complete validated source declarations including unselected/nonmatching entries; script install OR profile integration. Existing unisolated flag does not include base profile files; never use bundle flag as authorization."
+  },
+  "verification": {
+    "toolchain": "mise, offline; separate baseline/prototype target directories",
+    "existing_filter": "test(sys) | test(pack::) | test(runtime::trust::)",
+    "existing_baseline": {
+      "passed": 93,
+      "skipped": 638
+    },
+    "existing_prototype": {
+      "passed": 93,
+      "skipped": 638
+    },
+    "matrix": {
+      "cases": 114,
+      "byte_equal": true,
+      "sha256": "4d893750ac306efa37439e3df03f85b948b9ad3959cf65304a4f5e26cefaddf8",
+      "bytes": 2105890,
+      "field_equality": {
+        "requirements": 114,
+        "profile": 114,
+        "bootstrap": 114,
+        "rendered": 114,
+        "pack_report": 114,
+        "archive": 114,
+        "host_operations": 114,
+        "pack_operations": 114,
+        "host_calls": 114,
+        "pack_calls": 114
+      },
+      "runtime_call_entries": 1800,
+      "pack_call_entries": 1479
+    },
+    "matrix_breakdown": {
+      "six_kinds_three_origins_two_grant_states_two_shell_match_states": 72,
+      "six_kinds_three_origins_disabled_untrusted": 18,
+      "base_profile_three_origins_two_grants_two_selections": 12,
+      "script_install_three_origins_two_grants_two_detection_states": 12
+    },
+    "matrix_runner": "One temporary test on each side; 114 scenario rows, not 114 nextest tests. Independent expectations assert classification, readiness, selection, error and no-effect behavior before recording production results.",
+    "extra": {
+      "cases": 4,
+      "byte_equal": true,
+      "sha256": "1d26c287fdf19444109559f6d5408b903d05156b94db5e32a6812c15290dc8ec",
+      "bytes": 33035,
+      "scenario": "existing tool activation retained when bootstrapping other; external and overlay, grant absent/present; revoke present grant and replan/preflight"
+    },
+    "extra_runner": "One additional temporary test on each side; four scenario rows, including two revoke/replan/preflight branches.",
+    "trace": "Entry and arguments for 15 InMemoryHost filesystem/lock methods plus existing operations. Both source trees use identical observation hooks; no observer decides production policy. Actual OS scheduling and lock release timing are not measured.",
+    "fmt": "passed on production-only prototype",
+    "clippy": "passed: shine-core --lib --all-features -- -D warnings, production-only prototype",
+    "restoration": "All temporary test/Host probe changes removed from both archives; only five intended production files differ.",
+    "temporary_support": {
+      "temporary_lines": 184,
+      "permanent_inclusion": false,
+      "additional_boundary_test_lines": 49,
+      "total_temporary_added_lines": 233
+    },
+    "fixture_sha256": "d2d7f8712794cbb589c6d6844ccb4cde0dff21e05a4861bcc07683392c7a87ea",
+    "extra_fixture_sha256": "5d344875ac1ffd32131fd1e8a83775a4a278d2be40719b8c746cbae5333d25ea",
+    "limits": [
+      "macOS runner; virtual Linux/Bash fixtures in matrix",
+      "not native Linux or Windows execution; not full shell/platform cross product",
+      "not complete workspace/CLI/dependency verification",
+      "no new cancellation/process termination/lock contention test",
+      "matrix does not execute bootstrap package managers or external profile scripts",
+      "full new-integration schema/rendering support still requires multiple domain changes"
+    ]
+  },
+  "maintenance_verdict": {
+    "supported": "Changes to this existing classification rule have one owner instead of four implementations. No generic security framework or cached authorization introduced.",
+    "tradeoff": "Local readers follow one extra pure method; cross-consumer auditing reads one definition. No claim that all workflow complexity or future feature edits become local.",
+    "decision": "Keep as a bounded candidate with validated consumer contracts; no implementation in workspace and no recommendation to generalize D2."
+  }
+}

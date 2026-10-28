@@ -1,0 +1,254 @@
+{
+  "baseline": "bd651fd4eaa82200bc06545c133ce9339de248ca",
+  "decision": "Full B prototype validated locally; no material total maintenance advantage established; retain current implementation. A remains deferred for readability and local change boundaries.",
+  "repository_rust_changes": false,
+  "prototype_file_count": 7,
+  "implementation_diff": {
+    "files": [
+      {
+        "file": "cli/src/lifecycle_plan.rs",
+        "baseline": {
+          "production": 713,
+          "test_support": 1713
+        },
+        "prototype": {
+          "production": 703,
+          "test_support": 1704
+        },
+        "added": 100,
+        "deleted": 119,
+        "partitioned_diff": {
+          "added": {
+            "production": 70,
+            "test_support": 30
+          },
+          "deleted": {
+            "production": 80,
+            "test_support": 39
+          }
+        },
+        "baseline_sha256": "4430c5f03c800f36e4ba43fa4fe5b91c0ed5854719481270895173fe3340aa94",
+        "prototype_sha256": "2b7b44e068afe1f13f794b38b695639d70ddfe2fcea29694e3d8afe01fd1f608"
+      },
+      {
+        "file": "cli/src/lifecycle_plan/prepared.rs",
+        "baseline": {
+          "production": 177,
+          "test_support": 2
+        },
+        "prototype": {
+          "production": 177,
+          "test_support": 2
+        },
+        "added": 11,
+        "deleted": 11,
+        "partitioned_diff": {
+          "added": {
+            "production": 11,
+            "test_support": 0
+          },
+          "deleted": {
+            "production": 11,
+            "test_support": 0
+          }
+        },
+        "baseline_sha256": "f23f613421873b61350ee427798e65a26eff02b2ff8e62b5a53515bf96d7eb97",
+        "prototype_sha256": "ee3a780541f8f66119dab53793575a78c8edf0d99291879582938a3aac3feb5f"
+      },
+      {
+        "file": "cli/src/lifecycle_plan/prepared/tests.rs",
+        "baseline": {
+          "production": 0,
+          "test_support": 239
+        },
+        "prototype": {
+          "production": 0,
+          "test_support": 242
+        },
+        "added": 11,
+        "deleted": 8,
+        "partitioned_diff": {
+          "added": {
+            "production": 0,
+            "test_support": 11
+          },
+          "deleted": {
+            "production": 0,
+            "test_support": 8
+          }
+        },
+        "baseline_sha256": "6be1f00561553b97dea3498c163b113d25ce3cc290f8e789c59bf986bc3af992",
+        "prototype_sha256": "df8ddac1ffb51335eeb8865222dba65484ff0db2263c7a3bad2699806f7a1b39"
+      },
+      {
+        "file": "cli/src/lifecycle_plan/render/compact.rs",
+        "baseline": {
+          "production": 369,
+          "test_support": 0
+        },
+        "prototype": {
+          "production": 369,
+          "test_support": 0
+        },
+        "added": 3,
+        "deleted": 3,
+        "partitioned_diff": {
+          "added": {
+            "production": 3,
+            "test_support": 0
+          },
+          "deleted": {
+            "production": 3,
+            "test_support": 0
+          }
+        },
+        "baseline_sha256": "c726bdb15b92eb9a678bbbf4c0402c337c840f53016c8fe8749802be6485c709",
+        "prototype_sha256": "a10aa3ff8b9b2d24d61266e4aefe718d739afedf15b70447e4ea8e25cffb5741"
+      },
+      {
+        "file": "cli/src/lifecycle_plan/render/detailed.rs",
+        "baseline": {
+          "production": 113,
+          "test_support": 0
+        },
+        "prototype": {
+          "production": 113,
+          "test_support": 0
+        },
+        "added": 2,
+        "deleted": 2,
+        "partitioned_diff": {
+          "added": {
+            "production": 2,
+            "test_support": 0
+          },
+          "deleted": {
+            "production": 2,
+            "test_support": 0
+          }
+        },
+        "baseline_sha256": "f9e678dfbfafeaec443167603955e405b3bebbff981442200357957015d4ac88",
+        "prototype_sha256": "ea855c3079116720da0071c80da130c286f0db0a55866121102306688af1fe55"
+      },
+      {
+        "file": "cli/src/self_install/config_upgrade.rs",
+        "baseline": {
+          "production": 362,
+          "test_support": 0
+        },
+        "prototype": {
+          "production": 362,
+          "test_support": 0
+        },
+        "added": 4,
+        "deleted": 4,
+        "partitioned_diff": {
+          "added": {
+            "production": 4,
+            "test_support": 0
+          },
+          "deleted": {
+            "production": 4,
+            "test_support": 0
+          }
+        },
+        "baseline_sha256": "cfe57c267838deac787d350b9bdeefa8cc3bd3fa8b05a95472f4ae86409657e5",
+        "prototype_sha256": "a62028bc2309d7bcf15b33a060c3ba9d544d4085ec547cd5f2854c6bf8131968"
+      },
+      {
+        "file": "core/src/frontend/trusted.rs",
+        "baseline": {
+          "production": 453,
+          "test_support": 0
+        },
+        "prototype": {
+          "production": 463,
+          "test_support": 0
+        },
+        "added": 10,
+        "deleted": 0,
+        "partitioned_diff": {
+          "added": {
+            "production": 10,
+            "test_support": 0
+          },
+          "deleted": {
+            "production": 0,
+            "test_support": 0
+          }
+        },
+        "baseline_sha256": "ff52c3823fff83526b70efdbaebc49f81f976072b5e91b457c93c325f125853b",
+        "prototype_sha256": "71597f6499ee9fd83efcadb622203ef6d5d36f6c43be274696e9df27befd55a6"
+      }
+    ],
+    "summary": {
+      "production": {
+        "added": 100,
+        "deleted": 100,
+        "net": 0
+      },
+      "test_support": {
+        "added": 41,
+        "deleted": 47,
+        "net": -6
+      }
+    }
+  },
+  "temporary_validation_support": {
+    "prototype_probe_file_lines": 188,
+    "total_additional_lines_including_parent_declaration": 191,
+    "net_rust_if_kept_verbatim": 185,
+    "permanent_inclusion": false
+  },
+  "structural_result": {
+    "approved_request_copies": [
+      2,
+      1
+    ],
+    "cli_enum_conversion_branches_removed": 10,
+    "public_core_accessors_added": 2,
+    "classification_sites": [
+      6,
+      4
+    ],
+    "classification_site_caveat": "Not edited-file counts. Ordinary request fields were already passed as complete Core structs; no field-level duplication removed.",
+    "proxy_constraint": "Before: data attached to SysBootstrap variant. After: private constructors associate independent ReviewRequest and Option map.",
+    "display_projection": "Still clones request and Plan; not an approval authority source.",
+    "typed_upgrade_handoffs": "retained"
+  },
+  "validation": {
+    "tools": "mise; offline; separate baseline/prototype Cargo targets; RUSTC_WRAPPER unset per command",
+    "platform": "macOS",
+    "unit_filter": "test(lifecycle_plan::) | test(frontend::) | test(frontend_)",
+    "unit_baseline": {
+      "passed": 76,
+      "skipped": 1697
+    },
+    "unit_prototype": {
+      "passed": 76,
+      "skipped": 1697
+    },
+    "unit_note": "Includes two temporary probes and a few unrelated tests selected by frontend_ substring.",
+    "integration_filter": "test(converged_upgrade) | test(snapshot_only_upgrade) | test(targeted_upgrade_keeps_category_scope) | test(app_mutation_requires_consent)",
+    "integration_baseline": {
+      "passed": 5,
+      "skipped": 104
+    },
+    "integration_prototype": {
+      "passed": 5,
+      "skipped": 104
+    },
+    "prototype_core_doctests": {
+      "passed": 8
+    },
+    "request_probe": "All ten constructors checked against independent complete expected Core requests; six input-version insertions preserved. Not a full ten-operation golden Plan/fingerprint comparison.",
+    "proxy_probe": "None, Some(empty), replacement, batch carry and fresh-runtime reapplication at helper level; not live proxy traffic.",
+    "limitations": [
+      "not full workspace checks",
+      "not native Linux/Windows",
+      "no bootstrap script or live proxy execution",
+      "no new fault-injection matrix for lock contention/cancellation/retry/recovery",
+      "smaller alternative not implemented or measured"
+    ]
+  }
+}
