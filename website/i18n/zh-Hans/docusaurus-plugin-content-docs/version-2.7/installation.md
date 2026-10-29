@@ -23,7 +23,7 @@ shine --version
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.7.1 sh install.sh
+SHINE_VERSION=2.7.2 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -36,7 +36,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.7.1"; .\install.ps1
+$env:SHINE_VERSION = "2.7.2"; .\install.ps1
 ```
 
 ## 使用 cargo-binstall 安装
@@ -110,6 +110,13 @@ shine self upgrade --channel preview
 Unix 上，安装或同步到受保护位置时会请求 `sudo` 授权。但从受保护目录运行的 Shine 无法自行
 提权升级；如需使用自升级，请安装并运行用户可写目录中的 Shine。Windows 在受保护位置安装
 或升级时，需使用具备相应权限的终端。
+
+## 升级到 Shine 2.7.2
+
+Shine 2.7.2 修复未变化的 Windows split-DNS 规则被误报为用户修改的问题，防止 `preset new`
+意外覆盖已有文件，并支持在独立文件系统上的非 Git 目录中使用工作区秘密文件组。
+从 2.7.1 升级无需迁移配置。详见[受管系统项目](./guides/system-init.md)、
+[Preset 模板](./guides/custom-presets.md)和[文件组](./guides/environment.md)。
 
 ## 升级到 Shine 2.7.1
 
