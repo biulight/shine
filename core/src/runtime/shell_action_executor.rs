@@ -190,11 +190,8 @@ enum PreparedShellAction {
 }
 
 struct PreparedShellCacheFile {
-    destination: PathBuf,
-    rollback: PathBuf,
-    previous_present: bool,
+    contract: ShellCacheFileReplacementV1,
     bytes: Vec<u8>,
-    unix_mode: Option<u32>,
 }
 
 struct PreparedShellLauncherUpdateResource {

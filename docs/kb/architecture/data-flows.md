@@ -568,6 +568,8 @@ bytes. The journal clones those contracts; apply consumes the paired records wit
 matching to the journal file list (ADR 0155).
 Cache removal retains only a prepared phase marker and reads paths and previous identities from
 the same step's Action file list, with the existing per-file live rechecks before rename (ADR 0156).
+Cache replacement projects its Action file list from paired contract/byte records. Apply consumes
+those records, taking paths, previous presence and desired mode from each contract (ADR 0157).
 
 Journal admission, marker eligibility, commit and recovery dispatch share a private borrowed
 `ShellAction` view with exhaustive domain conversion. Commit checks all live resources and receipts

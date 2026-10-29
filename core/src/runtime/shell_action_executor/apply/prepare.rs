@@ -8,7 +8,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         pending: &mut PreparedOperation,
     ) -> Result<()> {
         for cache in resources {
-            let mut action_files = Vec::new();
             let mut prepared_files = Vec::new();
             for file in &cache.files {
                 let rollback = managed_file_rollback_path(&file.destination);
@@ -40,18 +39,14 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 if previous_identity.as_ref() == Some(&desired) {
                     bail!("Shell cache replacement contains no changed file");
                 }
-                action_files.push(ShellCacheFileReplacementV1 {
-                    destination: file.destination.clone(),
-                    rollback: rollback.clone(),
-                    previous: previous_identity.clone(),
-                    desired,
-                });
                 prepared_files.push(PreparedShellCacheFile {
-                    destination: file.destination.clone(),
-                    rollback,
-                    previous_present: previous_identity.is_some(),
+                    contract: ShellCacheFileReplacementV1 {
+                        destination: file.destination.clone(),
+                        rollback,
+                        previous: previous_identity,
+                        desired,
+                    },
                     bytes: file.bytes.clone(),
-                    unix_mode: file.unix_mode,
                 });
             }
             let receipts = cache
@@ -65,7 +60,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     &cache.target,
                     "preset-cache",
                     ShellCacheReplacementSpecV1 {
-                        files: action_files,
+                        files: prepared_files
+                            .iter()
+                            .map(|file| file.contract.clone())
+                            .collect(),
                         receipts,
                     },
                 ),

@@ -614,6 +614,9 @@ bugs. Check this list before changing the modules named in each entry.
   Cache removal has no private byte payload: its prepared marker carries no second file list.
   Apply iterates the validated Action contracts and rechecks each destination before moving it
   to rollback; receipt checks and recovery boundaries remain independent (ADR 0156).
+  Cache replacement pairs each complete file contract with its private write bytes. Project the
+  Action list from those records and derive previous presence and desired mode from the contract;
+  preserve per-file patch ownership and rename/write/mode order (ADR 0157).
 - **App factory preserves per-resource admission.** The observation-only factory validates
   approval before Host reads, then tries JSON relocation, Copy relocation, JSON merge and Copy in
   that order. Relocation requires its exact typed Update step; ordinary Create/Update matching keeps

@@ -110,9 +110,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             match prepared_action {
                 PreparedShellAction::Cache { files } => {
                     for file in files {
-                        if file.previous_present {
+                        let contract = &file.contract;
+                        if contract.previous.is_some() {
                             self.host()
-                                .rename(&file.destination, &file.rollback)
+                                .rename(&contract.destination, &contract.rollback)
                                 .await
                                 .map_err(|error| {
                                     error
@@ -120,12 +121,12 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                                 })?;
                         }
                         self.host()
-                            .write_atomic(&file.destination, &file.bytes)
+                            .write_atomic(&contract.destination, &file.bytes)
                             .await
                             .map_err(|error| error.into_anyhow("writing Shell cache file"))?;
-                        if let Some(mode) = file.unix_mode {
+                        if let Some(mode) = contract.desired.unix_mode {
                             self.host()
-                                .set_mode(&file.destination, mode)
+                                .set_mode(&contract.destination, mode)
                                 .await
                                 .map_err(|error| {
                                     error.into_anyhow("setting Shell cache file mode")

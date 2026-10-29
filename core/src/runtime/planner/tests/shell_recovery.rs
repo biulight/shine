@@ -189,6 +189,125 @@ async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_pre
 }
 
 #[tokio::test]
+async fn cache_replacement_recovers_partial_writes_with_mixed_previous_files() {
+    #[derive(serde::Deserialize)]
+    struct Journal {
+        action_ir: ActionIrV1,
+    }
+
+    for failed_index in 0..2 {
+        let runtime = runtime(shell_launcher_snapshot());
+        let host = runtime.host();
+        let cache = runtime.context().presets_dir.join("shell/demo");
+        let paths = [cache.join("demo.sh"), cache.join("shine.toml")];
+        let old_bytes = b"#!/bin/sh\necho previous\n";
+        host.put_file_with_mode(&paths[0], old_bytes.to_vec(), 0o100640);
+        let unrelated = cache.join("user.txt");
+        host.put_file(&unrelated, b"keep".to_vec());
+        let request = ShellPlanRequest {
+            force: true,
+            ..shell_install_request()
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        host.fail_write_after(&paths[failed_index], 0);
+        let error = runtime
+            .install_shells_approved(request.clone(), &approval)
+            .await
+            .err()
+            .expect("cache replacement must stop at the injected write failure");
+        assert!(format!("{error:#}").contains("injected in-memory write failure"));
+        let journal_path = runtime
+            .context()
+            .shine_dir
+            .join(SHELL_OPERATION_JOURNAL_FILE);
+        let journal_bytes = host.read(&journal_path).await.unwrap();
+        let journal: Journal = toml::from_slice(&journal_bytes).unwrap();
+        let ActionKindV1::ReplaceShellCache { files, .. } = &journal.action_ir.actions[0].kind
+        else {
+            panic!("cache replacement must be the first journaled action");
+        };
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| &file.destination)
+                .collect::<Vec<_>>(),
+            paths.iter().collect::<Vec<_>>()
+        );
+        let previous = files[0].previous.as_ref().unwrap();
+        assert_eq!(
+            previous.content_hash,
+            crate::install::hash_content(old_bytes)
+        );
+        assert!(files[1].previous.is_none());
+        assert_eq!(host.read(&files[0].rollback).await.unwrap(), old_bytes);
+        assert!(host.metadata(&paths[failed_index]).await.is_err());
+        if failed_index == 1 {
+            assert_eq!(
+                crate::install::hash_content(&host.read(&paths[0]).await.unwrap()),
+                files[0].desired.content_hash
+            );
+            if let Some(mode) = files[0].desired.unix_mode {
+                assert_eq!(
+                    host.metadata(&paths[0]).await.unwrap().unix_mode.unwrap() & 0o7777,
+                    mode & 0o7777
+                );
+            }
+        }
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        host.put_file(&paths[failed_index], b"user edit".to_vec());
+        assert!(
+            runtime
+                .recover_shell_operation_approved(&approval)
+                .await
+                .is_err()
+        );
+        assert_eq!(host.read(&paths[failed_index]).await.unwrap(), b"user edit");
+        assert_eq!(host.read(&journal_path).await.unwrap(), journal_bytes);
+        host.remove_file(&paths[failed_index]).await.unwrap();
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(host.read(&paths[0]).await.unwrap(), old_bytes);
+        assert_eq!(
+            host.metadata(&paths[0]).await.unwrap().unix_mode,
+            Some(0o100640)
+        );
+        assert!(host.metadata(&paths[1]).await.is_err());
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        for file in files {
+            assert_eq!(
+                crate::install::hash_content(&host.read(&file.destination).await.unwrap()),
+                file.desired.content_hash
+            );
+            if let Some(mode) = file.desired.unix_mode {
+                assert_eq!(
+                    host.metadata(&file.destination)
+                        .await
+                        .unwrap()
+                        .unix_mode
+                        .unwrap()
+                        & 0o7777,
+                    mode & 0o7777
+                );
+            }
+            assert!(host.metadata(&file.rollback).await.is_err());
+        }
+        assert!(host.metadata(&journal_path).await.is_err());
+        assert_eq!(host.read(&unrelated).await.unwrap(), b"keep");
+    }
+}
+
+#[tokio::test]
 async fn cache_removal_recovers_partial_rename_and_preserves_changed_files() {
     #[derive(serde::Deserialize)]
     struct Journal {
