@@ -253,7 +253,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     ) -> Result<()> {
         for removal in resources {
             let mut files = Vec::new();
-            let mut prepared_files = Vec::new();
             for (destination, previous) in &removal.files {
                 let rollback = managed_file_rollback_path(destination);
                 match self.host().metadata(&rollback).await {
@@ -276,10 +275,9 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 }
                 files.push(ShellCacheFileRemovalV1 {
                     destination: destination.clone(),
-                    rollback: rollback.clone(),
+                    rollback,
                     previous: previous.clone(),
                 });
-                prepared_files.push((destination.clone(), rollback));
             }
             let receipts = removal
                 .previous_receipts
@@ -298,9 +296,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     "preset-cache",
                     ShellCacheRemovalSpecV1 { files, receipts },
                 ),
-                prepared: PreparedShellAction::RemoveCache {
-                    files: prepared_files,
-                },
+                prepared: PreparedShellAction::RemoveCache,
             });
         }
         Ok(())

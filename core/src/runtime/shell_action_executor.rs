@@ -176,9 +176,7 @@ enum PreparedShellAction {
         destination: PathBuf,
         rollback: PathBuf,
     },
-    RemoveCache {
-        files: Vec<(PathBuf, PathBuf)>,
-    },
+    RemoveCache,
     RemoveSnapshot {
         destination: PathBuf,
         rollback: PathBuf,

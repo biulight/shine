@@ -566,6 +566,8 @@ progress saves. Payload bytes stay in memory; journal and recovery schemas are u
 Within profile steps, each file record pairs the complete file contract with its private desired
 bytes. The journal clones those contracts; apply consumes the paired records without positional
 matching to the journal file list (ADR 0155).
+Cache removal retains only a prepared phase marker and reads paths and previous identities from
+the same step's Action file list, with the existing per-file live rechecks before rename (ADR 0156).
 
 Journal admission, marker eligibility, commit and recovery dispatch share a private borrowed
 `ShellAction` view with exhaustive domain conversion. Commit checks all live resources and receipts

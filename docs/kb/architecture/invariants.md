@@ -611,6 +611,9 @@ bugs. Check this list before changing the modules named in each entry.
   private desired bytes. Project journal contracts from those records and apply the records
   directly; desired mode comes from the same contract identity. Bytes never enter the journal
   (ADR 0155).
+  Cache removal has no private byte payload: its prepared marker carries no second file list.
+  Apply iterates the validated Action contracts and rechecks each destination before moving it
+  to rollback; receipt checks and recovery boundaries remain independent (ADR 0156).
 - **App factory preserves per-resource admission.** The observation-only factory validates
   approval before Host reads, then tries JSON relocation, Copy relocation, JSON merge and Copy in
   that order. Relocation requires its exact typed Update step; ordinary Create/Update matching keeps

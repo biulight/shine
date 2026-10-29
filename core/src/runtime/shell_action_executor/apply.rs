@@ -216,23 +216,19 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                             error.into_anyhow("moving removed Shell rendered file to rollback")
                         })?;
                 }
-                PreparedShellAction::RemoveCache { files } => {
-                    let ActionKindV1::RemoveShellCache {
-                        files: action_files,
-                        ..
-                    } = &action.kind
-                    else {
+                PreparedShellAction::RemoveCache => {
+                    let ActionKindV1::RemoveShellCache { files, .. } = &action.kind else {
                         bail!("prepared Shell cache removal action changed shape");
                     };
-                    for ((destination, rollback), action_file) in files.iter().zip(action_files) {
-                        if !observe_shell_file(self.host(), destination)
+                    for file in files {
+                        if !observe_shell_file(self.host(), &file.destination)
                             .await?
-                            .matches(&action_file.previous)
+                            .matches(&file.previous)
                         {
                             bail!("Shell cache file changed before transactional removal");
                         }
                         self.host()
-                            .rename(destination, rollback)
+                            .rename(&file.destination, &file.rollback)
                             .await
                             .map_err(|error| {
                                 error.into_anyhow("moving removed Shell cache file to rollback")
