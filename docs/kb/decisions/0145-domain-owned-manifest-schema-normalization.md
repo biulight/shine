@@ -19,25 +19,18 @@ loaders with a single parser or normalize their persisted bytes during review.
 This does not change schema numbers, inner Sys receipt versions, receipt ordering, approval inputs,
 lock ownership, journal ordering or recovery effects. No public API or serialized shape changes.
 
-## Validation
+## Validation boundaries
 
-Before extraction from `d095431`, three consumer tests passed across all six loading paths.
-They cover absent files, unversioned state, explicit schema 0, current schema 1, future schema 2,
-negative versions and malformed TOML. Assertions retain each reader's parse/error boundary,
-original observation bytes and read-only behavior. Existing manifest roundtrip, receipt-version,
-lifecycle and recovery tests remain applicable.
+Baseline comparison against `d095431` retains the original loading implementations. Consumer
+regressions cover all six loading paths: absent files, unversioned state, explicit schema 0,
+current schema 1, future schema 2, negative versions and malformed TOML. Assertions preserve each
+reader's parse/error boundary, original observation bytes and read-only behavior.
 
-Expanding the six calls reproduces each original loading implementation. After extraction,
-the all-feature workspace suite passed 1,721 tests with two opt-in tests skipped. One embedded
-metadata list test was marked leaky in the full run and passed without that marker when rerun
-alone. Workspace Clippy with warnings denied, formatting, typos, dependency bans/licenses/sources,
-KB links and diff whitespace checks passed. Dependency checks retain existing duplicate-crate
-and unused-license warnings. Validation ran on macOS; native Windows/Linux execution was not run.
+Independent cases retain nonempty legacy receipts, duplicate App receipt ordering and an
+independently versioned Sys script receipt. Real filesystem read failures retain distinct
+planning/lifecycle/recovery contexts and remain failures rather than missing-file defaults.
+A comment-only manifest edit during recovery lock wait still invalidates the previous raw-byte-bound
+approval under both lifecycle and privileged locks, even when decoded receipts are identical.
 
-The second review adds nonempty legacy receipts, preserved duplicate App receipt ordering and an
-independently versioned Sys script receipt. Real filesystem read failures retain the distinct
-planning/lifecycle/recovery error contexts and remain failures rather than missing-file defaults.
-Recovery lock-wait coverage now includes a comment-only manifest edit: identical decoded receipts
-still invalidate the previous raw-byte-bound approval under both lifecycle and privileged locks.
-All seven focused tests pass on both an isolated `d095431` source snapshot and the current code,
-using separate build directories. No production behavior correction was needed.
+Existing manifest roundtrip, receipt-version, lifecycle and recovery tests remain applicable.
+Local macOS validation does not establish native Windows/Linux execution.

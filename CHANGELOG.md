@@ -5,6 +5,28 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [2.7.2] — 2026-10-29
+
+### Bug Fixes
+
+- Recognize unchanged managed Windows split-DNS rules during upgrades and uninstall ownership
+  checks, avoiding false user-modification warnings and unnecessary administrator requests.
+- Prevent `preset new` from overwriting existing entries, including dangling symbolic links and
+  files created concurrently, unless `--force` is explicitly supplied.
+- Allow workspace secret file groups outside Git repositories on separate filesystems while
+  continuing to reject ambiguous Git inspection failures before releasing plaintext.
+
+### Internal
+
+- Simplify system profile code checks and Shell profile/cache file preparation while preserving
+  snapshot-bound approval, ownership checks and recovery behavior.
+- Update GitHub Actions dependencies used by CI, documentation and release workflows.
+
+### Docs
+
+- Add English and Simplified Chinese 2.7.2 upgrade guidance and refresh the existing 2.7
+  documentation snapshot with the split-DNS, template creation and file-group fixes.
+
 ## [2.7.1] — 2026-10-25
 
 ### Bug Fixes

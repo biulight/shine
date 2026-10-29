@@ -43,28 +43,13 @@ this does not add crash rollback. There is no public command, output or manual b
 Native Windows/Linux execution, real remote hosts and cryptographic hardware remain separate from
 local tests, controlled subprocess fixtures and cross-target compilation.
 
-The local macOS validation compared 269 baseline/current records with no differences after the
-UUID normalization above. The initial extraction's all-feature workspace suite passed 1704 tests (two skipped),
-including four added regressions; all eight compile-fail documentation tests passed. Formatting,
-all-target/all-feature Clippy, dependency policy and spelling checks passed. The baseline suite
-had one leaky-test warning; the initial extraction run did not reproduce it. Linux Core cross-target checking
-passed. Windows Core cross-target checking passed with an existing unused-variable warning in
-`launcher.rs`; full-workspace Windows checking
-was blocked in `aws-lc-sys` by missing Windows C headers on the macOS host. Dependency-policy
-checks retained existing duplicate-dependency and unmatched-license-allowance warnings.
-
-A second baseline review added consumer regressions for unrelated receipts changed while refresh
-waits for its lifecycle lock, and valid/corrupt/future-schema journals appearing during that wait.
+Consumer regressions cover unrelated receipts changed while refresh waits for its lifecycle lock,
+and valid/corrupt/future-schema journals appearing during that wait.
 The valid journal comes from a real approved static install with failed receipt persistence;
 refresh leaves its resource and journal untouched until separately approved explicit recovery.
 The failed-refresh-save regression also asserts that refresh creates no recoverable journal.
 A seal regression retains old sealed values, replaces pending values and drops retired payload
 keys, then reads the result through both broker and local consumers. Broker metadata admission
-rejects the pending source without invoking the backend. These eight focused tests (including
-the earlier refresh/source-validation contracts) also pass against the pre-extraction production
-implementation at `e8f9c85740fac8f24f73fbc926932d2d1949b654`. No production correction was needed.
-The second review's full workspace run passed 1707 tests (two skipped), with one leaky-test warning
-on the unchanged `preset_commands::tests::copy_creates_nested_directories`; three isolated reruns
-passed without that warning. All-target/all-feature Clippy, formatting, spelling, KB links and
-Linux/Windows Core cross-target checks passed; the existing Windows unused-variable warning
-remains. Cross-target checking does not establish native Windows/Linux execution.
+rejects the pending source without invoking the backend. These scenarios were also checked against
+the pre-extraction production implementation at `e8f9c85740fac8f24f73fbc926932d2d1949b654`, retaining
+independent coverage of the original contracts.

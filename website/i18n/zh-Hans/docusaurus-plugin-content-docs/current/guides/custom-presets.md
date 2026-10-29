@@ -482,7 +482,8 @@ shine preset new shell
 shine preset new sys
 ```
 
-已有文件时只有加上 `--force` 才会覆盖。类别格式属于预设作者接口，修改后先运行
+已有文件时只有加上 `--force` 才会覆盖。未指定时会拒绝已有目录项（包括悬空符号链接），
+并发创建也不会互相覆盖。类别格式属于预设作者接口，修改后先运行
 `shine preset validate . --format json`，再执行对应的隔离安装 `--dry-run`。Shell 安装 dry-run
 只预览命令入口，不安装或修改文件。
 

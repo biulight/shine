@@ -14,6 +14,11 @@ const PROBE: &str = r#"
 use std::{env,fs,io::{Read,Write},process::Command,time::Duration};
 fn main() {
  let args:Vec<_>=env::args_os().skip(1).collect();
+ if env::current_exe().unwrap().file_stem().unwrap()=="git" {
+  std::io::stderr().write_all(env::var("PROBE_GIT_STDERR").unwrap().as_bytes()).unwrap();
+  std::io::stdout().write_all(env::var("PROBE_GIT_STDOUT").unwrap().as_bytes()).unwrap();
+  std::process::exit(env::var("PROBE_GIT_EXIT").unwrap().parse().unwrap());
+ }
  if env::current_exe().unwrap().file_stem().unwrap()=="age" {
   if args.iter().any(|a| a=="--version") { println!("1.3.0"); return; }
   eprintln!("phone-authorization-prompt");
@@ -969,6 +974,72 @@ fn file_groups_stop_on_git_discovery_errors_before_decrypting() {
         fs::read(f.root.join(".signing/key")).unwrap(),
         [0, 255, 10, 13, 128]
     );
+}
+
+#[test]
+fn file_groups_accept_only_confirmed_git_absence_at_mount_boundaries() {
+    const BOUNDARY: &str = "fatal: not a git repository (or any parent up to mount point /tmp)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n";
+    for (stderr, stdout, code, marker, accepted) in [
+        (BOUNDARY.to_owned(), "", "128", false, true),
+        (BOUNDARY.replace('\n', "\r\n"), "", "128", false, true),
+        (BOUNDARY.to_owned(), "", "128", true, false),
+        (BOUNDARY.to_owned(), "", "1", false, false),
+        (BOUNDARY.to_owned(), "unexpected\n", "128", false, false),
+        (
+            format!("{BOUNDARY}fatal: bad config\n"),
+            "",
+            "128",
+            false,
+            false,
+        ),
+        (
+            "fatal: not a git repository (or any parent up to mount point /tmp)\n".into(),
+            "",
+            "128",
+            false,
+            false,
+        ),
+        (
+            "fatal: detected dubious ownership in repository\n".into(),
+            "",
+            "128",
+            false,
+            false,
+        ),
+        ("fatal: bad config\n".into(), "", "128", false, false),
+    ] {
+        let f = Fixture::new();
+        f.prepare();
+        if marker {
+            fs::write(f.root.join(".git"), "gitdir: missing\n").unwrap();
+        }
+        let bin = f.root.join("git-bin");
+        fs::create_dir(&bin).unwrap();
+        fs::copy(PROBE_BINARY.0.join(exe("probe")), bin.join(exe("git"))).unwrap();
+        let path = std::env::join_paths([bin, PROBE_BINARY.0.clone()].into_iter().chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .unwrap();
+        let log = f.root.join("backend-log");
+        for mut command in [f.run("check"), f.export()] {
+            let output = command
+                .env("PATH", &path)
+                .env("PROBE_GIT_STDERR", &stderr)
+                .env("PROBE_GIT_STDOUT", stdout)
+                .env("PROBE_GIT_EXIT", code)
+                .env("PROBE_BACKEND_LOG", &log)
+                .output()
+                .unwrap();
+            if accepted {
+                good(output);
+            } else {
+                error(output, "cannot inspect Git repository");
+                assert!(!log.exists());
+                assert!(!f.root.join(".signing/key").exists());
+                assert!(!f.root.join("other/password").exists());
+            }
+        }
+    }
 }
 
 #[test]

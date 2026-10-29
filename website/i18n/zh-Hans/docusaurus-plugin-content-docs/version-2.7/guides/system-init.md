@@ -127,6 +127,10 @@ shine sys recover              # 审阅中断的受管操作
 shine sys recover --yes        # 非交互批准
 ```
 
+对于受管系统项目，`shine update` 比较期望配置与安装记录，`shine upgrade` 还会检查实际系统资源。
+在 Windows 上，如果 split-DNS 的 NRPT 规则与安装记录、期望配置都一致，就不需要更新或管理员权限。
+若只想升级 Shell 预设，可使用 `shine upgrade shell/<CATEGORY>` 限定范围。
+
 非 dry-run 的 managed 操作会显示绑定快照的 Plan，确认默认是 No。`--yes` 只跳过提示，不能
 跳过 Plan 展示、权限 blocker 或执行前复核。若项目需要管理员权限，会在 Plan 批准后另行请求。
 

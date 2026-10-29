@@ -45,6 +45,6 @@ Users review each important project and manually remove unwanted local entries t
 or new builtin defaults. Update scripts to explicit scope/file options. Installed templates change
 only through the existing reviewed lifecycle. Downgrading restores old ordering but cannot restore
 deleted configuration or reverse installed-artifact changes. Public manuals include both procedures.
-Native Windows execution, failed replacement preservation, concurrent writes and a stable v2.3.1
-downgrade drill passed on 2026-10-11; see the [validation record](../operations/env-configuration-validation.md).
+The [Windows validation and downgrade drill](../operations/env-configuration-validation.md) retains
+replacement-failure, concurrent-write and stable v2.3.1 downgrade scenarios and their limits.
 Old binaries can resume builtin-default expansion, but cannot recover deleted custom values.

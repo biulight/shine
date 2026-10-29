@@ -839,6 +839,7 @@ Ignore all plaintext targets before use in a Git repository, for example `.andro
 aliases of tracked paths whose working files are missing. Shine does not edit `.gitignore`.
 Checks use each target's own repository, including nested repositories. Git inspection failures
 stop the operation before plaintext is released.
+File groups also work outside Git repositories, including directories on separate filesystems.
 Use the following commands after preparing the plaintext files:
 
 ```bash

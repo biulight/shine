@@ -607,6 +607,16 @@ bugs. Check this list before changing the modules named in each entry.
   correspondence with independently appended vectors or positional truncating iteration. Pairing
   does not replace Action validation, permission checks, journal-before-effect ordering, per-action
   progress saves or fresh recovery approval (ADR 0117).
+  Within a profile step, each prepared file pairs its complete `ShellProfileFileV1` contract with
+  private desired bytes. Project journal contracts from those records and apply the records
+  directly; desired mode comes from the same contract identity. Bytes never enter the journal
+  (ADR 0155).
+  Cache removal has no private byte payload: its prepared marker carries no second file list.
+  Apply iterates the validated Action contracts and rechecks each destination before moving it
+  to rollback; receipt checks and recovery boundaries remain independent (ADR 0156).
+  Cache replacement pairs each complete file contract with its private write bytes. Project the
+  Action list from those records and derive previous presence and desired mode from the contract;
+  preserve per-file patch ownership and rename/write/mode order (ADR 0157).
 - **App factory preserves per-resource admission.** The observation-only factory validates
   approval before Host reads, then tries JSON relocation, Copy relocation, JSON merge and Copy in
   that order. Relocation requires its exact typed Update step; ordinary Create/Update matching keeps
@@ -1085,6 +1095,9 @@ bugs. Check this list before changing the modules named in each entry.
   declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
   guarded eval/source, fragments, and base profile code require human lifecycle consent or a matching
   `sys/<item>` grant.
+  `SysShellIntegration::has_executable_code` owns only eval/source/fragment classification for
+  trust, planning, composition and pack. Each consumer retains its selection and authorization
+  rules; classification never substitutes for a grant or fresh approval (ADR 0154).
   Read-only status paths must never execute sys code. Project config and Presets cannot authorize
   their own executable content.
 - **Manual generators never run from implicit status or upgrade paths.**
@@ -1254,7 +1267,9 @@ bugs. Check this list before changing the modules named in each entry.
   Git plaintext targets must be ignored and untracked in their own repository, including
   nested repositories. Compare the complete repository index using the same case/Unicode path
   keys, including deleted working files and aliases in parent directory names. Git discovery errors
-  fail closed; exit 128 alone never proves absence.
+  fail closed; exit 128 alone never proves absence. Confirm non-repository directories only with
+  a recognized ordinary or mount-boundary absence diagnostic, empty stdout and no ancestor `.git`
+  marker; mount-boundary detection must not hide broken repositories or other inspection errors.
   Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
   Preview paths are quoted with control characters escaped on one line. Seal/removal/export result
   paths and cleanup warnings encode controls only when rendered; child stdout remains raw.

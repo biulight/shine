@@ -110,9 +110,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             match prepared_action {
                 PreparedShellAction::Cache { files } => {
                     for file in files {
-                        if file.previous_present {
+                        let contract = &file.contract;
+                        if contract.previous.is_some() {
                             self.host()
-                                .rename(&file.destination, &file.rollback)
+                                .rename(&contract.destination, &contract.rollback)
                                 .await
                                 .map_err(|error| {
                                     error
@@ -120,12 +121,12 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                                 })?;
                         }
                         self.host()
-                            .write_atomic(&file.destination, &file.bytes)
+                            .write_atomic(&contract.destination, &file.bytes)
                             .await
                             .map_err(|error| error.into_anyhow("writing Shell cache file"))?;
-                        if let Some(mode) = file.unix_mode {
+                        if let Some(mode) = contract.desired.unix_mode {
                             self.host()
-                                .set_mode(&file.destination, mode)
+                                .set_mode(&contract.destination, mode)
                                 .await
                                 .map_err(|error| {
                                     error.into_anyhow("setting Shell cache file mode")
@@ -216,23 +217,19 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                             error.into_anyhow("moving removed Shell rendered file to rollback")
                         })?;
                 }
-                PreparedShellAction::RemoveCache { files } => {
-                    let ActionKindV1::RemoveShellCache {
-                        files: action_files,
-                        ..
-                    } = &action.kind
-                    else {
+                PreparedShellAction::RemoveCache => {
+                    let ActionKindV1::RemoveShellCache { files, .. } = &action.kind else {
                         bail!("prepared Shell cache removal action changed shape");
                     };
-                    for ((destination, rollback), action_file) in files.iter().zip(action_files) {
-                        if !observe_shell_file(self.host(), destination)
+                    for file in files {
+                        if !observe_shell_file(self.host(), &file.destination)
                             .await?
-                            .matches(&action_file.previous)
+                            .matches(&file.previous)
                         {
                             bail!("Shell cache file changed before transactional removal");
                         }
                         self.host()
-                            .rename(destination, rollback)
+                            .rename(&file.destination, &file.rollback)
                             .await
                             .map_err(|error| {
                                 error.into_anyhow("moving removed Shell cache file to rollback")
@@ -260,25 +257,22 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         })?;
                 }
                 PreparedShellAction::Profile { files } => {
-                    let ActionKindV1::ReconcileShellProfile {
-                        files: action_files,
-                        ..
-                    } = &action.kind
-                    else {
+                    let ActionKindV1::ReconcileShellProfile { .. } = &action.kind else {
                         bail!("prepared Shell profile action changed shape");
                     };
-                    for (file, action_file) in files.iter().zip(action_files) {
+                    for prepared in files {
+                        let file = &prepared.contract;
                         let previous = observe_shell_file(self.host(), &file.destination).await?;
-                        if action_file
+                        if file
                             .previous
                             .as_ref()
                             .is_some_and(|expected| !previous.matches(expected))
-                            || (action_file.previous.is_none()
+                            || (file.previous.is_none()
                                 && previous != ShellFileObservation::Missing)
                         {
                             bail!("Shell profile changed before transactional reconciliation");
                         }
-                        if action_file.previous.is_some() {
+                        if file.previous.is_some() {
                             self.host()
                                 .rename(&file.destination, &file.rollback)
                                 .await
@@ -286,12 +280,16 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                                     error.into_anyhow("moving previous Shell profile to rollback")
                                 })?;
                         }
-                        if let Some(desired) = &file.desired {
+                        if let Some(desired) = &prepared.desired_bytes {
                             self.host()
                                 .write_atomic(&file.destination, desired)
                                 .await
                                 .map_err(|error| error.into_anyhow("writing Shell profile"))?;
-                            if let Some(mode) = file.unix_mode {
+                            if let Some(mode) = file
+                                .desired
+                                .as_ref()
+                                .and_then(|identity| identity.unix_mode)
+                            {
                                 self.host()
                                     .set_mode(&file.destination, mode)
                                     .await
@@ -303,7 +301,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         if file.ownership == ShellProfileFileOwnershipV1::SentinelBlock
                             && observe_shell_profile_block_hash(self.host(), &file.destination)
                                 .await?
-                                != action_file.desired_block_hash
+                                != file.desired_block_hash
                         {
                             bail!("Shell profile sentinel write did not match its action");
                         }

@@ -234,11 +234,9 @@ pub(super) fn sys_profile_code_blocked_for_enabled<H>(
 }
 
 pub(super) fn sys_item_has_executable_profile_code(item: &SysItem) -> bool {
-    item.shell.iter().any(|integration| {
-        !integration.eval_argv.is_empty()
-            || integration.source.is_some()
-            || integration.fragment.is_some()
-    })
+    item.shell
+        .iter()
+        .any(|integration| integration.has_executable_code())
 }
 
 pub(super) fn sys_profile_base_code_present<H>(runtime: &CoreRuntime<H>, os_id: &str) -> bool {
@@ -356,7 +354,9 @@ pub(super) async fn sys_receipt_modified<H: FileSystemObservationHost + SplitDns
                 domain: receipt.domain.clone(),
                 servers: receipt.servers.clone(),
                 resource: PathBuf::from(&receipt.resource),
-                content: Vec::new(),
+                // Windows returns the expected content for an exact NRPT match.
+                // Keep its ownership marker available to the check below.
+                content: split_dns_content_for_plan(receipt),
             };
             let observed = runtime.host().inspect_split_dns(&request).await?;
             state.bytes(

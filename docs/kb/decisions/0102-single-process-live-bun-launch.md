@@ -1,6 +1,6 @@
 # 0102 — Transformed Live Bun commands launch through one installed receipt
 
-- **Status**: implemented; macOS/Linux full suites, three-platform real-Bun terminal and Windows launch/migration checks passed; Windows full-suite and Clippy baseline failures recorded
+- **Status**: implemented; real-terminal evidence and limits below
 - **Date**: 2026-10-09
 - **Evidence**: `core/src/runtime/{shell_launch,shell,launcher}.rs`, `cli/src/shells/deployment.rs`,
   `cli/src/env/{workspace,live_bun}.rs`, `tests/live_bun_launch.rs`

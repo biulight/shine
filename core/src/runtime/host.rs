@@ -861,7 +861,15 @@ async fn inspect_windows_split_dns(request: &SplitDnsRequest) -> anyhow::Result<
     if !output.status.success() {
         return Ok(SplitDnsState::default());
     }
-    let query: WindowsNrptQuery = serde_json::from_slice(&output.stdout)?;
+    decode_windows_split_dns_state(request, &output.stdout)
+}
+
+pub(super) fn decode_windows_split_dns_state(
+    request: &SplitDnsRequest,
+    output: &[u8],
+) -> anyhow::Result<SplitDnsState> {
+    let marker = split_dns_marker(&request.item_id);
+    let query: WindowsNrptQuery = serde_json::from_slice(output)?;
     if query.rules.is_empty() {
         return Ok(SplitDnsState::default());
     }

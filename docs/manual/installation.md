@@ -25,7 +25,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.7.1 sh install.sh
+SHINE_VERSION=2.7.2 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,7 +39,7 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.7.1"; .\install.ps1
+$env:SHINE_VERSION = "2.7.2"; .\install.ps1
 ```
 
 ## Install with cargo-binstall
@@ -116,6 +116,14 @@ On Unix, installing or syncing to a protected location requests `sudo` authoriza
 Shine cannot elevate itself to upgrade when running from a protected directory. To use self-upgrade,
 install and run Shine from a user-writable directory. On Windows, installing or upgrading in a
 protected location requires a terminal with the necessary permissions.
+
+## Upgrade to Shine 2.7.2
+
+Shine 2.7.2 fixes false modification warnings for unchanged Windows split-DNS rules, protects
+`preset new` from accidental overwrites, and allows workspace secret file groups outside Git
+repositories on separate filesystems. No configuration migration is required when upgrading
+from 2.7.1. See [managed system items](./guides/system-init.md),
+[Preset templates](./guides/custom-presets.md), and [file groups](./guides/environment.md).
 
 ## Upgrade to Shine 2.7.1
 

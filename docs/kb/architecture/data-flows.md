@@ -563,6 +563,13 @@ Transaction preparation retains each journal Action and its execution payload in
 `PreparedShellStep`. Apply projects the Action IR from those records, validates it and its exact
 permissions, publishes the journal, then executes the same records with the existing per-action
 progress saves. Payload bytes stay in memory; journal and recovery schemas are unchanged (ADR 0117).
+Within profile steps, each file record pairs the complete file contract with its private desired
+bytes. The journal clones those contracts; apply consumes the paired records without positional
+matching to the journal file list (ADR 0155).
+Cache removal retains only a prepared phase marker and reads paths and previous identities from
+the same step's Action file list, with the existing per-file live rechecks before rename (ADR 0156).
+Cache replacement projects its Action file list from paired contract/byte records. Apply consumes
+those records, taking paths, previous presence and desired mode from each contract (ADR 0157).
 
 Journal admission, marker eligibility, commit and recovery dispatch share a private borrowed
 `ShellAction` view with exhaustive domain conversion. Commit checks all live resources and receipts
@@ -922,7 +929,7 @@ relocation without creating a duplicate manifest entry.
 
 Managed sys resources participate in the same flow. `shine update` compares the desired built-in
 resource receipt derived from the active env against `sys-manifest.toml`; `shine upgrade` then
-re-applies only recorded, profile-enabled managed resources and replaces the receipt after
+re-applies only recorded managed resources and replaces the receipt after
 convergence. Aggregate upgrade does not implicitly compose the Sys shell profile; use explicit
 `sys profile enable/disable` for that state. For split DNS,
 the receipt comparison includes the normalized domain, DNS servers, and platform resource path.
@@ -930,6 +937,11 @@ Update and sys-info output render those receipt differences field by field (`old
 user can inspect the pending system change before granting administrator access to upgrade.
 The managed-file driver compares only its desired destination and content hash with the recorded
 receipt and emits safe field labels rather than paths or content.
+
+Windows NRPT observation projects one exactly matching rule into the request's expected content;
+owned but mismatched rules return the ownership marker alone. Receipt ownership probes must supply
+the receipt-derived content too, rather than an empty payload that would erase the marker on an
+exact match. Current resources have no required operation permissions and remain converged.
 
 Managed apply/upgrade/uninstall loads the independently versioned `sys-manifest.toml` before
 resource, elevation, or composed-profile mutation. Read-only update uses the same typed receipt

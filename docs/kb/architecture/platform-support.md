@@ -7,6 +7,9 @@ Ubuntu, and Windows. It is an implementation reference, not a public compatibili
 the relevant code, presets, CI workflows, and public manual again before changing behavior or
 announcing support.
 
+The assessment is based on repository code and workflows. It does not establish end-to-end
+bootstrap, package-provider, DNS, terminal, service-manager or remote-SSH smoke coverage.
+
 ## Executive summary
 
 Shine has a genuine cross-platform core rather than a Unix implementation that merely compiles on
@@ -218,11 +221,3 @@ For a change that claims support on one or more of these platforms:
 | Test workflow | [`.github/workflows/test.yml`](../../../.github/workflows/test.yml) |
 | Release asset matrix | [`.github/workflows/package-assets.yml`](../../../.github/workflows/package-assets.yml) |
 | Windows Hello decision | [`decisions/0032-defer-windows-hello-to-external-age-plugin.md`](../decisions/0032-defer-windows-hello-to-external-age-plugin.md) |
-
-## Assessment verification record
-
-The 2026-08-30 assessment verified the checked-in native Ubuntu/macOS/Windows nextest matrix and
-the then-existing persistent-service implementations from repository code and workflows. ADR 0107
-later removed the HTTP service. No new end-to-end
-bootstrap, package-provider, DNS, terminal, service-manager, or remote-SSH smoke run was performed
-as part of this documentation refresh.

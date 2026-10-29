@@ -1,5 +1,36 @@
 # Lessons Learned
 
+## 2026-10-28 — Git absence diagnostics differ at filesystem boundaries
+
+- **Symptom**: Ubuntu CI failed file-group seal/run/export and rollback tests with
+  `cannot inspect Git repository` in temporary directories outside a repository.
+- **Cause**: discovery accepted only Git's ordinary non-repository message. Git stops at mount
+  boundaries by default and emits a distinct two-line absence diagnostic on separate filesystems.
+- **Fix / rule**: recognize both complete diagnostics, still requiring exit 128, empty stdout and
+  no `.git` marker in any ancestor. Keep discovery scope unchanged and reject ambiguous failures.
+- **Coverage**: a controlled Git probe exercises mount-boundary absence through run/export,
+  including CRLF output, and rejects repository markers, unexpected status/stdout, incomplete or
+  extra diagnostics, configuration errors and unsafe-ownership errors before backend execution.
+- **Evidence**: [Ubuntu CI failure](https://github.com/biulight/shine/actions/runs/40670230278/job/122754825653).
+
+## 2026-10-26 — Windows NRPT ownership probes need expected receipt content
+
+- **Symptom**: `update` showed only Shell updates, but aggregate `upgrade` also reported
+  `preserve sys/split-dns [sys_resource_user_modified]` and administrator permissions for an
+  unchanged Windows DNS rule.
+- **Cause**: the receipt ownership probe passed empty expected content. Windows observation returns
+  that content when exactly one marked NRPT rule matches the namespace and ordered servers;
+  the subsequent marker check therefore mistook a current rule for foreign content.
+- **Fix**: supply the receipt-derived content during ownership observation, as during desired-state
+  observation. Keep receipt-only `update` inspection separate from live upgrade planning.
+- **Coverage**: planner regressions reuse production NRPT JSON decoding for current targeted and
+  aggregate Plans, uninstall ownership, desired/live server changes, duplicate and missing rules;
+  retain foreign-file preservation and observation-only checks.
+- **Native validation**: Windows reproduced the installed binary's false preservation. With the
+  same live NRPT rule and isolated state, the fixed binary's targeted and aggregate upgrades both
+  returned `Nothing to upgrade.`; state bytes/timestamps, real config/manifest and NRPT rules stayed
+  unchanged.
+
 ## 2026-10-25 — Cache hashes must encode boundaries, and unwrap limits must own stderr
 
 - **Symptom**: two valid TOML source layouts produced identical concatenated hash input; a cached
@@ -97,11 +128,9 @@
 - **Coverage**: App/Shell conversion, semantic env mappings, multiline values, source hashes,
   backup/apply/idempotence, mixed-input refusal, safe colored/plain previews, and managed-overlay
   refusal remain independent. Overlay previews explicitly require upstream commit/push before pull.
-- **Native acceptance (2026-10-24)**: isolated Rust 1.96.0 builds of `af6c027c` plus the four-file
-  migration fix passed 49 targeted tests on Windows x86_64 and 50 on Linux x86_64 (30 migration
-  unit tests, 10 output tests, and 9/10 CLI tests respectively). An actual Windows managed-overlay
-  dry-run also retained the expected blocker while eliminating whole-file CRLF churn; metadata,
-  config and state-directory entries stayed unchanged. Existing checkouts were preserved.
+- **Native evidence**: the migration fix was checked on Windows and Linux. A Windows managed-overlay
+  dry-run retained its blocker without whole-file CRLF churn; metadata, config and state entries
+  stayed unchanged. These targeted checks do not establish full platform or external-system coverage.
 
 ## 2026-10-23 — Reduce diagnostic repetition without reducing evidence
 
@@ -135,8 +164,8 @@
   rules. A loader captured before replacement must still contribute its dependency effects;
   immutable loader aliases must retain their return identity. New regressions also exercise
   no-Plan Frontend evaluation, rejecting differences before invocation writes or process starts.
-- **Native verification**: `14eac507` passed 63 targeted Windows tests and 64 Linux tests, including
-  150 author fixture combinations per host; see the [scope and limits](architecture/code-analysis.md#p1-native-verification-2026-10-23).
+- **Coverage scope**: see the [admission regression boundaries](architecture/code-analysis.md#admission-regression-boundaries)
+  and [historical platform evidence](architecture/code-analysis.md#platform-evidence-and-limits).
 
 ## 2026-10-23 — Binding patterns are not arbitrary identifier subtrees
 
@@ -713,10 +742,9 @@
   detection or change production code solely to suppress this symptom.
 - **Prevention (2026-10-22)**: `.config/nextest.toml` requires 0.9.145 or newer and fails real leaked
   output handles at the default 100 ms timeout. This also applies to CI and pre-commit runs.
-- **Acceptance (2026-10-22)**: `4ece7d6b` passed all three native suites with Nextest 0.9.148 and
-  zero LEAK results, including `copy_sets_executable_bit_on_sh_files` on macOS. Rust 1.90 MSRV
-  and quality checks also passed; counts and job links are in the
-  [CI acceptance record](operations/ci-pipelines.md#rust-190-and-nextest-acceptance-2026-10-22).
+- **Historical evidence**: [native CI at `4ece7d6b`](https://github.com/biulight/shine/actions/runs/39722135944)
+  reported no LEAK results with the fixed runner and unchanged strict timeout. This distinguishes
+  runner acceptance from the diagnostic method above.
 
 ## 2026-10-19 — Command hints and summaries retain argument and outcome boundaries
 
@@ -827,8 +855,8 @@
   inspection entry, all report assertions and the observation-only Host check (ADR 0138).
 - **Rule**: captured platform and Shell are independent inputs. Set both when a fixture models a
   specific runtime; do not weaken production source filtering to accommodate host defaults.
-- **Evidence**: native Windows reproduced the original zero-row failure; after selecting Bash,
-  all six `runtime_boundary` tests passed under nextest. The same six tests passed on macOS.
+- **Evidence**: native Windows reproduced the zero-row failure; selecting Bash restored the
+  inspection row while retaining the production filter and observation-only assertions.
 
 ## 2026-10-18 — Production-entry fixtures must not pre-satisfy mutation assertions
 
@@ -1028,6 +1056,18 @@
 - **Coverage**: real CLI exports round-trip through Node and Bun; rejected imports publish no files;
   rejected exports preserve absent/existing outputs even with force. Self-install reloads from a
   different cwd and syncs a replacement into the original installation.
+
+## 2026-10-28 — Template creation must enforce no-overwrite when opening the file
+
+- **Symptom**: `preset new` followed a dangling `shine.toml` symlink and created its unrelated
+  referent without `--force`; concurrent creators could both succeed and replace each other's bytes.
+- **Cause**: the shared synchronous template writer checked `Path::exists()` before unconditional
+  `std::fs::write`. The check followed links and did not reserve the destination.
+- **Fix**: use exclusive `create_new` for non-force creation, retain the existing conflict diagnostic,
+  and leave explicit force behavior unchanged. This preserves the public synchronous API; it is not
+  a new durable atomic-publication or crash-recovery contract.
+- **Coverage**: native dangling-link preservation, concurrent single-winner/exact-byte checks, and
+  all three real CLI template entry points. Existing create/refuse/force tests remain independent.
 
 ## 2026-10-15 — Git index aliases and import publication need final identity checks
 

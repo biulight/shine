@@ -108,9 +108,7 @@ async fn render_integration(
     integration: &SysShellIntegration,
     shell: SysShellKind,
 ) -> Result<String> {
-    let executable = !integration.eval_argv.is_empty()
-        || integration.source.is_some()
-        || integration.fragment.is_some();
+    let executable = integration.has_executable_code();
     if executable
         && (config.is_external_presets || config.active_presets_overlay_dir().is_some())
         && !config.external_code_trusted

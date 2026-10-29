@@ -149,6 +149,11 @@ shine sys recover              # Review an interrupted managed operation
 shine sys recover --yes        # Non-interactive approval
 ```
 
+For managed system items, `shine update` compares the desired configuration with the installation
+record; `shine upgrade` also checks the actual system resource. On Windows, a split-DNS NRPT rule
+that matches both the recorded and desired configuration needs no update or administrator access.
+Use `shine upgrade shell/<CATEGORY>` to limit an upgrade to Shell presets.
+
 Non-dry-run managed operations display a snapshot-bound Plan and default to No. `--yes` skips only
 the prompt, not Plan rendering, permission blockers, or fresh validation. Administrator access, if
 required, is requested separately after Plan approval.

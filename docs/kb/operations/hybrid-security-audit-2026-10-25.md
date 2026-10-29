@@ -10,9 +10,10 @@
   secret 声明校验。另确认 **1 项 P3 加固缺口**：age 解封装的 stderr 限制并非始终生效。
 - 本次未发现可复现的 AEAD 伪造、额外 GPG 收件人解密、取消后切换后端或 broker
   未授权释放。测试通过不构成这些路径不存在其他缺陷的证明。
-- **当前状态：A1、A2 及 CLI 回归脚本夹具均已修复，并完成本机复验。**
-  本记录随修复一同纳入本地提交，不代表已推送或发布。
-  下文保留修复前的发现与证据；本轮变更和验证见文末“修复与复验”。代码行号指初始基线。
+- **修复状态：A1、A2 及 CLI 回归脚本夹具已在
+  [`9787bd28`](https://github.com/biulight/shine/commit/9787bd280434567b5902d9660f186b68e2640b18)
+  修复，该提交已纳入本地 `v2.7.1` 标签。**
+  下文保留初始基线的发现与复现证据；代码行号均指初始基线，修复与兼容性见文末。
 
 ## A1 / P2：快照哈希没有字段边界，允许不同源文件命中同一缓存
 
@@ -120,28 +121,7 @@ unbounded_diagnostic_forwarded: True
 - RustCrypto 的 [0.10.1 安全说明](https://docs.rs/chacha20poly1305/0.10.1/chacha20poly1305/#security-notes)
   记载其库级审计和处理器时序限制；这不覆盖 Shine 的自定义协议及缓存整合。
 
-## 初次审计验证记录（修复前）
-
-环境：macOS / aarch64，mise Rust 1.96.0，GnuPG 2.5.24，age 1.3.2。
-构建与测试均针对上述基线，Cargo 使用 `--target-dir target`。
-
-| 验证 | 结果 |
-| --- | --- |
-| `cargo build -p shine-cli --all-features` | 通过 |
-| nextest：`test(secret::) \| test(local_cache) \| test(hybrid_snapshot) \| test(broker)` | 88 / 88 通过 |
-| ignored `real_gpg_age_and_implicit_recipient_isolation` | 1 / 1 通过，使用临时密钥环和临时 age identity |
-| 本报告 A1、A2 CLI 探针 | 均复现；仅使用合成数据和隔离配置 |
-| 原始 `scripts/test-hybrid-secrets.py` | 最后一项失败，见下文 |
-| 只在临时副本修正上述测试夹具后重新运行 | 全部通过 |
-
-初次测试因 sandbox 禁止 sccache 操作失败，设置 `RUSTC_WRAPPER=` 后执行成功。
-真实工具测试首次因 sandbox 阻止临时 gpg-agent IPC 而失败；获准在 sandbox 外运行
-同一隔离测试后通过。未访问或修改用户真实密钥环。
-
-原始 CLI 脚本末尾使用 `current.replace("[env]\\n", ...)` 注入 `TOKEN_SECRET`，但
-此次初始化配置没有 `[env]`，替换无效，最终报 `TOKEN_SECRET is not set in the active
-config [env]`。它之前的断言均已执行通过。临时副本仅在缺少 `[env]` 时追加该表，再运行
-通过，包括字节精确 stdout 断言。初次审计时生产脚本未改；该结果不能记为原始脚本全通过。
+## 复现入口
 
 复现材料：[`hybrid-audit-probes.py`](evidence/2026-10-25-hybrid/hybrid-audit-probes.py)。
 探针目前默认检查修复结果。在仓库根目录执行：
@@ -154,12 +134,10 @@ rtk proxy python3 docs/kb/operations/evidence/2026-10-25-hybrid/hybrid-audit-pro
 
 探针重用当前仓库 CLI 测试的隔离夹具，不包含真实密钥，也不会读取用户配置；工具替身
 故意不执行公钥加密，只测试 Shine 的真实 envelope、缓存和子进程控制流。
-首次真实工具互操作结果提供独立的 GPG/age 兼容性证据，不能将两类证据混淆。
+真实工具互操作使用临时 GPG 密钥环和 age identity；这与工具替身的控制流证据不同，
+不能将两类证据混淆。
 
-未验证：Windows/Linux 原生运行、真实 Touch ID/手机/QR 交互、长时间模糊测试、
-进程内存恢复、整个依赖树的最新漏洞数据库扫描。未声称第三方密码学证明或完整平台认证。
-
-## 修复与复验（2026-10-25）
+## 修复与兼容性
 
 ### 实现与兼容性
 
@@ -174,39 +152,13 @@ rtk proxy python3 docs/kb/operations/evidence/2026-10-25-hybrid/hybrid-audit-pro
 使用旧缓存需要重新解密源文件，因此可能出现逐源授权；不需要重新封存已有密文。
 手机 QR 和显式消息是有意保留的交互输出，不承诺对这些可见消息进行脱敏；同样受总量限制。
 
-生产代码只改动 workspace 缓存版本/哈希及 secret 子进程输出处理。age 的私有调用改为
-传递已有 identity 检查结果，避免增加多个相互关联的布尔参数；未新增生产模块或依赖。
-新增测试分别覆盖哈希结构、真实 CLI 缓存和后台进程回收，并保留原有互操作/授权测试。
+### 关键证据与未验证边界
 
-### 本轮验证结果
-
-所有 Cargo 命令使用 mise Rust 1.96.0、`RUSTC_WRAPPER=` 和 `--target-dir target`。
-
-| 检查 | 本轮结果 |
-| --- | --- |
-| `cargo build -p shine-cli --all-features` | 通过 |
-| `cargo nextest run -p shine-cli --all-features --no-fail-fast` | 1,315 项中 1,300 项首次通过；15 项本地 SSH socket 测试受 sandbox 限制，复验后全部通过，详见下文；另 2 项默认忽略 |
-| ignored `real_gpg_age_and_implicit_recipient_isolation` | 通过：真实 GnuPG 2.5.24 / age 1.3.2，临时密钥环 |
-| `scripts/test-hybrid-secrets.py` | 原路径直接运行通过，包括新增攻击、输出边界、QR 实时性及两种配置夹具；不再需要临时修补 |
-| `hybrid-audit-probes.py`（默认修复模式） | 通过：旧哈希拼接仍相同，但缓存不再释放已删除声明的 secret；70,000 字节诊断被拒绝，未原样转发 |
-| `cargo fmt --check` / workspace all-targets all-features Clippy `-D warnings` | 通过 |
-| `cargo deny check bans licenses sources` / `typos` | 通过；deny 保留现有重复依赖警告，未修改依赖或 lockfile |
-| Black 22.10.0（Python 3.13） | 两个 Python 文件格式化并检查通过 |
-| website frozen install / locale parity / typecheck / build | 全部通过；检查了英文和中文 `next/guides/environment.html` 中的新说明 |
-| 本地文档链接、Python 语法、换行与空白、`git diff --check` | 通过 |
-
-全量测试的失败先定位为 `UnixListener::bind` 的 `Operation not permitted`。
-在 sandbox 外仅重跑受影响的 SSH 测试组，16 项中 15 项通过；剩余
-`local_status_response_timeout_remains_a_command_error` 命中测试自身的 20 秒超时。
-该项随后单独复验通过（6.72 秒），未修改 SSH 代码。这里记录环境限制和一次超时重试，
-不将首次全量运行描述为零失败。真实 GPG 测试也在允许临时 agent IPC 的环境中运行。
-
-首次针对性运行因缓存 context 固定向量仍为 v1 而失败；更新 v2 向量后，相关测试在全量
-运行中通过。格式工具首次使用 Python 3.14，因旧 Black 引用已删除的 `ast.Str` 而失败；
-改用已安装的 Python 3.13 环境完成格式化。网站构建仍输出 Node `localStorage` 实验性警告，
-不影响构建成功。
-
-文档按 `90b9202150459cf2773dc7ef91a28fc513cff82f` → 当前工作区作 product-change 检查：
-英文与简体中文环境指南同步说明缓存重建和诊断上限；ADR 0084/0085、invariants、data-flows
-和 lessons 同步记录实现边界。无手册路由变化，不涉及公共 portal 或私有仓库写入。
-真实 Windows/Linux、Touch ID、手机设备和 QR 扫码仍未验证；本轮 QR 证据来自受控工具交互。
+- macOS / aarch64 的 CLI 探针在初始基线复现 A1、A2；修复后，同一声明移动构造不再释放
+  已删除声明的 secret，70,000 字节诊断被拒绝且不原样转发。完整回归入口为
+  [`scripts/test-hybrid-secrets.py`](../../../scripts/test-hybrid-secrets.py)。
+- `real_gpg_age_and_implicit_recipient_isolation` 使用真实 GnuPG 2.5.24 / age 1.3.2 与
+  临时密钥，验证互操作、额外 GPG 收件人隔离和跨 wrapper 拼接失败；不使用用户真实密钥环。
+- 本次专项审计未覆盖 Windows/Linux 原生复现、真实 Touch ID/手机设备/QR 扫码、长时间
+  模糊测试、进程内存恢复或整个依赖树的最新漏洞数据库扫描。QR 实时性证据来自受控工具，
+  不代表硬件授权验收，也不构成第三方密码学证明或完整平台认证。

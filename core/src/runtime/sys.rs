@@ -961,6 +961,22 @@ mod tests {
         InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost, RuntimeContext, RuntimePlatform,
     };
 
+    #[test]
+    fn split_dns_new_receipt_rejects_unrecognized_os() {
+        let error = split_dns_receipt(&SplitDnsDomainRequest {
+            os_id: "unrecognized".into(),
+            item_id: "split-dns".into(),
+            domain: "corp.test".into(),
+            servers: "10.0.0.53".into(),
+            dry_run: false,
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "split-dns is unsupported on `unrecognized`"
+        );
+    }
+
     #[tokio::test]
     async fn manifest_and_receipt_versions_are_owned_by_core() {
         let root =

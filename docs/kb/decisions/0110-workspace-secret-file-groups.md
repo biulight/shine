@@ -1,6 +1,6 @@
 # 0110 — Explicit workspace secret file groups use scoped plaintext ownership
 
-- **Status**: accepted; native Linux/macOS/Windows regression CI passed; hardware validation pending
+- **Status**: accepted; hardware validation pending
 - **Evidence**: `cli/src/env/workspace/file_groups.rs`, `tests/workspace_secret_files.rs`,
   [PRD](../../workspace-secret-files-prd.md)
 
