@@ -114,6 +114,42 @@ fn parents(path: &Path) -> Result<()> {
     platform::private_directory(parent)?;
     Ok(())
 }
+
+fn check_parent_access(path: &Path, permissions: &SecretFilePermissions) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let uid = permissions.uid.unwrap_or(unsafe { libc::geteuid() });
+        if uid == unsafe { libc::geteuid() } || uid == 0 {
+            return Ok(());
+        }
+        let gid = permissions.gid.unwrap_or(unsafe { libc::getegid() });
+        for parent in path.ancestors().skip(1) {
+            let metadata = fs::symlink_metadata(parent).with_context(|| {
+                format!(
+                    "pre-create secret parent directories accessible to uid {uid}: {}",
+                    parent.display()
+                )
+            })?;
+            let execute = if metadata.uid() == uid {
+                0o100
+            } else if metadata.gid() == gid {
+                0o010
+            } else {
+                0o001
+            };
+            ensure!(
+                metadata.is_dir() && metadata.mode() & execute != 0,
+                "secret parent must grant Unix directory traversal to uid {uid}, gid {gid}: {}",
+                parent.display()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (path, permissions);
+    Ok(())
+}
+
 fn write_private(
     path: &Path,
     bytes: &[u8],
@@ -121,6 +157,7 @@ fn write_private(
     replace: bool,
 ) -> Result<()> {
     check(path)?;
+    check_parent_access(path, permissions)?;
     parents(path)?;
     let temp = path.with_file_name(format!(".shine-secret-{}", uuid::Uuid::new_v4()));
     #[cfg(not(unix))]
@@ -282,7 +319,7 @@ impl SecretFileIo for Provider {
         )?))
     }
     fn create(&self, path: &Path, bytes: &[u8], permissions: &SecretFilePermissions) -> Result<()> {
-        self.check_target(path)?;
+        self.check_target(path, permissions)?;
         write_private(path, bytes, permissions, false)
     }
     fn set_permissions(&self, path: &Path, permissions: &SecretFilePermissions) -> Result<()> {
@@ -327,8 +364,9 @@ impl SecretFileIo for Provider {
         fs::remove_file(path)?;
         platform::sync_cipher_parents(root_for(path)?, path)
     }
-    fn check_target(&self, path: &Path) -> Result<()> {
-        filesystem::check_git(root_for(path)?, path)
+    fn check_target(&self, path: &Path, permissions: &SecretFilePermissions) -> Result<()> {
+        filesystem::check_git(root_for(path)?, path)?;
+        check_parent_access(path, permissions)
     }
 }
 impl SecretFileProvider for Provider {

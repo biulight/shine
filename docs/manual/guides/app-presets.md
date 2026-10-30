@@ -443,7 +443,11 @@ See [SSH file authorization](ssh-transfer.md#file-secret-broker).
 
 Unix defaults are the installing user's ownership and `0600`; optional numeric `unix_uid`,
 `unix_gid`, and `unix_mode` (`0400` or `0600`) select the service account's access. Run installation
-as an account allowed to create the destination and set that ownership. Windows uses private
+as an account allowed to create the destination and set that ownership. When assigning a different
+non-root owner, pre-create all parent directories with Unix search (`x`) permission for that UID
+or the selected GID (or others). Shine checks the applicable owner/group/other mode bits before
+decryption; supplementary groups and ACL-only grants are not used to satisfy this check. Existing
+directory permissions are not changed automatically. Windows uses private
 current-user ACLs and rejects Unix permission fields. Review permissions before installing.
 
 An existing unowned target is adopted only when its content exactly matches the decrypted file.
@@ -456,7 +460,9 @@ decryption off pauses creation and updates but retains existing ownership. Remov
 requires `upgrade --prune-stale` to remove an unchanged old target. Destination moves require
 explicitly handling the old installation first. Interrupted writes retain protected recovery state;
 review `shine app recover` before retrying. Do not delete Shine's private secret state or fingerprint
-key, which are required for ownership checks and recovery.
+key, which are required for ownership checks and recovery. If an interruption prevents Shine from
+recording the created file's identity, automatic recovery stops and retains the files for manual
+inspection, even when their content appears unchanged.
 
 With automatic decryption disabled, use `shine env workspace export --format files` from the
 installed workspace, selecting its mode and file group. Manual export refuses existing files,

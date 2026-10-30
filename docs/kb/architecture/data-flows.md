@@ -7,7 +7,7 @@ records the cross-module sequences and their gotchas.
 ## Managed App secret files
 
 Effective overlay snapshot → metadata v3/workspace v3 mappings → ordinary auxiliary file plan
-plus distinct secret-resource plan → approval → explicit-needed-file decryption (local provider or
+plus distinct secret-resource plan → approval → target/parent access preflight → explicit-needed-file decryption (local provider or
 policy-matched SSH broker) → fresh approval recheck → private per-file journal/rename/create/receipt
 commit → unchanged rollback cleanup. Ordinary lifecycle hooks receive only changed-category
 status. Read-only inspection passes no plaintext into presentation. File export shares release

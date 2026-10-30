@@ -11,6 +11,7 @@ struct Fake {
     fail_decrypt: AtomicBool,
     fail_receipt: AtomicBool,
     fail_create: AtomicBool,
+    fail_applied_journal: AtomicBool,
 }
 impl SecretFileIo for Fake {
     fn resolve_permissions(&self, p: &SecretFilePermissions) -> SecretFilePermissions {
@@ -26,6 +27,14 @@ impl SecretFileIo for Fake {
         self.io.state(n)
     }
     fn save_state(&self, n: &str, b: Option<&[u8]>) -> Result<()> {
+        if n == "app-secret-operation.json"
+            && b.is_some_and(|bytes| {
+                serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["applied"].is_object()
+            })
+            && self.fail_applied_journal.swap(false, Ordering::SeqCst)
+        {
+            anyhow::bail!("injected applied journal failure");
+        }
         if n == "app-secret-manifest.json" && self.fail_receipt.swap(false, Ordering::SeqCst) {
             anyhow::bail!("injected receipt failure");
         }
@@ -53,8 +62,8 @@ impl SecretFileIo for Fake {
     fn remove(&self, p: &Path) -> Result<()> {
         self.io.remove(p)
     }
-    fn check_target(&self, p: &Path) -> Result<()> {
-        self.io.check_target(p)
+    fn check_target(&self, p: &Path, permissions: &SecretFilePermissions) -> Result<()> {
+        self.io.check_target(p, permissions)
     }
 }
 impl SecretFileProvider for Fake {
@@ -174,8 +183,141 @@ async fn setup() -> (PathBuf, Arc<Fake>) {
             fail_decrypt: AtomicBool::new(false),
             fail_receipt: AtomicBool::new(false),
             fail_create: AtomicBool::new(false),
+            fail_applied_journal: AtomicBool::new(false),
         }),
     )
+}
+
+#[tokio::test]
+async fn missing_applied_identity_blocks_creation_and_update_recovery() {
+    use std::os::unix::fs::PermissionsExt;
+    for update in [false, true] {
+        for replaced in [false, true] {
+            let (root, provider) = setup().await;
+            if update {
+                install(&runtime(&root, provider.clone(), "old", true), false)
+                    .await
+                    .unwrap();
+            }
+            let runtime = runtime(&root, provider.clone(), "new", true);
+            provider.fail_applied_journal.store(true, Ordering::SeqCst);
+            assert!(
+                install(&runtime, false)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("injected applied journal failure")
+            );
+            let target = root.join("service/secrets/password");
+            if replaced {
+                let replacement = root.join("service/secrets/replacement");
+                fs::write(&replacement, "new").unwrap();
+                fs::set_permissions(&replacement, fs::Permissions::from_mode(0o400)).unwrap();
+                fs::rename(replacement, &target).unwrap();
+            }
+            let before = provider.observe(&target).unwrap();
+            let journal = provider.state("app-secret-operation.json").unwrap();
+            let receipt = provider.state("app-secret-manifest.json").unwrap();
+            let plan = runtime.plan_app_operation_recovery().await.unwrap();
+            assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
+            assert_eq!(provider.observe(&target).unwrap(), before);
+            assert_eq!(
+                provider.state("app-secret-operation.json").unwrap(),
+                journal
+            );
+            assert_eq!(provider.state("app-secret-manifest.json").unwrap(), receipt);
+            let rollback = root.join("service/secrets/password.shine.secret.rollback");
+            if update {
+                assert_eq!(fs::read(rollback).unwrap(), b"old");
+            } else {
+                assert!(!rollback.exists());
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn service_owner_missing_parents_fail_before_decryption_or_writes() {
+    let (root, provider) = setup().await;
+    let original = runtime(&root, provider.clone(), "password", true);
+    let uid = unsafe { libc::geteuid() }.saturating_add(1);
+    let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
+    for (path, bytes) in original.presets().files() {
+        let bytes = if path == "app/demo/shine.toml" {
+            format!("{}\nunix_uid={uid}\n", String::from_utf8_lossy(bytes)).into_bytes()
+        } else {
+            bytes.to_vec()
+        };
+        builder = builder.file(path, bytes);
+    }
+    let mut context = original.context().clone();
+    // The filesystem check must still run when administrator authorization succeeds.
+    context.running_as_admin = true;
+    let runtime = CoreRuntime::new(RealHost, context, builder.build())
+        .with_secret_file_provider(provider.clone());
+    assert!(
+        install(&runtime, false)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("pre-create secret parent directories")
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    assert!(!root.join("service").exists());
+    assert!(
+        provider
+            .state("app-secret-operation.json")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        provider
+            .state("app-secret-manifest.json")
+            .unwrap()
+            .is_none()
+    );
+    assert!(!root.join(".shine/app-secret-fingerprint.key").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn service_owner_requires_traversable_existing_parents() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    // Use the shared temporary root, rather than a per-user 0700 temp directory.
+    let root = fs::canonicalize("/tmp")
+        .unwrap()
+        .join(format!("shine-service-parent-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    let parent = root.join("secrets");
+    fs::create_dir(&parent).unwrap();
+    let target = parent.join("password");
+    let permissions = SecretFilePermissions {
+        uid: Some(unsafe { libc::geteuid() }.saturating_add(1)),
+        gid: Some(fs::metadata(&parent).unwrap().gid()),
+        mode: 0o400,
+    };
+    // Group search suffices, but other search must not override a denying group class.
+    for (mode, allowed) in [(0o710, true), (0o701, false), (0o700, false)] {
+        fs::set_permissions(&parent, fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(check_parent_access(&target, &permissions).is_ok(), allowed);
+        assert_eq!(
+            fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+            mode
+        );
+    }
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o711)).unwrap();
+    let other_group = SecretFilePermissions {
+        gid: Some(permissions.gid.unwrap().saturating_add(1)),
+        ..permissions.clone()
+    };
+    assert!(check_parent_access(&target, &other_group).is_ok());
+    // A searchable immediate parent does not bypass an inaccessible ancestor.
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(check_parent_access(&target, &permissions).is_err());
+    assert!(!target.exists());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]

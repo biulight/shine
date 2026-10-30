@@ -27,7 +27,7 @@ pub trait SecretFileIo: Send + Sync {
     fn set_permissions(&self, path: &Path, permissions: &SecretFilePermissions) -> Result<()>;
     fn rename(&self, from: &Path, to: &Path) -> Result<()>;
     fn remove(&self, path: &Path) -> Result<()>;
-    fn check_target(&self, path: &Path) -> Result<()>;
+    fn check_target(&self, path: &Path, permissions: &SecretFilePermissions) -> Result<()>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,7 +347,7 @@ impl<H> CoreRuntime<H> {
                     }) {
                         continue;
                     }
-                    io.check_target(&target)?;
+                    io.check_target(&target, &file.permissions)?;
                     let before = io.observe(&target)?;
                     if let (Some(entry), Some(current)) = (&previous, &before) {
                         if !matches(entry, current) && !request.force {
@@ -639,10 +639,9 @@ impl<H> CoreRuntime<H> {
             (Some(o), Some(e)) => matches(e, o),
             _ => false,
         };
-        let applied_matches = journal
-            .applied
-            .as_ref()
-            .is_none_or(|o| current.as_ref() == Some(o));
+        // A missing observation is not evidence of ownership. A crash (or failed
+        // journal write) after creation leaves an indistinguishable replacement.
+        let applied_matches = current == journal.applied;
         let safe = if committed {
             desired_matches
                 && applied_matches

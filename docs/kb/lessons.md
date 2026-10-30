@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-31 — Secret creation needs durable identity and usable parent directories
+
+- **Failure**: after creation but before the applied journal write, recovery accepted equal-content
+  replacements because a missing identity counted as a match. Separately, root-created `0700`
+  parents made a service-owned secret inaccessible to that service account.
+- **Rule**: never infer a created file's identity from its content. Preserve evidence when the
+  applied identity was not persisted. For another non-root owner, require pre-created parents with
+  applicable Unix search permission before decryption; leave shared directory permissions alone.
+- **Coverage**: `missing_applied_identity_blocks_creation_and_update_recovery`,
+  `service_owner_missing_parents_fail_before_decryption_or_writes`, and
+  `service_owner_requires_traversable_existing_parents` cover the journal failure window, early
+  rejection and parent traversal in `cli/src/apps/secret_files/tests.rs`.
+
 ## 2026-10-31 — Broker request paths belong to the peer's platform
 
 - **Symptom**: Windows CI rejected POSIX file-release workspaces as non-absolute paths, breaking

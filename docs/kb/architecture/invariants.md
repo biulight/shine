@@ -1252,6 +1252,9 @@ bugs. Check this list before changing the modules named in each entry.
   unowned targets, private initial creation and HMAC-backed ownership. A missing fingerprint key,
   occupied rollback path, changed receipt or replacement must preserve evidence. Secret recovery
   is explicit through `app recover`; source/permission changes invalidate review. See ADR 0158.
+  A missing durable applied identity blocks recovery that would delete a present created target.
+  Different non-root owners require pre-existing searchable parents before decryption; do not
+  automatically change parent ownership or permissions.
 - **File broker authorization is separate from environment release.** Bind complete mappings,
   ciphertext versions, remote targets, operation and App snapshot/permissions in a local v2
   policy. Only a subset of its explicit release list may be requested. Preserve v4 frame/chunk

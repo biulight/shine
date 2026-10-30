@@ -34,6 +34,14 @@ cleanup or restores the preimage and its original permissions; replacements and 
 recovery, not category-wide atomicity or secure erasure. Hostile final-interval filesystem races
 remain outside the portable guarantee.
 
+An existing destination without a durable applied identity cannot be identified by equal content
+alone. Recovery blocks in that case, retaining the target, rollback and receipts for inspection.
+For a different non-root Unix owner, parent directories must already exist and grant search access
+through the applicable owner/group/other mode bits for the requested UID/GID. Check before
+decryption and again before creation; supplementary groups and ACL-only grants are not inferred.
+Do not automatically chown or widen shared parents. Same-user installs retain private directory
+creation; root-owned files need no additional traversal grant.
+
 ## SSH boundary
 
 Protocol v4 adds file-status discovery and bounded, nonce/index/offset/length-associated chunks.
