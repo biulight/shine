@@ -21,6 +21,8 @@ pub struct SourceSnapshot {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicyStore {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_policies: Vec<crate::ssh::file_broker::FilePolicy>,
     #[serde(default = "policy_version")]
     pub version: u32,
     #[serde(default, rename = "policy")]
@@ -31,6 +33,7 @@ impl Default for PolicyStore {
     fn default() -> Self {
         Self {
             version: POLICY_VERSION,
+            file_policies: Vec::new(),
             policies: Vec::new(),
         }
     }

@@ -64,12 +64,26 @@ pub(super) async fn dispatch(config: &Config, command: EnvCommands) -> Result<()
         },
         EnvCommands::Broker(cmd) => match cmd.command {
             EnvBrokerSubcommand::Describe {
+                file_groups,
+                app,
+                operation,
                 workspace,
                 mode,
                 release,
                 release_all_declared,
                 command,
             } => {
+                if !file_groups.is_empty() {
+                    return crate::ssh::file_broker::describe(
+                        config,
+                        workspace.as_deref(),
+                        &mode,
+                        &file_groups,
+                        app.as_deref(),
+                        operation.as_deref(),
+                    )
+                    .await;
+                }
                 env::broker::handle_describe(
                     workspace.as_deref(),
                     &mode,
@@ -81,6 +95,9 @@ pub(super) async fn dispatch(config: &Config, command: EnvCommands) -> Result<()
             }
             EnvBrokerSubcommand::Policy(cmd) => match cmd.command {
                 EnvBrokerPolicySubcommand::Add(input) => {
+                    if !input.file_groups.is_empty() {
+                        return crate::ssh::file_broker::save_policy(config, &input, false).await;
+                    }
                     env::broker::handle_policy_add(
                         config,
                         &input.name,
@@ -96,6 +113,9 @@ pub(super) async fn dispatch(config: &Config, command: EnvCommands) -> Result<()
                     .await
                 }
                 EnvBrokerPolicySubcommand::Update(input) => {
+                    if !input.file_groups.is_empty() {
+                        return crate::ssh::file_broker::save_policy(config, &input, true).await;
+                    }
                     env::broker::handle_policy_update(
                         config,
                         &input.name,
@@ -111,6 +131,9 @@ pub(super) async fn dispatch(config: &Config, command: EnvCommands) -> Result<()
                     .await
                 }
                 EnvBrokerPolicySubcommand::Diff {
+                    file_groups,
+                    app,
+                    operation,
                     name,
                     workspace,
                     mode,
@@ -118,6 +141,18 @@ pub(super) async fn dispatch(config: &Config, command: EnvCommands) -> Result<()
                     release_all_declared,
                     command,
                 } => {
+                    if !file_groups.is_empty() {
+                        return crate::ssh::file_broker::diff_policy(
+                            config,
+                            &name,
+                            &workspace,
+                            &mode,
+                            &file_groups,
+                            app.as_deref(),
+                            operation.as_deref(),
+                        )
+                        .await;
+                    }
                     env::broker::handle_policy_diff(
                         config,
                         &name,

@@ -32,6 +32,7 @@ mod process_scope;
 mod profile;
 mod review_path;
 mod schema;
+pub mod secret_files;
 mod shell;
 mod shell_action_executor;
 mod shell_launch;
@@ -249,6 +250,8 @@ pub struct CoreRuntime<H> {
     pub(crate) analysis: CodeAnalysisSession,
     analysis_source: std::sync::OnceLock<crate::plan::SnapshotDigestV1>,
     pub(crate) operation_code_grants: Vec<crate::trust::TrustGrantV1>,
+    secret_changes: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    secret_provider: Option<std::sync::Arc<dyn secret_files::SecretFileProvider>>,
     host: H,
     context: RuntimeContext,
     presets: std::sync::Arc<PresetSnapshot>,
@@ -258,12 +261,22 @@ impl<H> CoreRuntime<H> {
     pub fn new(host: H, context: RuntimeContext, presets: PresetSnapshot) -> Self {
         Self {
             operation_code_grants: Vec::new(),
+            secret_provider: None,
+            secret_changes: std::sync::Mutex::new(Default::default()),
             analysis: CodeAnalysisSession::default(),
             analysis_source: std::sync::OnceLock::new(),
             host,
             context,
             presets: std::sync::Arc::new(presets),
         }
+    }
+
+    pub fn with_secret_file_provider(
+        mut self,
+        provider: std::sync::Arc<dyn secret_files::SecretFileProvider>,
+    ) -> Self {
+        self.secret_provider = Some(provider);
+        self
     }
 
     pub fn context(&self) -> &RuntimeContext {

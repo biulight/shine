@@ -612,9 +612,9 @@ mod manifest_reader_tests {
             let loaded = load_app_manifest_receipts(&host, root).await;
             assert_eq!(host.operations(), vec![HostOperation::Read(path.clone())]);
             match input {
-                Some("schema_version = 2\n") => assert_eq!(
+                Some("schema_version = 3\n") => assert_eq!(
                     loaded.unwrap_err().to_string(),
-                    "app manifest schema version 2 is newer than this Shine supports (1)"
+                    "app manifest schema version 3 is newer than this Shine supports (2)"
                 ),
                 Some("schema_version = -1\n" | "[") => {
                     let error = loaded.unwrap_err();
@@ -625,7 +625,10 @@ mod manifest_reader_tests {
                 _ => {
                     let (manifest, raw) = loaded.unwrap();
                     assert_eq!(raw.as_deref(), input.map(str::as_bytes));
-                    assert_eq!(manifest.schema_version, 1);
+                    assert_eq!(
+                        manifest.schema_version,
+                        crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION
+                    );
                     let parsed: AppManifest = toml::from_str(input.unwrap_or("")).unwrap();
                     assert_eq!(manifest.entries, parsed.entries);
                 }

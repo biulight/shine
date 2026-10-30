@@ -71,6 +71,9 @@ pub enum EnvWorkspaceExportFormat {
 
 #[derive(Args, Debug)]
 pub struct EnvWorkspaceExportCommand {
+    /// Request file decryption through the local SSH broker
+    #[arg(long, requires = "file_groups")]
+    pub secret_broker: bool,
     /// Export format
     #[arg(
         long,
@@ -143,6 +146,14 @@ pub struct EnvBrokerCommand {
 pub enum EnvBrokerSubcommand {
     /// Describe a workspace request without decrypting or running its command
     Describe {
+        /// Describe a file-group release instead of environment variables
+        #[arg(long = "file-group", conflicts_with_all = ["release", "release_all_declared"])]
+        file_groups: Vec<String>,
+        /// App category whose declared secret installation is being described
+        #[arg(long, requires = "file_groups")]
+        app: Option<String>,
+        #[arg(long, value_parser = ["install", "upgrade", "export"], requires = "file_groups")]
+        operation: Option<String>,
         #[arg(long, value_name = "FILE")]
         workspace: Option<PathBuf>,
         #[arg(long)]
@@ -150,14 +161,18 @@ pub enum EnvBrokerSubcommand {
         #[arg(
             long,
             value_name = "KEY",
-            required_unless_present = "release_all_declared",
+            required_unless_present_any = ["release_all_declared", "file_groups"],
             conflicts_with = "release_all_declared"
         )]
         release: Vec<String>,
         /// Release every secret declared by the selected source snapshot
         #[arg(long)]
         release_all_declared: bool,
-        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        #[arg(
+            required_unless_present = "file_groups",
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
         command: Vec<String>,
     },
     /// Manage local SSH secret-broker authorization policies
@@ -172,6 +187,16 @@ pub struct EnvBrokerPolicyCommand {
 
 #[derive(Args, Debug)]
 pub struct EnvBrokerPolicyInput {
+    #[arg(long = "file-group", conflicts_with_all = ["release", "release_all_declared"])]
+    pub file_groups: Vec<String>,
+    #[arg(long, requires = "file_groups")]
+    pub app: Option<String>,
+    #[arg(long, value_parser = ["install", "upgrade", "export"], requires = "file_groups")]
+    pub operation: Option<String>,
+    /// Explicitly permit upgrading the local broker policy store to version 2
+    #[arg(long, requires = "file_groups")]
+    pub migrate_file_policy: bool,
+
     #[arg(long)]
     pub name: String,
     #[arg(long)]
@@ -188,14 +213,18 @@ pub struct EnvBrokerPolicyInput {
     #[arg(
         long,
         value_name = "KEY",
-        required_unless_present = "release_all_declared",
+        required_unless_present_any = ["release_all_declared", "file_groups"],
         conflicts_with = "release_all_declared"
     )]
     pub release: Vec<String>,
     /// Release every secret declared by the selected source snapshot
     #[arg(long)]
     pub release_all_declared: bool,
-    #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(
+        required_unless_present = "file_groups",
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
     pub command: Vec<String>,
 }
 
@@ -207,6 +236,12 @@ pub enum EnvBrokerPolicySubcommand {
     Update(EnvBrokerPolicyInput),
     /// Show whether a trusted local workspace still matches a policy
     Diff {
+        #[arg(long = "file-group", conflicts_with_all = ["release", "release_all_declared"])]
+        file_groups: Vec<String>,
+        #[arg(long, requires = "file_groups")]
+        app: Option<String>,
+        #[arg(long, value_parser = ["install", "upgrade", "export"], requires = "file_groups")]
+        operation: Option<String>,
         name: String,
         #[arg(long, value_name = "FILE")]
         workspace: PathBuf,
@@ -215,14 +250,18 @@ pub enum EnvBrokerPolicySubcommand {
         #[arg(
             long,
             value_name = "KEY",
-            required_unless_present = "release_all_declared",
+            required_unless_present_any = ["release_all_declared", "file_groups"],
             conflicts_with = "release_all_declared"
         )]
         release: Vec<String>,
         /// Release every secret declared by the selected source snapshot
         #[arg(long)]
         release_all_declared: bool,
-        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        #[arg(
+            required_unless_present = "file_groups",
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
         command: Vec<String>,
     },
     /// List configured policies

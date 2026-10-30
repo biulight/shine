@@ -891,6 +891,7 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         let category = AppCategory {
+            secret_files: Vec::new(),
             name: "ghostty".to_string(),
             description: Some("Ghostty terminal configuration.".to_string()),
             destination_root: Some(dir.join(".config/ghostty").display().to_string()),
@@ -971,6 +972,7 @@ mod tests {
             .unwrap();
 
         let category = AppCategory {
+            secret_files: Vec::new(),
             name: "sample".to_string(),
             description: None,
             destination_root: Some(dir.join(".config/sample").display().to_string()),

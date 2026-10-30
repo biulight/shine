@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const MANIFEST_FILE: &str = "app-manifest.toml";
-pub const APP_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const APP_MANIFEST_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AppManifest {
@@ -74,7 +74,7 @@ impl AppManifest {
     /// Normalize supported read-time schemas without writing or changing receipts.
     pub(crate) fn normalize_schema_version(&mut self) -> Result<()> {
         match self.schema_version {
-            0 => self.schema_version = APP_MANIFEST_SCHEMA_VERSION,
+            0 | 1 => self.schema_version = APP_MANIFEST_SCHEMA_VERSION,
             APP_MANIFEST_SCHEMA_VERSION => {}
             version => bail!(
                 "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
@@ -155,7 +155,7 @@ content_hash = 8
     ),
     Some("schema_version = 0\n"),
     Some("schema_version = 1\n"),
-    Some("schema_version = 2\n"),
+    Some("schema_version = 3\n"),
     Some("schema_version = -1\n"),
     Some("["),
 ];
@@ -183,9 +183,9 @@ mod tests {
             }
             let direct = AppManifest::load(&host, root).await;
             match input {
-                Some("schema_version = 2\n") => assert_eq!(
+                Some("schema_version = 3\n") => assert_eq!(
                     direct.unwrap_err().to_string(),
-                    "app manifest schema version 2 is newer than this Shine supports (1)"
+                    "app manifest schema version 3 is newer than this Shine supports (2)"
                 ),
                 Some("schema_version = -1\n" | "[") => assert_eq!(
                     direct.unwrap_err().to_string(),
@@ -195,7 +195,7 @@ mod tests {
                 ),
                 _ => {
                     let manifest = direct.unwrap();
-                    assert_eq!(manifest.schema_version, 1);
+                    assert_eq!(manifest.schema_version, APP_MANIFEST_SCHEMA_VERSION);
                     let parsed: AppManifest = toml::from_str(input.unwrap_or("")).unwrap();
                     assert_eq!(manifest.entries, parsed.entries);
                 }
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_unversioned_manifest_normalizes_and_writes_version_one() {
+    async fn legacy_unversioned_manifest_normalizes_and_writes_current_version() {
         let dir = make_temp_dir().await;
         fs::write(
             dir.join(MANIFEST_FILE),
@@ -294,14 +294,14 @@ content_hash = 7
             .unwrap();
 
         let written = fs::read_to_string(dir.join(MANIFEST_FILE)).await.unwrap();
-        assert!(written.contains("schema_version = 1"));
+        assert!(written.contains("schema_version = 2"));
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn future_manifest_version_fails_before_use() {
         let dir = make_temp_dir().await;
-        fs::write(dir.join(MANIFEST_FILE), "schema_version = 2\n")
+        fs::write(dir.join(MANIFEST_FILE), "schema_version = 3\n")
             .await
             .unwrap();
 

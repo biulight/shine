@@ -475,3 +475,90 @@ async fn confirmation_guard_covers_real_decryption_success_failure_and_cancellat
     assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 4);
     tokio::fs::remove_dir_all(root).await.unwrap();
 }
+
+fn file_request() -> super::super::file_broker::FileReleaseRequest {
+    super::super::file_broker::FileReleaseRequest {
+        operation: "export".into(),
+        workspace_path: "/srv/app/shine.workspace.toml".into(),
+        workspace_contents:
+            "version=3\n[env]\ndefault_mode='production'\n[[file_groups.keys.files]]\nsource='key.enc'\ntarget='private/key'\n"
+                .into(),
+        mode: "production".into(),
+        groups: vec!["keys".into()],
+        release: vec!["key.enc".into()],
+        ciphertexts: std::collections::BTreeMap::from([("key.enc".into(), "opaque".into())]),
+        permissions: Default::default(),
+        app: None,
+    }
+}
+
+#[tokio::test]
+async fn file_release_requires_separate_policy_and_rejection_consumes_nonce() {
+    let root = crate::test_support::make_temp_dir("file-broker-authorization").await;
+    let (mut session, interaction) = test_session(&root, BrokerMode::Serve, false).await;
+    let request = file_request();
+    let error = session
+        .handle_files(&request, false, "no-file-policy-0001")
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("matching local file policy"));
+    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 0);
+    Arc::get_mut(&mut session)
+        .unwrap()
+        .policies
+        .file_policies
+        .push(super::super::file_broker::FilePolicy {
+            name: "keys".into(),
+            ssh_target: "dev".into(),
+            descriptor: super::super::file_broker::descriptor(&request).unwrap(),
+        });
+    interaction.reject.store(true, Ordering::SeqCst);
+    let error = session
+        .handle_files(&request, false, "file-rejected-0001")
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "test confirmation rejected");
+    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
+    let error = session
+        .handle_files(&request, false, "file-rejected-0001")
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("already been used"));
+    Arc::get_mut(&mut session).unwrap().trust_remote_session = true;
+    let mut changed = request;
+    changed.workspace_path = "/other/shine.workspace.toml".into();
+    assert!(
+        session
+            .handle_files(&changed, false, "file-tampered-0001")
+            .await
+            .is_err()
+    );
+    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
+    tokio::fs::remove_dir_all(root).await.unwrap();
+}
+
+#[tokio::test]
+async fn file_inspection_never_releases_plaintext() {
+    let root = crate::test_support::make_temp_dir("file-broker-inspect").await;
+    let (session, interaction) = test_session(&root, BrokerMode::Inspect, false).await;
+    let request = file_request();
+    assert!(matches!(
+        session
+            .handle_files(&request, true, "file-inspect-0001")
+            .await
+            .unwrap(),
+        FileResult::Description(_)
+    ));
+    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 0);
+    assert!(
+        session
+            .handle_files(&request, false, "file-inspect-0002")
+            .await
+            .is_err()
+    );
+    assert!(!interaction.displays.lock().unwrap()[0].contains("opaque"));
+    tokio::fs::remove_dir_all(root).await.unwrap();
+}

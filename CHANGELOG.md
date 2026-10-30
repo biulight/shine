@@ -5,6 +5,22 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [Unreleased]
+
+### Features
+
+- Add App metadata v3 secret-file declarations with optional automatic decryption, equal-content
+  adoption, protected ownership checks, explicit replacement and interrupted-operation recovery.
+- Add policy-bound SSH file release with local GPG/age authorization, bounded binary transport,
+  and `env workspace export --format files --secret-broker`.
+
+### Compatibility
+
+- SSH peers must both support protocol v4. File policies require explicit migration to policy
+  format v2; existing environment policies remain readable. App writes use manifest v2, which
+  older clients reject. Plan/approval/review schema v4 requires fresh review. Upgrade clients
+  before installing metadata v3 presets.
+
 ## [2.7.2] — 2026-10-29
 
 ### Bug Fixes

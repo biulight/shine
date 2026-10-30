@@ -1,7 +1,7 @@
 //! Pure policy validation, exact request matching and enrollment review.
 use super::model::{
-    BrokerAllow, BrokerPolicy, BrokerSource, MatchedPolicy, POLICY_VERSION, PolicyStore,
-    RemoteEnrollmentPlan, WorkspaceSnapshot,
+    BrokerAllow, BrokerPolicy, BrokerSource, MatchedPolicy, PolicyStore, RemoteEnrollmentPlan,
+    WorkspaceSnapshot,
 };
 use crate::env::{RESERVED_REMOTE_ENV, workspace};
 use anyhow::{Context, Result, bail};
@@ -9,12 +9,13 @@ pub use shine_core::digest::sha256_hex as sha256;
 use std::{collections::BTreeSet, path::Path};
 
 pub(super) fn validate_store(store: &PolicyStore) -> Result<()> {
-    if store.version != POLICY_VERSION {
+    if !matches!(store.version, 1 | 2) {
         bail!(
             "unsupported SSH secret broker policy version {}",
             store.version
         );
     }
+    ensure_file_policies(store)?;
     let mut names = BTreeSet::new();
     let mut selectors = BTreeSet::new();
     for policy in &store.policies {
@@ -394,4 +395,26 @@ pub fn plan_remote_enrollment(
         candidate: policy,
         previous: None,
     })
+}
+
+fn ensure_file_policies(store: &PolicyStore) -> Result<()> {
+    if store.version == 1 && !store.file_policies.is_empty() {
+        bail!("file policies require explicit policy version 2 migration");
+    }
+    let mut names = BTreeSet::new();
+    let mut selectors = BTreeSet::new();
+    for p in &store.file_policies {
+        validate_name(&p.name, "file policy name")?;
+        validate_wire_string(&p.ssh_target, "SSH target")?;
+        if !names.insert(&p.name) || store.policies.iter().any(|e| e.name == p.name) {
+            bail!("duplicate policy name");
+        }
+        if !selectors.insert((&p.ssh_target, &p.descriptor)) {
+            bail!("duplicate exact file policy selector");
+        }
+        if p.descriptor.is_empty() || p.descriptor.len() > 2 * 1024 * 1024 {
+            bail!("invalid file policy descriptor");
+        }
+    }
+    Ok(())
 }

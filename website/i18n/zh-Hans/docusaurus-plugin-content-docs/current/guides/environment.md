@@ -796,8 +796,9 @@ shine env workspace export --format files --mode production --file-group android
 剩余受管子进程会被终止。
 
 `--dry-run` 只检查配置和元数据，不读取明文、不解密、不写文件、不启动命令，也无法验证密文
-完整性或私钥可用性。`--file-group` 分别与 `seal <FILE>`、`--no-workspace` 和
-`--secret-broker` 互斥。普通 `seal` 和 `env run` 不会隐式选择文件组。
+完整性或私钥可用性。`--file-group` 与 `seal <FILE>` 互斥；在 `env run` 中还与
+`--no-workspace`、`--secret-broker` 互斥。持久文件导出支持 `--secret-broker`。
+普通 `seal` 和 `env run` 不会隐式选择文件组。
 
 路径必须位于 workspace 内；拒绝绝对路径、父目录穿越、符号链接／重解析点、硬链接和映射重叠。
 映射不能与 workspace 定义文件重叠，包括仅大小写或 Unicode 规范化形式不同的名称。各平台均保守拒绝这些路径别名。
@@ -807,3 +808,11 @@ shine env workspace export --format files --mode production --file-group android
 子命令及拥有相应本机权限的其他进程可以读取临时明文。强制杀死 Shine 或断电可能留下文件：
 重试前应人工检查已有目标。删除文件不代表安全擦除。构建不会自动把改动后的目标重新加密回仓库。
 删除收件人也无法撤销其对 Git 历史密文的访问能力。
+
+### 通过 SSH broker 导出
+
+为 `env workspace export --format files` 添加 `--secret-broker`，即可在启用了
+`shine ssh --secret-broker` 的会话中请求本机授权和解密。该选项要求明确选择文件组，
+并匹配文件策略，不适用于 dotenv 导出。未指定时，手动导出仍使用执行机器的后端。
+参见 [SSH 文件授权](ssh-transfer.md#file-secret-broker)和
+[App 自动秘密文件安装](app-presets.md#managed-secret-files)。

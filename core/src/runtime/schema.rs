@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub const PRESET_SCHEMA_REFERENCE_VERSION: u32 = 4;
+pub const PRESET_SCHEMA_REFERENCE_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PresetSchemaReferenceV2 {
@@ -21,6 +21,10 @@ pub struct PresetSchemaReferenceV2 {
 
 pub fn preset_schema_reference_v2() -> PresetSchemaReferenceV2 {
     let mut schemas = BTreeMap::new();
+    insert::<super::secret_files::SecretFileDeclaration>(
+        &mut schemas,
+        "app-secret-file-declaration-v3",
+    );
     insert::<PresetValidationReportV1>(&mut schemas, "preset-validation-report-v1");
     insert::<PresetLintReportV1>(&mut schemas, "preset-lint-report-v2");
     insert::<PresetMigrationReportV1>(&mut schemas, "preset-migration-report-v1");
@@ -58,7 +62,7 @@ mod tests {
         let second = serde_json::to_vec(&preset_schema_reference_v2()).unwrap();
         assert_eq!(first, second);
         let encoded = String::from_utf8(first).unwrap();
-        assert_eq!(preset_schema_reference_v2().schema_version, 4);
+        assert_eq!(preset_schema_reference_v2().schema_version, 5);
         for name in [
             "preset-validation-report-v1",
             "preset-lint-report-v2",

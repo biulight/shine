@@ -116,7 +116,7 @@ URL 凭据写入能力声明。源码位置采用从 1 开始的行号和 UTF-8 
 fixture 报告使用 schema 2。Fixture 输入仍为 schema 1；可用 `expect.analysis_diagnostic_codes`
 配合 `ready` 断言诊断。正确预期阻断的用例可以通过，但取消或命令累计预算耗尽不能成为成功的负向
 测试。`complete = false` 表示作者报告未完成，fixture 报告还会列出 `unfinished_cases`。
-生命周期 Plan／批准／审阅契约使用 schema 3；应重新审阅，不能复用旧批准。
+生命周期 Plan／批准／审阅契约使用 schema 4；应重新审阅，不能复用旧批准。
 
 ## 迁移 1.x 来源
 

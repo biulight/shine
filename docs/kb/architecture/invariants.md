@@ -1246,6 +1246,18 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **App secret plaintext is a distinct managed resource.** Metadata v3 references workspace
+  file groups; ordinary generators, transforms, caches, diffs and persistent backups must never
+  receive decrypted bytes. Require exact approved selection, equal-content-only adoption of
+  unowned targets, private initial creation and HMAC-backed ownership. A missing fingerprint key,
+  occupied rollback path, changed receipt or replacement must preserve evidence. Secret recovery
+  is explicit through `app recover`; source/permission changes invalidate review. See ADR 0158.
+- **File broker authorization is separate from environment release.** Bind complete mappings,
+  ciphertext versions, remote targets, operation and App snapshot/permissions in a local v2
+  policy. Only a subset of its explicit release list may be requested. Preserve v4 frame/chunk
+  limits, nonce checks, whole-response-before-write, cancellation and sensitive-buffer wiping.
+  Neither session discovery nor fallback may authorize release after a broker rejection.
+
 - **Owned workspace plaintext follows scope lifetime.** Compiled and explicit environment maps
   wipe values on replacement and drop; consuming iteration retains the guard for unconsumed
   entries. Dotenv serialization and decrypted cache buffers use zeroizing owners, including error

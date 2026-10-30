@@ -383,7 +383,7 @@ fn plan_app(
         .get("metadata_schema_version")
         .and_then(toml::Value::as_integer)
         .unwrap_or(1);
-    if version > 2 {
+    if version > 3 {
         diagnostics.push(diagnostic(
             PresetMigrationSeverityV1::Blocker,
             "unsupported_app_metadata_schema",

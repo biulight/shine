@@ -2,7 +2,7 @@
 mod commands;
 mod model;
 mod policy;
-mod store;
+pub(crate) mod store;
 
 pub use commands::{
     handle_describe, handle_policy_add, handle_policy_diff, handle_policy_info, handle_policy_list,

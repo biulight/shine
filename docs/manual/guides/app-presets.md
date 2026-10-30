@@ -404,3 +404,68 @@ Hooks hide stdout by default. When a preset sets `show_output = true`, successfu
 during installation and refresh; `shine upgrade` reserves successful hook completion and output for
 `--verbose`. A hook failure or permission block is always shown and does not interrupt installation
 or upgrades for other categories.
+
+## Managed secret files {#managed-secret-files}
+
+App metadata version 3 can install encrypted workspace files and manage their decrypted targets.
+Keep plaintext out of the preset repository. Use the existing workspace version 3 `file_groups`
+mappings and encryption policy; identities remain on the decrypting machine.
+
+```toml
+metadata_schema_version = 3
+
+[dest]
+linux = "/srv/example-service"
+
+[[files]]
+source = "compose.yml"
+
+[[secret_files]]
+workspace = "shine.workspace.toml"
+file_group = "credentials"
+mode = "production"
+auto_decrypt = true
+unix_uid = 1000
+unix_gid = 1000
+unix_mode = "0400"
+```
+
+`workspace` is relative to the category. Its selected ciphertext files and the workspace definition
+are installed with the same relative layout; do not duplicate them in `[[files]]`. Plaintext targets
+come from the workspace mappings and must not overlap other managed resources. Secret files do not
+support generators, transforms, JSON merge, or automatic destination relocation.
+
+`auto_decrypt` defaults to `false`. When enabled, install and upgrade decrypt required files after
+Plan approval and before modifying the category's destination files. Inside an enabled SSH broker
+session, decryption and hardware authorization run on the local computer. Otherwise they use the
+installing machine's configured backend. Broker failure never falls back to another backend.
+See [SSH file authorization](ssh-transfer.md#file-secret-broker).
+
+Unix defaults are the installing user's ownership and `0600`; optional numeric `unix_uid`,
+`unix_gid`, and `unix_mode` (`0400` or `0600`) select the service account's access. Run installation
+as an account allowed to create the destination and set that ownership. Windows uses private
+current-user ACLs and rejects Unix permission fields. Review permissions before installing.
+
+An existing unowned target is adopted only when its content exactly matches the decrypted file.
+Different content is a conflict, including with `--replace-managed`; no plaintext `.shine.bak`
+is created. Later local edits are preserved unless explicitly replaced. Unchanged files skip
+decryption. Read-only commands and diffs show status without decrypting or displaying content.
+
+Uninstall removes unchanged managed secret files and preserves local edits. Turning automatic
+decryption off pauses creation and updates but retains existing ownership. Removing a declaration
+requires `upgrade --prune-stale` to remove an unchanged old target. Destination moves require
+explicitly handling the old installation first. Interrupted writes retain protected recovery state;
+review `shine app recover` before retrying. Do not delete Shine's private secret state or fingerprint
+key, which are required for ownership checks and recovery.
+
+With automatic decryption disabled, use `shine env workspace export --format files` from the
+installed workspace, selecting its mode and file group. Manual export refuses existing files,
+does not create App ownership, and uses its own private permission defaults. Explicitly set service
+read permissions before starting a container. A later automatic install can adopt identical content.
+
+Containers still need runtime plaintext. Configuration installation does not start or restart them;
+explicitly recreate containers whose file bind mounts must pick up a replaced password file, and
+stop dependent services before uninstalling their required configuration.
+
+Upgrade both SSH peers before using these presets. Older clients reject App metadata v3 and the
+new App manifest format rather than treating ciphertext as an ordinary password file.

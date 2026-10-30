@@ -16,8 +16,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let (categories, manifest) = self.app_inspection_inputs(selected).await?;
         let assessments =
             self.assess_app_files_static(&categories, StaticAssessmentMode::Inspect)?;
-        self.observe_app_inspections(assessments, &manifest, AppInspectionMode::Deferred)
-            .await
+        let mut result = self
+            .observe_app_inspections(assessments, &manifest, AppInspectionMode::Deferred)
+            .await?;
+        result.extend(self.inspect_secret_files(&categories)?);
+        Ok(result)
     }
     /// Receipt-owned resources absent from the effective App metadata. No code is evaluated.
     pub(crate) async fn missing_app_sources(&self) -> Result<Vec<(String, String)>> {
@@ -137,8 +140,11 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 observer,
             )
             .await?;
-        self.observe_app_inspections(assessments, &manifest, AppInspectionMode::Evaluated)
-            .await
+        let mut result = self
+            .observe_app_inspections(assessments, &manifest, AppInspectionMode::Evaluated)
+            .await?;
+        result.extend(self.inspect_secret_files(&categories)?);
+        Ok(result)
     }
 }
 

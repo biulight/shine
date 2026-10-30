@@ -412,7 +412,7 @@ mod manifest_reader_tests {
                 };
                 assert_eq!(host.operations(), vec![HostOperation::Read(path.clone())]);
                 match input {
-                    Some("schema_version = 2\n") => assert_eq!(
+                    Some("schema_version = 2\n") if domain == "sys" => assert_eq!(
                         loaded.unwrap_err().to_string(),
                         format!(
                             "{domain} manifest schema version 2 is newer than this Shine supports (1)"
@@ -428,7 +428,7 @@ mod manifest_reader_tests {
                     }
                     _ => {
                         let (version, entries, bytes) = loaded.unwrap();
-                        assert_eq!(version, 1);
+                        assert_eq!(version, if domain == "app" { 2 } else { 1 });
                         assert_eq!(bytes.as_deref(), input.map(str::as_bytes));
                         let expected_entries = if domain == "app" {
                             serde_json::to_value(

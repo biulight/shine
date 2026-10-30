@@ -35,6 +35,7 @@ mod agent;
 mod broker;
 // Drives the real agent over an in-process Unix socket pair, so it is
 // unix-only (Windows is the local side only and has no `UnixListener`).
+pub(crate) mod file_broker;
 #[cfg(all(test, unix))]
 mod integration_tests;
 mod protocol;

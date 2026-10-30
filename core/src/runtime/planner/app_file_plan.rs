@@ -34,6 +34,21 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         permissions: &mut PermissionAccumulator,
         steps: &mut Vec<PlanStepV1>,
     ) -> Result<bool> {
+        let destination = self.app_destination(inputs.category, file)?;
+        if self.secret_store()?.entries.iter().any(|e| {
+            super::super::secret_files::path_key(&e.target)
+                == super::super::secret_files::path_key(&destination)
+        }) {
+            steps.push(
+                PlanStepV1::new(
+                    format!("app/{}", inputs.category.name),
+                    Some(file.source_rel.display().to_string()),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code("app_secret_owned_target"),
+            );
+            return Ok(false);
+        }
         let observed = match self.observe_app_file(file, &inputs, state).await? {
             AppFileAssessment::Stop { action, diagnostic } => {
                 steps.push(

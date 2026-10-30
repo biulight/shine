@@ -15,7 +15,23 @@ where
         if !request.dry_run {
             bail!("App install mutation requires snapshot-bound approval");
         }
-        self.install_apps(request, observer, interaction).await
+        let plan = self
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: request.target.clone(),
+                force: request.force,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await?;
+        let rows = self.secret_report_rows(&plan, true)?;
+        let mut report = self.install_apps(request, observer, interaction).await?;
+        for row in &rows {
+            report.lifecycle.push(self.secret_report_outcome(row));
+        }
+        report.files.extend(rows);
+        Ok(report)
     }
 }
 
@@ -32,7 +48,23 @@ where
         if !request.dry_run {
             bail!("App uninstall mutation requires snapshot-bound approval");
         }
-        self.uninstall_apps(request, observer, interaction).await
+        let plan = self
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                target: request.target.clone(),
+                force: request.force,
+                purge: request.purge,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await?;
+        let rows = self.secret_report_rows(&plan, true)?;
+        let mut report = self.uninstall_apps(request, observer, interaction).await?;
+        for row in &rows {
+            report.lifecycle.push(self.secret_report_outcome(row));
+        }
+        report.files.extend(rows);
+        Ok(report)
     }
 }
 
@@ -53,9 +85,43 @@ where
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         let plan = self.plan_apps_prepared(request.clone()).await?;
         approval.validate(&plan)?;
+        if plan.steps.iter().any(|s| {
+            s.resource
+                .as_deref()
+                .is_some_and(|r| r.starts_with("secret:"))
+                && matches!(
+                    s.action,
+                    PlanActionV1::Create | PlanActionV1::Update | PlanActionV1::Remove
+                )
+        }) && plan
+            .permissions
+            .required
+            .contains(&PermissionV1::Administrator)
+            && !self.context().running_as_admin
+            && !interaction.authorize_admin(1).await?
+        {
+            bail!("administrator permission was not granted");
+        }
+        let prepared_secrets = self.prepare_secrets(&request, &plan).await?;
+        approval.validate(&self.plan_apps_prepared(request.clone()).await?)?;
         let action_irs = self
             .approved_app_file_action_irs(&request, &plan, approval)
             .await?;
+        // Secret preparation happens before any category destination mutation. Each
+        // secret transaction commits independently and retains durable recovery state.
+        if prepared_secrets.as_ref().is_some_and(|p| p.has_changes()) {
+            let manifest =
+                crate::install::AppManifest::load(self.host(), &self.context().shine_dir).await?;
+            manifest
+                .save(self.host(), &self.context().shine_dir)
+                .await?;
+        }
+        *self
+            .secret_changes
+            .lock()
+            .map_err(|_| anyhow::anyhow!("secret change lock poisoned"))? =
+            self.apply_secrets(prepared_secrets)?;
+
         let result = self
             .install_apps_with_approved_actions(
                 AppLifecycleRequest {
@@ -71,7 +137,14 @@ where
             )
             .await;
         self.check_analysis_command()?;
-        result
+        result.and_then(|mut report| {
+            let rows = self.secret_report_rows(&plan, false)?;
+            for row in &rows {
+                report.lifecycle.push(self.secret_report_outcome(row));
+            }
+            report.files.extend(rows);
+            Ok(report)
+        })
     }
 }
 
@@ -92,9 +165,43 @@ where
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         let plan = self.plan_apps_prepared(request.clone()).await?;
         approval.validate(&plan)?;
+        if plan.steps.iter().any(|s| {
+            s.resource
+                .as_deref()
+                .is_some_and(|r| r.starts_with("secret:"))
+                && matches!(
+                    s.action,
+                    PlanActionV1::Create | PlanActionV1::Update | PlanActionV1::Remove
+                )
+        }) && plan
+            .permissions
+            .required
+            .contains(&PermissionV1::Administrator)
+            && !self.context().running_as_admin
+            && !interaction.authorize_admin(1).await?
+        {
+            bail!("administrator permission was not granted");
+        }
+        let prepared_secrets = self.prepare_secrets(&request, &plan).await?;
+        approval.validate(&self.plan_apps_prepared(request.clone()).await?)?;
         let action_irs = self
             .approved_app_file_action_irs(&request, &plan, approval)
             .await?;
+        // Secret preparation happens before any category destination mutation. Each
+        // secret transaction commits independently and retains durable recovery state.
+        if prepared_secrets.as_ref().is_some_and(|p| p.has_changes()) {
+            let manifest =
+                crate::install::AppManifest::load(self.host(), &self.context().shine_dir).await?;
+            manifest
+                .save(self.host(), &self.context().shine_dir)
+                .await?;
+        }
+        *self
+            .secret_changes
+            .lock()
+            .map_err(|_| anyhow::anyhow!("secret change lock poisoned"))? =
+            self.apply_secrets(prepared_secrets)?;
+
         let result = self
             .uninstall_apps_with_approved_actions(
                 AppUninstallLifecycleRequest {
@@ -111,7 +218,14 @@ where
             )
             .await;
         self.check_analysis_command()?;
-        result
+        result.and_then(|mut report| {
+            let rows = self.secret_report_rows(&plan, false)?;
+            for row in &rows {
+                report.lifecycle.push(self.secret_report_outcome(row));
+            }
+            report.files.extend(rows);
+            Ok(report)
+        })
     }
 }
 
@@ -133,9 +247,43 @@ where
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         let plan = self.plan_apps_prepared(request.clone()).await?;
         approval.validate(&plan)?;
+        if plan.steps.iter().any(|s| {
+            s.resource
+                .as_deref()
+                .is_some_and(|r| r.starts_with("secret:"))
+                && matches!(
+                    s.action,
+                    PlanActionV1::Create | PlanActionV1::Update | PlanActionV1::Remove
+                )
+        }) && plan
+            .permissions
+            .required
+            .contains(&PermissionV1::Administrator)
+            && !self.context().running_as_admin
+            && !interaction.authorize_admin(1).await?
+        {
+            bail!("administrator permission was not granted");
+        }
+        let prepared_secrets = self.prepare_secrets(&request, &plan).await?;
+        approval.validate(&self.plan_apps_prepared(request.clone()).await?)?;
         let action_irs = self
             .approved_app_file_action_irs(&request, &plan, approval)
             .await?;
+        // Secret preparation happens before any category destination mutation. Each
+        // secret transaction commits independently and retains durable recovery state.
+        if prepared_secrets.as_ref().is_some_and(|p| p.has_changes()) {
+            let manifest =
+                crate::install::AppManifest::load(self.host(), &self.context().shine_dir).await?;
+            manifest
+                .save(self.host(), &self.context().shine_dir)
+                .await?;
+        }
+        *self
+            .secret_changes
+            .lock()
+            .map_err(|_| anyhow::anyhow!("secret change lock poisoned"))? =
+            self.apply_secrets(prepared_secrets)?;
+
         let result = self
             .upgrade_apps(
                 AppUpgradeRequest {
@@ -152,7 +300,22 @@ where
             )
             .await;
         self.check_analysis_command()?;
-        result
+        result.and_then(|mut report| {
+            let rows = self.secret_report_rows(&plan, false)?;
+            report.user_modified += rows
+                .iter()
+                .filter(|r| r.action == crate::runtime::AppFileAction::UserModified)
+                .count();
+            report.skipped += rows
+                .iter()
+                .filter(|r| r.action == crate::runtime::AppFileAction::Unchanged)
+                .count();
+            for row in &rows {
+                report.lifecycle.push(self.secret_report_outcome(row));
+            }
+            report.files.extend(rows);
+            Ok(report)
+        })
     }
 }
 

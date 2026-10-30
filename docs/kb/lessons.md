@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-30 — Secret recovery and ownership must retain filesystem identity
+
+- **Risk**: first-create recovery has no rollback file, but must still check the observed applied
+  identity before deleting a failed write. Equal bytes and permissions do not authorize removing a
+  replacement. Ordinary and secret ownership also need the same conservative case/Unicode path key.
+- **Rule**: check applied identity in both first-create and update recovery; compare ownership paths
+  using the workspace alias policy before either resource can adopt a target.
+- **Coverage**: `initial_secret_receipt_failure_recovers_only_the_created_file` and
+  `secret_and_ordinary_ownership_reject_case_alias_takeover` in `cli/src/apps/secret_files/tests.rs`.
+
 ## 2026-10-28 — Git absence diagnostics differ at filesystem boundaries
 
 - **Symptom**: Ubuntu CI failed file-group seal/run/export and rollback tests with

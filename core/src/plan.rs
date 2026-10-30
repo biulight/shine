@@ -13,8 +13,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-pub const PLAN_SCHEMA_VERSION: u32 = 3;
-pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 3;
+pub const PLAN_SCHEMA_VERSION: u32 = 4;
+pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 4;
 
 const SNAPSHOT_HASH_DOMAIN: &[u8] = b"shine.snapshot.v1";
 const PLAN_HASH_DOMAIN: &[u8] = b"shine.plan.v3";
@@ -1033,10 +1033,10 @@ mod tests {
         let plan_json = serde_json::to_string(&plan).unwrap();
         let approval_toml = toml::to_string(&approval).unwrap();
 
-        assert!(plan_json.contains("\"schema_version\":3"));
+        assert!(plan_json.contains("\"schema_version\":4"));
         assert!(plan_json.contains("\"operation\":\"install\""));
         assert!(plan_json.contains("\"action\":\"create\""));
-        assert!(approval_toml.contains("schema_version = 3"));
+        assert!(approval_toml.contains("schema_version = 4"));
         assert!(approval_toml.contains("plan_fingerprint = \""));
         for private in [
             "preset-content",
@@ -1134,7 +1134,7 @@ mod tests {
         );
         assert_eq!(
             ready_plan().fingerprint().unwrap().as_hex(),
-            "61bb5b87b9baec5254721698095297ef402742ffe24ad6199abba1b33652d03a"
+            "22aa80c1db9a7bac47d12e3d86814432ac7be2194abcdfcca480de312078d732"
         );
     }
 }

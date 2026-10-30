@@ -45,7 +45,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 self.plan_app_cache_convergence(request, &category, state, permissions, steps)
                     .await?;
             }
-            let mut category_changes = false;
+            let mut category_changes = steps.iter().any(|s| {
+                s.target == format!("app/{}", category.name)
+                    && s.resource
+                        .as_deref()
+                        .is_some_and(|r| r.starts_with("secret:"))
+                    && matches!(s.action, PlanActionV1::Create | PlanActionV1::Update)
+            });
             for file in &category.files {
                 category_changes |= self
                     .plan_app_file(

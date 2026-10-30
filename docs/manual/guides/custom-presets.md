@@ -134,7 +134,7 @@ author Plan reports schema 3, and fixture reports schema 2. Fixture input schema
 `expect.analysis_diagnostic_codes` can assert diagnostic codes alongside `ready`. A correctly
 expected blocked case can pass, but cancellation or command-wide budget exhaustion cannot become
 a successful negative test. `complete = false` identifies incomplete author reports, and fixture
-reports list `unfinished_cases`. Lifecycle Plan/approval/review contracts use schema 3; obtain a
+reports list `unfinished_cases`. Lifecycle Plan/approval/review contracts use schema 4; obtain a
 new review instead of reusing an older approval.
 
 ## Migrate a 1.x source

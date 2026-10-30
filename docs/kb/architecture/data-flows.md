@@ -4,6 +4,15 @@ End-to-end flows that span multiple modules and are not visible in any single fi
 ownership and the per-command routing table, see [`module-map.md`](module-map.md) — this file only
 records the cross-module sequences and their gotchas.
 
+## Managed App secret files
+
+Effective overlay snapshot → metadata v3/workspace v3 mappings → ordinary auxiliary file plan
+plus distinct secret-resource plan → approval → explicit-needed-file decryption (local provider or
+policy-matched SSH broker) → fresh approval recheck → private per-file journal/rename/create/receipt
+commit → unchanged rollback cleanup. Ordinary lifecycle hooks receive only changed-category
+status. Read-only inspection passes no plaintext into presentation. File export shares release
+requests and crypto but retains exclusive creation and no App receipt. See [ADR 0158](../decisions/0158-managed-app-secret-files-and-file-broker.md).
+
 ## Workspace secret file groups
 
 Version 3 workspace + explicit groups + mode → root-constrained mappings → metadata/Git preflight

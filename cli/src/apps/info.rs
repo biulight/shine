@@ -63,13 +63,14 @@ pub async fn handle_info(
             ))
         );
     }
-    println!("  {}  {}", colors::dim("Files      "), cat.files.len());
+    println!("  {}  {}", colors::dim("Files      "), selected.len());
     println!();
 
-    let col_width = cat
-        .files
+    let col_width = selected
         .iter()
-        .map(|f| console::measure_text_width(&escape_controls(&f.source_rel.display().to_string())))
+        .map(|f| {
+            console::measure_text_width(&escape_controls(&f.file.source_rel.display().to_string()))
+        })
         .max()
         .unwrap_or(0);
 
@@ -86,7 +87,10 @@ pub async fn handle_info(
                     .manifest_entry
                     .as_ref()
                     .is_some_and(|entry| entry.destination == *dest);
-                let status = if directly_installed {
+                let secret_installed = inspection.assessment_diagnostic
+                    == Some("app_secret_content_redacted")
+                    && inspection.status != shine_core::runtime::InspectionFileStatus::NotInstalled;
+                let status = if directly_installed || secret_installed {
                     any_installed = true;
                     match inspection.status {
                         shine_core::runtime::InspectionFileStatus::Partial => {
@@ -267,8 +271,9 @@ pub async fn handle_list_with_presets_note(
 
         let name = escape_controls(&cat.name);
         let name_pad = " ".repeat(name_width.saturating_sub(console::measure_text_width(&name)));
-        let file_count = if cat.files.len() > 1 {
-            format!("  {}", colors::dim(&format!("{} files", cat.files.len())))
+        let count = cat.files.len() + cat.secret_files.len();
+        let file_count = if count > 1 {
+            format!("  {}", colors::dim(&format!("{count} files")))
         } else {
             String::new()
         };

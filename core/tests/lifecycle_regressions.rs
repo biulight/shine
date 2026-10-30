@@ -96,7 +96,7 @@ async fn reinstall_preserves_modified_copy_json_and_generated_files_before_execu
             requires_admin: false,
         };
         let manifest = AppManifest {
-            schema_version: 1,
+            schema_version: 2,
             entries: vec![entry],
         };
         manifest.save(&host, &context.shine_dir).await.unwrap();
@@ -161,7 +161,7 @@ async fn app_install_waits_before_replanning_and_keeps_concurrent_receipts() {
         context.is_external_presets = true;
         let host = InMemoryHost::new();
         let mut manifest = AppManifest {
-            schema_version: 1,
+            schema_version: 2,
             entries: vec![],
         };
         manifest.save(&host, &context.shine_dir).await.unwrap();
@@ -356,7 +356,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', se
     let destination = root.join(".config/demo/generated.txt");
     host.put_file(&destination, b"installed".to_vec());
     let mut manifest = AppManifest {
-        schema_version: 1,
+        schema_version: 2,
         entries: vec![AppEntry {
             source: "app/other/config.txt".into(),
             destination: destination.clone(),

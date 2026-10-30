@@ -312,3 +312,62 @@ shine trust grant app/<CATEGORY> --development
 `merge.yaml`、`rules/` 等 overlay payload 文件仍可保留。
 
 钩子默认不显示 stdout。预设将 `show_output` 设为 `true` 后，安装和 refresh 会显示成功输出；`shine upgrade` 仅在 `--verbose` 下显示成功完成信息和输出。钩子失败或权限拦截始终可见，但不会中断其它类别的安装或升级。
+
+## 受管秘密文件 {#managed-secret-files}
+
+App metadata v3 可以安装 workspace 密文，并持续管理解密后的目标文件。
+明文不得进入预设仓库；继续使用 workspace v3 的 `file_groups` 映射和加密策略，
+解密身份留在执行解密的机器上。
+
+```toml
+metadata_schema_version = 3
+
+[dest]
+linux = "/srv/example-service"
+
+[[files]]
+source = "compose.yml"
+
+[[secret_files]]
+workspace = "shine.workspace.toml"
+file_group = "credentials"
+mode = "production"
+auto_decrypt = true
+unix_uid = 1000
+unix_gid = 1000
+unix_mode = "0400"
+```
+
+`workspace` 相对类别目录解析。选中的密文和 workspace 定义会保持相对布局安装，
+不要再将它们重复写入 `[[files]]`。明文目标来自 workspace 映射，不得与其他受管资源重叠。
+秘密文件不支持 generator、transform、JSON merge 或自动目标目录迁移。
+
+`auto_decrypt` 默认为 `false`。开启后，安装与升级会在 Plan 获批后解密所需文件，
+在解密完成前不修改该类别的目标文件。在启用了 SSH broker 的会话中，本机负责解密及硬件授权；
+否则使用安装机器已配置的后端。broker 失败不会回退到其他后端。
+参见 [SSH 文件授权](ssh-transfer.md#file-secret-broker)。
+
+Unix 默认使用安装用户的所有权和 `0600`。可选的数字 `unix_uid`、`unix_gid`，以及
+`unix_mode`（`0400` 或 `0600`）用于设置服务账号的读取权限。
+请使用有权创建目标并设置该所有权的账号执行安装。Windows 使用当前用户私有 ACL，拒绝 Unix 权限字段。
+安装前应检查权限预览。
+
+已有非受管目标只有在内容与解密结果完全相同时才会被接管。内容不同即冲突，
+`--replace-managed` 也不会覆盖这种文件；不会生成明文 `.shine.bak`。
+后续本地修改默认保留，只有显式替换才会覆盖。未变化的文件跳过解密。
+只读命令和 diff 仅显示状态，不解密、不展示内容。
+
+卸载会移除未修改的受管秘密文件，保留本地修改。关闭自动解密会暂停创建和更新，但保留既有所有权。
+删除声明后，需要通过 `upgrade --prune-stale` 移除未修改的旧目标；目标迁移需要先显式处理旧安装。
+写入中断会保留受保护的恢复状态，重试前应审阅并执行 `shine app recover`。
+不要删除 Shine 的私有秘密文件状态或指纹密钥，它们用于所有权检查和恢复。
+
+关闭自动解密时，可在安装后的 workspace 中执行 `shine env workspace export --format files`，
+明确选择模式和文件组。手动导出拒绝已有文件，不创建 App 所有权，并使用自身的私有权限默认值；
+启动容器前需显式设置服务的读取权限。以后开启自动安装时，可以接管内容相同的文件。
+
+容器运行时仍需明文。配置安装不会启动或重启容器；替换密码文件后，应显式重建需要更新文件挂载的容器。
+卸载必要配置前，应先停止依赖它的服务。
+
+使用这些预设前，先升级 SSH 两端。旧客户端会拒绝 App metadata v3 和新版 App manifest，
+不会把密文当成普通密码文件安装。

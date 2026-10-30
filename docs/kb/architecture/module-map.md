@@ -350,3 +350,13 @@ See [`data-flows.md`](data-flows.md#ssh-environment-forwarding),
 | `presets/sys/windows/` | Windows bootstrap manifest and PowerShell profile fragments |
 
 Authoring rules and verification live in [`../preset-authoring.md`](../preset-authoring.md).
+
+## App secret files and file release
+
+| Path | Responsibility |
+| --- | --- |
+| `core/src/runtime/secret_files.rs` | Declaration/mapping validation and immutable file-release contracts |
+| `core/src/runtime/secret_files/managed.rs` | Secret ownership, preparation, mutation and recovery |
+| `core/src/runtime/planner/app_secrets.rs` | Read-only secret Plan contributions |
+| `cli/src/apps/secret_files.rs` | Native private I/O and local/broker decryption provider |
+| `cli/src/ssh/file_broker.rs` | Bounded file transport, exact file policies and authoring commands |

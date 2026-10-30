@@ -40,6 +40,81 @@ pub(super) async fn handle_connection(
     let request: ClientMessage = protocol::read_message(&mut stream).await?;
     match request {
         ClientMessage::Hello { .. } => bail!("unexpected second Hello message"),
+        ClientMessage::FileBrokerStatus {
+            token: request_token,
+        } => {
+            if request_token != token {
+                return send_error(&mut stream, "invalid session token").await;
+            }
+            protocol::write_message(
+                &mut stream,
+                &ServerMessage::FileBrokerStatus {
+                    enabled: broker.is_some(),
+                },
+            )
+            .await
+        }
+        ClientMessage::FileRelease {
+            token: request_token,
+            nonce,
+            describe,
+            length,
+        } => {
+            if request_token != token {
+                return send_error(&mut stream, "invalid session token").await;
+            }
+            let Some(broker) = broker else {
+                return send_error(&mut stream, "secret broker is not enabled").await;
+            };
+            if length > crate::ssh::file_broker::MAX_REQUEST {
+                return send_error(&mut stream, "file broker request too large").await;
+            }
+            let _transport = broker.file_transport_guard().await;
+            protocol::write_message(&mut stream, &ServerMessage::FileReady).await?;
+            let bytes = tokio::time::timeout(
+                std::time::Duration::from_secs(300),
+                crate::ssh::file_broker::receive_blob(&mut stream, &nonce, 0, length),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("file request transfer timed out"))??;
+            if bytes.len() != length {
+                return send_error(&mut stream, "file broker request length mismatch").await;
+            }
+            let request: crate::ssh::file_broker::FileReleaseRequest =
+                serde_json::from_slice(&bytes)
+                    .map_err(|_| anyhow::anyhow!("invalid file release request"))?;
+            use tokio::io::AsyncReadExt;
+            let mut extra = [0u8; 1];
+            let result = tokio::select! {
+                result = broker.handle_files(&request, describe, &nonce) => result,
+                _ = stream.read(&mut extra) => return send_error(&mut stream, "file broker peer disconnected or sent extra data").await,
+            };
+            match result {
+                Ok(crate::ssh::broker::FileResult::Description(summary)) => {
+                    protocol::write_message(
+                        &mut stream,
+                        &ServerMessage::DescriptionResponse { summary },
+                    )
+                    .await
+                }
+                Ok(crate::ssh::broker::FileResult::Plain(values)) => {
+                    protocol::write_message(&mut stream, &ServerMessage::FileReady).await?;
+                    for (index, bytes) in values.iter().enumerate() {
+                        crate::ssh::file_broker::send_blob(&mut stream, &nonce, index, bytes)
+                            .await?;
+                    }
+                    protocol::write_message(
+                        &mut stream,
+                        &ServerMessage::FileComplete {
+                            count: values.len(),
+                        },
+                    )
+                    .await
+                }
+                Err(error) => send_error(&mut stream, error.to_string()).await,
+            }
+        }
+
         ClientMessage::Transfer {
             token: request_token,
             direction,

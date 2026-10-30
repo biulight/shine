@@ -148,8 +148,15 @@ pub async fn handle_policy_update(
 
 pub async fn handle_policy_list(config: &Config) -> Result<()> {
     let store = load_store(config).await?;
-    if store.policies.is_empty() {
+    if store.policies.is_empty() && store.file_policies.is_empty() {
         println!("No SSH secret broker policies configured.");
+    }
+    for policy in &store.file_policies {
+        println!(
+            "{}: {} (files)",
+            policy.name,
+            escape_controls(&policy.ssh_target)
+        );
     }
     for policy in store.policies {
         println!(
@@ -164,6 +171,10 @@ pub async fn handle_policy_list(config: &Config) -> Result<()> {
 
 pub async fn handle_policy_info(config: &Config, name: &str) -> Result<()> {
     let store = load_store(config).await?;
+    if let Some(policy) = store.file_policies.iter().find(|p| p.name == name) {
+        println!("{}", toml::to_string_pretty(policy)?);
+        return Ok(());
+    }
     let policy = store
         .policies
         .iter()
@@ -178,9 +189,10 @@ pub async fn handle_policy_remove(config: &Config, name: &str) -> Result<()> {
         .acquire_operation_lock(&config.shine_dir().join("ssh-secret-broker.lock"))
         .await?;
     let mut store = load_store(config).await?;
-    let before = store.policies.len();
+    let before = store.policies.len() + store.file_policies.len();
     store.policies.retain(|item| item.name != name);
-    if store.policies.len() == before {
+    store.file_policies.retain(|item| item.name != name);
+    if store.policies.len() + store.file_policies.len() == before {
         bail!("policy {} does not exist", escape_controls(name));
     }
     save_store(config, &store).await?;

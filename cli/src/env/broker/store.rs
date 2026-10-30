@@ -20,7 +20,9 @@ pub async fn load_stores(config: &Config, overrides: &[PathBuf]) -> Result<Polic
     let mut merged = load_store(config).await?;
     for path in overrides {
         let mut extra = load_store_from(path).await?;
+        merged.version = merged.version.max(extra.version);
         merged.policies.append(&mut extra.policies);
+        merged.file_policies.append(&mut extra.file_policies);
     }
     validate_store(&merged)?;
     Ok(merged)
@@ -33,6 +35,7 @@ pub async fn load_store_from(path: &Path) -> Result<PolicyStore> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(PolicyStore {
                 version: POLICY_VERSION,
+                file_policies: Vec::new(),
                 policies: Vec::new(),
             });
         }
@@ -45,7 +48,7 @@ pub async fn load_store_from(path: &Path) -> Result<PolicyStore> {
     Ok(store)
 }
 
-pub(super) async fn save_store(config: &Config, store: &PolicyStore) -> Result<()> {
+pub(crate) async fn save_store(config: &Config, store: &PolicyStore) -> Result<()> {
     validate_store(store)?;
     let path = policy_path(config);
     validate_policy_file(&path, true).await?;
@@ -54,7 +57,7 @@ pub(super) async fn save_store(config: &Config, store: &PolicyStore) -> Result<(
     validate_policy_file(&path, false).await
 }
 
-async fn validate_policy_file(path: &Path, allow_missing: bool) -> Result<()> {
+pub(crate) async fn validate_policy_file(path: &Path, allow_missing: bool) -> Result<()> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
         Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {

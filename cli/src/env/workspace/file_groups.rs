@@ -1,6 +1,6 @@
 //! Explicit, snapshot-bound binary secret files. No plaintext cache or implicit release.
-mod filesystem;
-mod platform;
+pub(crate) mod filesystem;
+pub(crate) mod platform;
 
 use super::*;
 use crate::commands::{EnvRunCommand, EnvSealCommand, EnvWorkspaceExportCommand};
@@ -375,14 +375,47 @@ pub async fn handle_export(config: &Config, command: &EnvWorkspaceExportCommand)
         return Ok(());
     }
     selected.preview(FileGroupOperation::Export, PreviewOutput::Stderr);
-    platform::prepare(export_inner(config, &selected)).await
+    platform::prepare(export_inner(
+        config,
+        &selected,
+        command.secret_broker,
+        &command.file_groups,
+    ))
+    .await
 }
 
-async fn export_inner(config: &Config, selected: &Selection) -> Result<()> {
+async fn export_inner(
+    config: &Config,
+    selected: &Selection,
+    broker: bool,
+    groups: &[String],
+) -> Result<()> {
     let _locks = PathLocks::acquire(&selected.root, &selected.workspace_path, &selected.mappings)?;
     selected.preflight(FileGroupOperation::Export)?;
     let mut config = local_cache::load_config(config, &selected.workspace_path).await?;
-    let (captured, plain) = decrypt_files(&mut config, selected).await?;
+    let (captured, plain) = if broker {
+        let captured = capture_files(selected)?;
+        let request = file_release_request(selected, groups, &captured)?;
+        let mappings = request.released_mappings()?;
+        let plain = crate::ssh::file_broker::request(request, false).await?;
+        ensure!(
+            plain.len() == mappings.len(),
+            "incomplete file broker response"
+        );
+        let mut by_target = mappings
+            .into_iter()
+            .zip(plain)
+            .map(|(m, b)| (selected.root.join(m.target), b))
+            .collect::<BTreeMap<_, _>>();
+        let plain = selected
+            .mappings
+            .iter()
+            .map(|(_, t)| by_target.remove(t).context("missing released file"))
+            .collect::<Result<Vec<_>>>()?;
+        (captured, plain)
+    } else {
+        decrypt_files(&mut config, selected).await?
+    };
     selected.preflight(FileGroupOperation::Export)?;
     for file in &captured {
         file.verify(&selected.root)?;
@@ -563,20 +596,7 @@ async fn decrypt_files(
     config: &mut Config,
     selected: &Selection,
 ) -> Result<(Vec<CapturedFile>, Vec<Zeroizing<Vec<u8>>>)> {
-    let mut captured = Vec::new();
-    let mut cipher_total = 0;
-    for (source, _) in &selected.mappings {
-        let file = CapturedFile::read(
-            &selected.root,
-            source,
-            MAX_CIPHER.min(MAX_CIPHER_TOTAL - cipher_total),
-        )?;
-        cipher_total += file.bytes.len();
-        captured.push(file);
-    }
-    for file in &captured {
-        validate_cipher(&file.bytes)?;
-    }
+    let captured = capture_files(selected)?;
     // Freeze a hybrid choice across all files and environment sources for this invocation.
     if captured.iter().any(|f| f.bytes.starts_with(b"hybrid:"))
         && config.hybrid_decrypt_backend.is_none()
@@ -606,6 +626,67 @@ async fn decrypt_files(
         plain.push(decoded);
     }
     Ok((captured, plain))
+}
+
+fn capture_files(selected: &Selection) -> Result<Vec<CapturedFile>> {
+    let mut captured = Vec::new();
+    let mut cipher_total = 0;
+    for (source, _) in &selected.mappings {
+        let file = CapturedFile::read(
+            &selected.root,
+            source,
+            MAX_CIPHER.min(MAX_CIPHER_TOTAL - cipher_total),
+        )?;
+        cipher_total += file.bytes.len();
+        captured.push(file);
+    }
+    for file in &captured {
+        validate_cipher(&file.bytes)?;
+    }
+    Ok(captured)
+}
+
+fn file_release_request(
+    selected: &Selection,
+    groups: &[String],
+    captured: &[CapturedFile],
+) -> Result<shine_core::runtime::secret_files::FileReleaseRequest> {
+    let mut ciphertexts = BTreeMap::new();
+    for file in captured {
+        ciphertexts.insert(
+            file.path
+                .strip_prefix(&selected.root)?
+                .to_str()
+                .context("ciphertext path must be UTF-8")?
+                .into(),
+            validate_cipher(&file.bytes)?.into(),
+        );
+    }
+    Ok(shine_core::runtime::secret_files::FileReleaseRequest {
+        operation: "export".into(),
+        workspace_path: selected
+            .workspace_path
+            .to_str()
+            .context("workspace path must be UTF-8")?
+            .into(),
+        workspace_contents: selected.workspace_bytes.clone(),
+        mode: selected.mode.clone(),
+        groups: groups.to_vec(),
+        release: ciphertexts.keys().cloned().collect(),
+        ciphertexts,
+        permissions: BTreeMap::new(),
+        app: None,
+    })
+}
+
+pub(crate) async fn capture_release(
+    workspace: Option<&Path>,
+    mode: &str,
+    groups: &[String],
+) -> Result<shine_core::runtime::secret_files::FileReleaseRequest> {
+    let selected = Selection::load(workspace, Some(mode), groups).await?;
+    let captured = capture_files(&selected)?;
+    file_release_request(&selected, groups, &captured)
 }
 
 #[cfg(test)]
