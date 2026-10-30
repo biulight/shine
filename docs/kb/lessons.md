@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-10-31 — Broker request paths belong to the peer's platform
+
+- **Symptom**: Windows CI rejected POSIX file-release workspaces as non-absolute paths, breaking
+  local authorization of Linux requests before policy matching.
+- **Rule**: validate slash-rooted POSIX paths independently of the broker host's native absolute
+  path rule; retain native Windows paths for local App decryption and reject traversal.
+- **Coverage**: `file_release_workspace_paths_support_posix_peers_on_every_host` and the file broker
+  authorization/inspection tests run in the native Windows CI matrix.
+
 ## 2026-10-30 — Secret recovery and ownership must retain filesystem identity
 
 - **Risk**: first-create recovery has no rollback file, but must still check the observed applied

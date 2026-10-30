@@ -336,8 +336,12 @@ impl FileReleaseRequest {
             "invalid remote workspace path"
         );
         let workspace = Path::new(&self.workspace_path);
+        // The broker host may be Windows while the peer uses POSIX paths.
+        // Retain native absolute paths for local App decryption as well.
+        let posix_absolute =
+            self.workspace_path.starts_with('/') && !self.workspace_path.contains('\\');
         ensure!(
-            workspace.is_absolute()
+            (posix_absolute || workspace.is_absolute())
                 && workspace
                     .components()
                     .all(|c| !matches!(c, Component::ParentDir)),
@@ -515,6 +519,30 @@ mod tests {
                 .workspace_contents
                 .replace("private/keys.bin", target);
             assert!(invalid.descriptor().is_err(), "{target}");
+        }
+    }
+    #[test]
+    fn file_release_workspace_paths_support_posix_peers_on_every_host() {
+        for path in ["/srv/service/shine.workspace.toml", "/shine.workspace.toml"] {
+            let mut valid = request();
+            valid.workspace_path = path.into();
+            assert!(valid.descriptor().is_ok(), "{path}");
+        }
+        for path in [
+            "relative/shine.workspace.toml",
+            "/srv/../shine.workspace.toml",
+            "C:relative/shine.workspace.toml",
+            "\\relative\\shine.workspace.toml",
+        ] {
+            let mut invalid = request();
+            invalid.workspace_path = path.into();
+            assert!(invalid.descriptor().is_err(), "{path}");
+        }
+        #[cfg(windows)]
+        {
+            let mut local = request();
+            local.workspace_path = r"C:\service\shine.workspace.toml".into();
+            assert!(local.descriptor().is_ok());
         }
     }
     #[test]
