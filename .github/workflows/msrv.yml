@@ -19,7 +19,7 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust 1.90
         uses: dtolnay/rust-toolchain@1.90.0
       - name: Check minimum supported Rust version
