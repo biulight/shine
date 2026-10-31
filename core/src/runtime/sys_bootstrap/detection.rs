@@ -99,3 +99,81 @@ fn captured_expand(raw: &str, home: &Path) -> PathBuf {
         PathBuf::from(raw)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{
+        InMemoryHost, PresetSnapshot, PresetSourceKind, ProcessOutput, RuntimeContext,
+        RuntimePlatform,
+    };
+
+    #[tokio::test]
+    async fn atuin_detection_finds_new_installs_without_refreshing_captured_path() {
+        for (platform, directory, command) in [
+            (RuntimePlatform::Linux, ".atuin/bin", "atuin"),
+            (RuntimePlatform::Macos, "/opt/homebrew/bin", "atuin"),
+            (RuntimePlatform::Macos, "/usr/local/bin", "atuin"),
+            (
+                RuntimePlatform::Windows,
+                "AppData/Local/Microsoft/WinGet/Links",
+                "atuin.exe",
+            ),
+        ] {
+            let home = std::env::temp_dir().join("shine-atuin-detection");
+            let context = RuntimeContext::isolated(
+                home.clone(),
+                home.join("state"),
+                home.join("presets"),
+                home.join("bin"),
+                platform,
+            );
+            let host = InMemoryHost::new();
+            let runtime = CoreRuntime::new(
+                host,
+                context,
+                PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+            );
+            let detection = SysDetection::Command {
+                command: "atuin".into(),
+                version_args: vec!["--version".into()],
+            };
+            assert!(matches!(
+                runtime.detect_sys_item(&detection).await.unwrap(),
+                DetectionResult::Missing
+            ));
+            let binary = if directory.starts_with('/') {
+                PathBuf::from(directory)
+            } else {
+                home.join(directory)
+            }
+            .join(command);
+            if platform != RuntimePlatform::Windows {
+                runtime
+                    .host()
+                    .put_file_with_mode(&binary, b"not executable".to_vec(), 0o100644);
+                assert!(matches!(
+                    runtime.detect_sys_item(&detection).await.unwrap(),
+                    DetectionResult::Missing
+                ));
+            }
+            runtime
+                .host()
+                .put_file_with_mode(&binary, b"installed".to_vec(), 0o100755);
+            runtime.host().queue_process_output(Ok(ProcessOutput {
+                interrupted: false,
+                exit_code: Some(0),
+                stdout: b"atuin fixture\n".to_vec(),
+                stderr: Vec::new(),
+            }));
+            assert!(
+                matches!(runtime.detect_sys_item(&detection).await.unwrap(), DetectionResult::Present(detail) if detail == "atuin fixture")
+            );
+            let requests = runtime.host().process_requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(Path::new(&requests[0].program), binary.as_path());
+            assert_eq!(requests[0].args, ["--version"]);
+            assert!(runtime.context().path_env.is_none());
+        }
+    }
+}

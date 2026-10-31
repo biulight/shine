@@ -3644,3 +3644,20 @@ When cutting a release, always diff against the latest stable `v*` tag
   and keeps reruns stable. Native Bash/Zsh checks load generated profiles twice and verify command
   discovery and a single Cargo PATH entry. Cross-platform profile inspection is not native Windows
   installer or PowerShell execution evidence.
+
+## 2026-10-31 — Atuin post-install detection must precede shell activation
+
+- **Symptom**: Ubuntu's Atuin installer exited successfully, but bootstrap reported the declared
+  command missing and omitted Atuin from profile activation and receipts.
+- **Cause**: the installer wrote `~/.atuin/bin/atuin`, outside the captured PATH and known command
+  roots. Sourcing its env file in a later shell cannot update the running bootstrap process.
+- **Fix**: append `~/.atuin/bin` to the shared planner/executor command roots, preserving existing
+  lookup precedence and regular executable/symlink validation. Successful detection then enables
+  the existing pre-phase env loader and post-phase guarded init; no success checks are bypassed.
+- **Platform boundary**: built-in macOS uses Homebrew and Windows uses WinGet portable installation;
+  their existing provider roots remain supported. This does not cover arbitrary custom install roots.
+- **Regression**: an offline first-install fixture reproduces the original failure, then verifies
+  detection, receipts, Bash/Zsh activation, repeated loading and rerun without reinstallation.
+  Its unique detection alias prevents ambient Homebrew Atuin from masking the failure. Memory-host
+  tests cover missing/non-executable files and newly installed Ubuntu/Homebrew/WinGet commands
+  without refreshing the captured PATH.

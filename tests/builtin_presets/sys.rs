@@ -273,3 +273,151 @@ fn check_rust_profile_commands(shell: &str, profile: &str) {
     );
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn atuin_first_install_is_detected_and_enables_shell_integration() {
+    use shine_core::plan::PlanApprovalV1;
+    use shine_core::runtime::{
+        CoreRuntime, RealHost, ShellType, SysItemStatus, SysRunManifest,
+        capture_embedded_preset_snapshot,
+    };
+    for (shell, kind) in [("bash", ShellType::Bash), ("zsh", ShellType::Zsh)] {
+        let embedded = super::support::runtime(RuntimePlatform::Linux);
+        let mut context = embedded.context().clone();
+        context.shell = kind;
+        context.shine_dir = context.home_dir.join(".shine");
+        context.shell_config_paths =
+            vec![cli::shells::get_shell_config_path(&kind, &context.home_dir).unwrap()];
+        context.path_env = Some("/usr/bin:/bin".into());
+        let home = context.home_dir.clone();
+        // Replace the network installer. Detection, approval, profile composition,
+        // receipts and the embedded Atuin integrations all use production code.
+        let mut files = embedded.presets().files().clone();
+        // A unique detection alias prevents a developer's globally installed Atuin
+        // from satisfying this fresh-install fixture through provider fallback roots.
+        let alias = format!("atuin-fixture-{}", uuid::Uuid::new_v4());
+        let manifest = String::from_utf8(files["sys/ubuntu/shine.toml"].clone()).unwrap();
+        let detection =
+            r#"detect = { kind = "command", command = "atuin", version_args = ["--version"] }"#;
+        assert_eq!(manifest.matches(detection).count(), 1);
+        files.insert(
+            "sys/ubuntu/shine.toml".into(),
+            manifest
+                .replace(
+                    detection,
+                    &detection.replace("\"atuin\"", &format!("\"{alias}\"")),
+                )
+                .into_bytes(),
+        );
+        files.insert(
+            "sys/ubuntu/install/atuin.sh".into(),
+            br#"set -eu
+mkdir -p "$SHINE_TARGET_HOME/.atuin/bin"
+printf 'installed\n' >> "$SHINE_TARGET_HOME/install-count"
+cat > "$SHINE_TARGET_HOME/.atuin/bin/atuin" <<'EOF'
+#!/bin/sh
+case "$1" in
+  --version) echo 'atuin fixture' ;;
+  init) printf 'export SHINE_ATUIN_INITIALIZED=%s\n' "$2" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$SHINE_TARGET_HOME/.atuin/bin/atuin"
+cat > "$SHINE_TARGET_HOME/.atuin/bin/env" <<'EOF'
+case ":$PATH:" in
+  *":$HOME/.atuin/bin:"*) ;;
+  *) export PATH="$HOME/.atuin/bin:$PATH" ;;
+esac
+EOF
+"#
+            .to_vec(),
+        );
+        files
+            .get_mut("sys/ubuntu/install/atuin.sh")
+            .unwrap()
+            .extend_from_slice(
+                format!("ln -s atuin \"$SHINE_TARGET_HOME/.atuin/bin/{alias}\"\n").as_bytes(),
+            );
+        let runtime = CoreRuntime::new(
+            RealHost,
+            context,
+            capture_embedded_preset_snapshot(files.into_iter().collect()),
+        );
+        let request = SysBootstrapPlanRequest {
+            os_id: "ubuntu".into(),
+            item_ids: vec!["atuin".into()],
+            sys_shell: shell.into(),
+            force_profile: false,
+            input_versions: Default::default(),
+        };
+        assert!(!home.join(".atuin/bin/atuin").exists());
+        for expected in [SysItemStatus::Installed, SysItemStatus::AlreadyInstalled] {
+            let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            let report = runtime
+                .run_sys_bootstrap_approved(
+                    request.clone(),
+                    &approval,
+                    &mut NoBootstrapInteraction,
+                    &mut shine_core::runtime::NullObserver,
+                )
+                .await
+                .unwrap();
+            assert_eq!(report.outcomes[0].status, expected, "{:?}", report.outcomes);
+            assert!(
+                report
+                    .outcomes
+                    .iter()
+                    .all(|outcome| outcome.status != SysItemStatus::Failed)
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(home.join("install-count")).unwrap(),
+            "installed\n"
+        );
+        let receipt = SysRunManifest::load(&RealHost, &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(receipt.entries.len(), 1);
+        assert_eq!(receipt.entries[0].item_id, "atuin");
+        assert!(receipt.entries[0].profile_enabled);
+        let pre = std::fs::read_to_string(home.join(".shine/profile/ubuntu-sys.pre.sh")).unwrap();
+        let post = std::fs::read_to_string(home.join(".shine/profile/ubuntu-sys.post.sh")).unwrap();
+        assert!(pre.contains(".atuin/bin/env"));
+        assert!(post.contains("atuin"));
+        let startup = std::fs::read_to_string(&runtime.context().shell_config_paths[0]).unwrap();
+        assert!(startup.contains("ubuntu-sys.pre.sh"));
+        assert!(startup.contains("ubuntu-sys.post.sh"));
+        // Shell execution is additional native evidence; composition above runs even
+        // on Unix CI hosts without Zsh installed.
+        if let Some(executable) =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|directory| directory.join(shell))
+                .find(|path| path.is_file())
+        {
+            let output = std::process::Command::new(executable)
+                .args(["-f", "-c", &format!("{pre}\n{post}\n{pre}\n{post}\ncommand -v atuin\nprintf '%s\\n%s' \"$SHINE_ATUIN_INITIALIZED\" \"$PATH\"")])
+                .env_clear().env("HOME", &home).env("PATH", "/usr/bin:/bin")
+                .env("SHINE_SYNC_TERMINAL_THEME", "0").output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let mut lines = stdout.lines();
+            assert_eq!(
+                std::path::Path::new(lines.next().unwrap()),
+                home.join(".atuin/bin/atuin")
+            );
+            assert_eq!(lines.next(), Some(shell));
+            assert_eq!(
+                lines
+                    .next()
+                    .unwrap()
+                    .split(':')
+                    .filter(|path| std::path::Path::new(path) == home.join(".atuin/bin"))
+                    .count(),
+                1
+            );
+        }
+        std::fs::remove_dir_all(home.parent().unwrap()).unwrap();
+    }
+}

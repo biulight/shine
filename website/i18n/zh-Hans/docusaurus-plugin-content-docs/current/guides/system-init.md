@@ -56,7 +56,8 @@ shine sys bootstrap --proxy --dry-run
 
 安装器可能要求终端输入，请按当前项目的提示操作，等待结束后再开始另一项操作。
 
-Ubuntu 内置的 Atuin 安装器以非交互模式运行。打开新的 Shell 后，可运行 `atuin import auto`
+Ubuntu 内置的 Atuin 安装器以非交互模式运行。即使当前 Shell 尚未加载新的 PATH，Shine
+也会检测默认安装目录 `~/.atuin/bin`，然后启用 Shell 集成。打开新的 Shell 后，可运行 `atuin import auto`
 导入已有历史；需要同步历史时，再运行 `atuin register` 或 `atuin login`。
 Bootstrap 按顺序执行项目，每个安装器最多运行 30 分钟，遇到首个失败或超时的项目便停止。
 
