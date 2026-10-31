@@ -60,6 +60,9 @@ Quote target names containing spaces or shell punctuation. For names beginning w
 options before `--` and the name after it, for example `shine app uninstall --dry-run -- -demo`.
 Suggested commands use POSIX shell syntax on Unix and PowerShell syntax on Windows.
 
+Ordinary built-in Shell installs use a Source / Commands / Changes / Backup summary.
+Use `--verbose` to expand it. Operations requiring additional review keep their detailed information.
+
 Before applying changes, review the Plan's affected files, planned effects, code sources, and
 execution timing. Built-in code is shown with distribution trust; external code retains its trust
 status and any required confirmation. Missing declarations, administrator access, and blocking

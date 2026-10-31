@@ -59,6 +59,9 @@ shine upgrade app/starship
 名称放在其后，例如 `shine app uninstall --dry-run -- -demo`。
 终端建议的命令在 Unix 上使用 POSIX shell 语法，在 Windows 上使用 PowerShell 语法。
 
+普通内置 Shell 安装使用 Source / Commands / Changes / Backup 摘要，添加 `--verbose` 可展开。
+需要额外审阅的操作仍保留详细信息。
+
 应用变更前，请审阅 Plan 中受影响的文件、计划影响、代码来源和执行时机。内置代码显示发行版
 信任；外部代码保留信任状态及所需确认。缺失声明、管理员权限和阻断诊断仍会显示。
 

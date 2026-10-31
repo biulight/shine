@@ -33,6 +33,23 @@ A category target activates every command available for the current platform. Us
 `category/command` target when you need only one command. Mutation does not accept a bare command
 name because the same name may appear in more than one category.
 
+A normal built-in Shell installation shows a short summary before confirmation:
+
+```text
+Install · utils
+  Source       built-in · Shine distribution
+  Commands     copyfile, shine-env-export, shine-theme-sync
+  Changes      install 3 commands; update shell integration and ~/.bashrc
+  Backup       ~/.bashrc
+
+Apply? [y/N]
+```
+
+The commands, changed profile paths, and recovery backup paths reflect the current Plan.
+Use `--verbose` for cache and state files, exact permissions, author statements, and identities.
+External code, code executed during installation, additional permissions, conflicts, and unfamiliar
+diagnostics retain the expanded review.
+
 Open a new terminal or reload the shell profile after installation. To install completions, run:
 
 ```bash
@@ -88,10 +105,7 @@ shine shell uninstall proxy
 shine shell uninstall utils/shine-env-export
 ```
 
-Non-dry-run install and uninstall, plus `shine upgrade`, show planned changes, code sources, and
-trust status. For built-in commands such as `shine install utils`, distribution trust is shown
-without generic script warnings. The Plan distinguishes code installed for later use from code
-executed during the operation. Use `--verbose` for full permissions and author statements.
+Uninstall and `shine upgrade` also show their planned changes.
 Confirmation defaults to No; automation must pass `--yes`, while the Plan and safety checks still
 run. `--dry-run` remains a separate preview and cannot be combined with `--yes`.
 

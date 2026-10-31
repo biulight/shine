@@ -120,8 +120,13 @@ async fn handle_install_with_reporter(
     yes: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
-    for line in crate::config::presets_note_lines(config) {
-        reporter.emit(PresentationEvent::stdout(line));
+    if config.is_external_presets
+        || config.active_presets_overlay_dir().is_some()
+        || crate::presentation::security_plan_verbose()
+    {
+        for line in crate::config::presets_note_lines(config) {
+            reporter.emit(PresentationEvent::stdout(line));
+        }
     }
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
     let category_filter = selection.map(|target| target.category);
@@ -653,6 +658,72 @@ mod tests {
     use crate::config::Config;
     use std::path::PathBuf;
     use tokio::fs;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn built_in_install_summary_complete_stdout() {
+        const CHILD_ROOT: &str = "SHINE_TEST_INSTALL_SUMMARY_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            let mut config = Config::new_for_test(&root.join(".shine"));
+            config.home_dir = root.clone();
+            config.shell_type = ShellType::Bash;
+            struct Reporter(Vec<PresentationEvent>);
+            impl LifecycleReporter for Reporter {
+                fn emit(&mut self, event: PresentationEvent) {
+                    self.0.push(event);
+                }
+            }
+            let mut reporter = Reporter(Vec::new());
+            println!("BEGIN REVIEW");
+            handle_install_with_reporter(&config, Some("utils"), false, true, &mut reporter)
+                .await
+                .unwrap();
+            println!("END REVIEW");
+            assert!(!format!("{:?}", reporter.0).contains("Preset Source"));
+            assert!(config.bin_dir().join("copyfile").exists());
+            assert!(
+                fs::read_to_string(root.join(".bashrc"))
+                    .await
+                    .unwrap()
+                    .contains("# original profile")
+            );
+            return;
+        }
+        let root = make_temp_dir().await;
+        fs::write(root.join(".bashrc"), "# original profile\n")
+            .await
+            .unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "shells::install::tests::built_in_install_summary_complete_stdout",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, &root)
+            .env("HOME", &root)
+            .env("SHINE_CONFIG_DIR", root.join(".shine"))
+            .env("NO_COLOR", "1")
+            .env_remove("SHINE_PRESETS")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(result.stdout).unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(result.status.success(), "{stdout}\n{stderr}");
+        let actual = stdout
+            .split_once("BEGIN REVIEW\n")
+            .unwrap()
+            .1
+            .split_once("END REVIEW")
+            .unwrap()
+            .0;
+        assert_eq!(
+            actual,
+            "Install · utils\n  Source       built-in · Shine distribution\n  Commands     copyfile, shine-env-export, shine-theme-sync\n  Changes      install 3 commands; update shell integration and ~/.bashrc\n  Backup       ~/.bashrc\n\n"
+        );
+        println!("Verified install review:\n{actual}");
+        fs::remove_dir_all(root).await.unwrap();
+    }
 
     #[tokio::test]
     async fn shell_update_outcomes_keep_core_identity_conflicts_and_missing_receipts_read_only() {

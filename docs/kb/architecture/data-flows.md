@@ -94,7 +94,11 @@ and never changes the execution request. Full permissions and purpose groups rem
 (ADR 0094). `lifecycle_plan/render.rs` is a display-only facade over compact, detailed and
 bootstrap layouts, permissions, code boundaries and labels. Bootstrap retains its ordered scopes
 and distinct permission formatting; incomplete attribution falls back to the full detailed review.
-No rendering module creates approval or changes the reviewed Plan (ADR 0126).
+Ordinary built-in Shell installation can project a task summary when all concrete effects have
+consistent typed attribution; overlapping maintenance attributions may describe the same cache
+write. Source, commands, user destinations and recovery backup paths stay visible, while exceptions
+retain expanded review (ADR 0160). No rendering module creates approval or changes the reviewed Plan
+(ADR 0126).
 
 Before ordinary upgrade dispatch can initialize configuration or run advisory/release checks, a
 read-only load and Core review test complete upgrade convergence. Positive convergence prints the

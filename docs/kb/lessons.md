@@ -3645,6 +3645,15 @@ When cutting a release, always diff against the latest stable `v*` tag
   discovery and a single Cargo PATH entry. Cross-platform profile inspection is not native Windows
   installer or PowerShell execution evidence.
 
+## 2026-10-31 — Verify the complete accepted terminal layout
+
+- **Symptom**: removing warnings passed negative substring tests, but the default installation still
+  printed the detailed plan instead of the accepted task summary.
+- **Root cause**: tests checked omitted text without asserting the full output or the install handler's
+  separate source banner.
+- **Rule**: compare the complete approved layout, including surrounding output and confirmation;
+  retain separate tests for exceptions and unchanged approval data.
+
 ## 2026-10-31 — Atuin post-install detection must precede shell activation
 
 - **Symptom**: Ubuntu's Atuin installer exited successfully, but bootstrap reported the declared

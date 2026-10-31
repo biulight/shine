@@ -680,6 +680,9 @@ pub(crate) async fn execute_reviewed(
 }
 
 fn confirmation_prompt(planned: &[(LifecyclePlanRequest, PlanV1)]) -> &'static str {
+    if render_install_summary(planned).is_some() {
+        return "Apply?";
+    }
     if planned.iter().any(|(_, plan)| {
         plan.code_boundaries
             .iter()
@@ -772,33 +775,10 @@ mod tests {
         let compact = render_compact_plan_lines(&planned, "config")
             .unwrap()
             .join("\n");
-        for expected in [
-            "shell/utils/copyfile",
-            "shell/utils/shine-env-export",
-            "shell/utils/shine-theme-sync",
-            "built-in",
-            "distribution trust",
-            "delivered for later execution/source",
-            "~/.bashrc",
-            "backups for",
-            "Planned effects",
-        ] {
-            assert!(compact.contains(expected), "missing {expected}: {compact}");
-        }
-        for omitted in [
-            "unisolated code",
-            "does not intercept",
-            "Author capability statement",
-            "opaque Preset code",
-            "unrestricted effects",
-            "shell_cache_replace_transaction",
-            "Required permissions",
-        ] {
-            assert!(
-                !compact.contains(omitted),
-                "unexpected {omitted}: {compact}"
-            );
-        }
+        assert_eq!(
+            format!("{compact}\n{} [y/N]", confirmation_prompt(&planned)),
+            "Install · utils\n  Source       built-in · Shine distribution\n  Commands     copyfile, shine-env-export, shine-theme-sync\n  Changes      install 3 commands; update shell integration and ~/.bashrc\n  Backup       ~/.bashrc\n\nApply? [y/N]"
+        );
         let verbose = render_plan_lines(&planned[0].1, "config")
             .unwrap()
             .join("\n");
@@ -813,6 +793,67 @@ mod tests {
         }
         assert_eq!(serde_json::to_value(&planned[0].1).unwrap(), before);
         assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
+
+        for exception in [
+            "external",
+            "execute",
+            "shared",
+            "privilege",
+            "unknown",
+            "missing-provenance",
+            "conflicting-provenance",
+            "blocked",
+            "force",
+        ] {
+            let mut exceptional = planned.clone();
+            let plan = &mut exceptional[0].1;
+            match exception {
+                "external" => {
+                    plan.code_boundaries[0].source = CodeSourceV2::ExternalOrOverlay;
+                    plan.code_boundaries[0].trust = CodeTrustStateV2::OperationConfirmation;
+                }
+                "execute" => plan.code_boundaries[0].timing = CodeTimingV2::ExecuteNow,
+                "shared" => {
+                    plan.code_boundaries[0].target_role = CodeTargetRoleV2::SharedResourceAffected
+                }
+                "privilege" => {
+                    plan.permissions
+                        .required
+                        .insert(PermissionV1::Administrator);
+                }
+                "unknown" => plan.steps[0].diagnostic_codes.push("future_warning".into()),
+                "missing-provenance" => plan.filesystem_review.clear(),
+                "conflicting-provenance" => {
+                    let mut conflicting = plan.filesystem_review[0].clone();
+                    conflicting.purpose = if conflicting.purpose
+                        == shine_core::plan::FilesystemPurposeV1::UserTarget
+                    {
+                        shine_core::plan::FilesystemPurposeV1::Maintenance
+                    } else {
+                        shine_core::plan::FilesystemPurposeV1::UserTarget
+                    };
+                    plan.filesystem_review.push(conflicting);
+                }
+                "blocked" => plan.steps[0].action = PlanActionV1::Blocked,
+                "force" => {
+                    let LifecyclePlanRequest::Shell(request) = &mut exceptional[0].0 else {
+                        unreachable!()
+                    };
+                    request.force = true;
+                }
+                _ => unreachable!(),
+            }
+            let before = serde_json::to_value(&exceptional[0].1).unwrap();
+            assert!(
+                render_install_summary(&exceptional).is_none(),
+                "{exception}"
+            );
+            assert!(
+                render_compact_plan_lines(&exceptional, "config").unwrap()[0]
+                    .contains("Security Plan")
+            );
+            assert_eq!(serde_json::to_value(&exceptional[0].1).unwrap(), before);
+        }
     }
 
     #[test]

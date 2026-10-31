@@ -28,6 +28,9 @@ ownership, fresh-state validation and execution are unchanged. Built-in metadata
 `commands = ["shine"]`, stays intact: hiding implementation detail must not rewrite preset snapshots.
 No command-name special case is introduced.
 
+The built-in Shell installation layout is further refined by
+[ADR 0160](0160-built-in-shell-install-summary.md).
+
 ## Validation
 
 Exercise the embedded utils Plan and embedded bootstrap plans, compact and detailed review,
