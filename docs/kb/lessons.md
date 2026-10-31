@@ -3625,3 +3625,18 @@ When cutting a release, always diff against the latest stable `v*` tag
   and stop-on-first-failure behavior.
 - **Regression**: an isolated fake download exercises the actual preset through Bash, requiring the
   non-interactive argument and preserving download and installer failures without network access.
+
+## 2026-10-31 — Rust presence does not establish shell PATH integration
+
+- **Symptom**: Ubuntu bootstrap reported Rust already installed while Bash could not find `rustup`.
+- **Cause**: detection also searches `~/.cargo/bin`, but the Ubuntu installer uses
+  `--no-modify-path` and its item lacked a PATH integration. Detection does not modify the caller's
+  environment. macOS and Windows already include Cargo in their base pre profiles.
+- **Fix**: declare `$HOME/.cargo/bin` as an Ubuntu Rust pre-phase PATH integration for Bash/Zsh.
+  Rerunning bootstrap for an existing Rust installation enables the integration and records it;
+  the user must then start a new shell or load the environment in the current one.
+- **Regression**: approved bootstrap with embedded presets and an existing Rust installation
+  covers Ubuntu Bash/Zsh, macOS Zsh and Windows PowerShell profile content, preserves installation,
+  and keeps reruns stable. Native Bash/Zsh checks load generated profiles twice and verify command
+  discovery and a single Cargo PATH entry. Cross-platform profile inspection is not native Windows
+  installer or PowerShell execution evidence.

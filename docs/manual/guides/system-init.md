@@ -108,6 +108,15 @@ runtime versions. Use mise for `mise.toml`, tool installation, and version upgra
 
 ## Manage shell integration state
 
+Rust bootstrap makes the default Cargo binary directory (`~/.cargo/bin`) available in Ubuntu
+Bash/Zsh, macOS Zsh, and Windows PowerShell profiles. Open a new shell after bootstrap to use
+`rustup`, `cargo`, and `rustc`; bootstrap cannot change the calling shell's PATH.
+
+If an older Ubuntu setup reports Rust as installed but the commands are missing, upgrade Shine,
+then run `shine sys bootstrap rust` and open a new shell. This repairs the shell integration without
+reinstalling an already detected Rust installation. For the current Bash/Zsh session, you can run
+`. "$HOME/.cargo/env"` if that file exists.
+
 A successful bootstrap enables only the selected items' declared shell integrations. It does not
 disable integrations enabled by an earlier run, and a named selection profile is not a desired-state
 replacement for software or shell configuration.

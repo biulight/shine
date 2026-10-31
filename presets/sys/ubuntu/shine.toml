@@ -11,6 +11,11 @@ permissions = { schema_version = 1, filesystem = [{ access = ["execute"], base =
 detect = { kind = "command", command = "rustup", version_args = ["--version"] }
 install = { kind = "script", path = "install/rust.sh" }
 
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "pre"
+path = "$HOME/.cargo/bin"
+
 [[items]]
 id = "neovim"
 label = "Neovim"

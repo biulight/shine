@@ -91,6 +91,14 @@ shine sys status
 
 ## 管理 shell 集成状态
 
+Rust bootstrap 会在 Ubuntu Bash/Zsh、macOS Zsh 和 Windows PowerShell 的 profile 中加入
+默认 Cargo 命令目录（`~/.cargo/bin`）。完成后请打开新的 Shell，再使用 `rustup`、`cargo`
+和 `rustc`；bootstrap 无法改变调用它的当前 Shell 的 PATH。
+
+如果旧版 Ubuntu 配置报告 Rust 已安装，但找不到这些命令，请先升级 Shine，再运行
+`shine sys bootstrap rust` 并打开新的 Shell。这会补齐 Shell 集成，不会重装已检测到的 Rust。
+当前 Bash/Zsh 会话中，如果 `$HOME/.cargo/env` 文件存在，也可以运行 `. "$HOME/.cargo/env"`。
+
 成功的 bootstrap 只启用本次选中 item 声明的 shell 集成，不会禁用之前运行已启用的集成。命名
 selection profile 也不是软件或 shell 配置的 desired-state 替换集合。
 

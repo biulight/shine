@@ -68,3 +68,207 @@ async fn built_in_sys_bootstrap_plan_is_ready_for_each_platform() {
         );
     }
 }
+
+struct NoBootstrapInteraction;
+
+impl shine_core::runtime::RuntimeInteraction for NoBootstrapInteraction {
+    fn confirm(&mut self, _: &'static str, _: bool) -> anyhow::Result<bool> {
+        panic!("already-installed Rust must not prompt")
+    }
+
+    fn authorize_admin<'a>(
+        &'a mut self,
+        _: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + 'a>>
+    {
+        panic!("already-installed Rust must not request administrator access")
+    }
+
+    fn select_many(
+        &mut self,
+        _: &'static str,
+        _: &[String],
+        _: &[String],
+    ) -> anyhow::Result<Vec<String>> {
+        panic!("explicit Rust selection must not prompt")
+    }
+}
+
+#[tokio::test]
+async fn installed_rust_bootstrap_delivers_cargo_path_on_each_platform() {
+    use shine_core::plan::PlanApprovalV1;
+    use shine_core::runtime::{
+        CoreRuntime, FileSystemObservationHost, HostOperation, InMemoryHost, NullObserver,
+        ProcessOutput, ShellType, SysItemStatus, SysRunEntry, SysRunManifest,
+    };
+
+    for (platform, os_id, shell, shell_type) in [
+        (RuntimePlatform::Linux, "ubuntu", "bash", ShellType::Bash),
+        (RuntimePlatform::Linux, "ubuntu", "zsh", ShellType::Zsh),
+        (RuntimePlatform::Macos, "macos", "zsh", ShellType::Zsh),
+        (
+            RuntimePlatform::Windows,
+            "windows",
+            "powershell",
+            ShellType::PowerShell,
+        ),
+    ] {
+        let embedded = super::support::runtime(platform);
+        let mut context = embedded.context().clone();
+        context.shell = shell_type;
+        context.shell_config_paths =
+            vec![cli::shells::get_shell_config_path(&shell_type, &context.home_dir).unwrap()];
+        context.path_env = Some(String::new());
+        context.shine_dir = context.home_dir.join(".shine");
+        let host = InMemoryHost::new();
+        let rustup = context
+            .home_dir
+            .join(if platform == RuntimePlatform::Windows {
+                ".cargo/bin/rustup.exe"
+            } else {
+                ".cargo/bin/rustup"
+            });
+        host.put_file_with_mode(&rustup, b"existing Rust installation".to_vec(), 0o100755);
+        // Older releases recorded Rust without enabling any item-owned profile.
+        let mut receipt = SysRunManifest::default();
+        receipt.upsert(SysRunEntry {
+            os_id: os_id.into(),
+            item_id: "rust".into(),
+            label: "Rust".into(),
+            status: SysItemStatus::AlreadyInstalled,
+            detail: String::new(),
+            updated_at: "0".into(),
+            managed: false,
+            profile_enabled: false,
+            receipt: None,
+        });
+        receipt.save(&host, &context.shine_dir).await.unwrap();
+        let runtime = CoreRuntime::new(host, context, embedded.presets().clone());
+        let request = SysBootstrapPlanRequest {
+            os_id: os_id.into(),
+            item_ids: vec!["rust".into()],
+            sys_shell: shell.into(),
+            force_profile: false,
+            input_versions: Default::default(),
+        };
+        let mut previous = None;
+        for _ in 0..2 {
+            let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            runtime.host().queue_process_output(Ok(ProcessOutput {
+                interrupted: false,
+                exit_code: Some(0),
+                stdout: b"rustup fixture\n".to_vec(),
+                stderr: Vec::new(),
+            }));
+            let report = runtime
+                .run_sys_bootstrap_approved(
+                    request.clone(),
+                    &approval,
+                    &mut NoBootstrapInteraction,
+                    &mut NullObserver,
+                )
+                .await
+                .unwrap();
+            assert_eq!(report.outcomes[0].status, SysItemStatus::AlreadyInstalled);
+            assert!(
+                report
+                    .outcomes
+                    .iter()
+                    .all(|outcome| outcome.status != SysItemStatus::Failed)
+            );
+            let ext = if platform == RuntimePlatform::Windows {
+                "ps1"
+            } else {
+                "sh"
+            };
+            let path = runtime
+                .context()
+                .home_dir
+                .join(format!(".shine/profile/{os_id}-sys.pre.{ext}"));
+            let profile = String::from_utf8(runtime.host().read(&path).await.unwrap()).unwrap();
+            assert!(
+                profile.contains(".cargo/bin") || profile.contains(r".cargo\bin"),
+                "{os_id}/{shell}: {profile}"
+            );
+            if let Some(previous) = &previous {
+                assert_eq!(
+                    &profile, previous,
+                    "rerun must preserve composed profile bytes"
+                );
+            }
+            previous = Some(profile);
+        }
+        for operation in runtime.host().operations() {
+            if let HostOperation::Run { program, args } = operation {
+                assert_eq!(program, rustup.to_string_lossy());
+                assert_eq!(args, ["--version"], "must not reinstall Rust");
+            }
+        }
+        if os_id == "ubuntu" {
+            let receipt = SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap();
+            assert!(
+                receipt
+                    .entries
+                    .iter()
+                    .find(|entry| entry.item_id == "rust")
+                    .unwrap()
+                    .profile_enabled
+            );
+        }
+        #[cfg(unix)]
+        if platform != RuntimePlatform::Windows {
+            check_rust_profile_commands(shell, &previous.unwrap());
+        }
+    }
+}
+
+#[cfg(unix)]
+fn check_rust_profile_commands(shell: &str, profile: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(executable) = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join(shell))
+        .find(|path| path.is_file())
+    else {
+        eprintln!("{shell} unavailable; skipping native profile execution only");
+        return;
+    };
+    let home = std::env::temp_dir().join(format!("shine Rust home [1]-{}", uuid::Uuid::new_v4()));
+    let bin = home.join(".cargo/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for command in ["rustup", "cargo", "rustc"] {
+        let path = bin.join(command);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let output = std::process::Command::new(executable)
+        .args([
+            "-f",
+            "-c",
+            &format!("{profile}\n{profile}\ncommand -v rustup cargo rustc\nprintf '%s' \"$PATH\""),
+        ])
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("SHINE_SYNC_TERMINAL_THEME", "0")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{shell}: {output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let mut lines = stdout.lines();
+    for command in ["rustup", "cargo", "rustc"] {
+        assert_eq!(lines.next().unwrap(), bin.join(command).to_string_lossy());
+    }
+    assert_eq!(
+        lines
+            .next()
+            .unwrap()
+            .split(':')
+            .filter(|path| *path == bin.to_string_lossy())
+            .count(),
+        1
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
