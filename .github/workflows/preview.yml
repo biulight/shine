@@ -17,7 +17,7 @@ jobs:
     outputs:
       has_new_commits: ${{ steps.compare.outputs.result }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: compare
@@ -44,7 +44,7 @@ jobs:
       - build-preview-assets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Update preview tag
