@@ -954,6 +954,7 @@ auto = false
             .host()
             .queue_process_output(Ok(crate::runtime::ProcessOutput {
                 interrupted: false,
+                output_truncated: false,
                 exit_code: Some(0),
                 stdout: b"new".to_vec(),
                 stderr: Vec::new(),

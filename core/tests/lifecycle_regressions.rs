@@ -411,6 +411,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', se
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().queue_process_output(Ok(ProcessOutput {
         interrupted: false,
+        output_truncated: false,
         exit_code: Some(0),
         stdout: b"generated".to_vec(),
         stderr: vec![],

@@ -40,6 +40,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 args,
                 env: std::mem::take(&mut env),
                 inherit_stdin: true,
+                io: super::super::ProcessIo::CapturedTail,
                 timeout: Some(BOOTSTRAP_TIMEOUT),
                 stdout_limit: Some(MAX_LOG_BYTES),
                 stderr_limit: Some(MAX_LOG_BYTES),
@@ -112,6 +113,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 cwd: script.parent().map(Path::to_path_buf),
                 env,
                 inherit_stdin: true,
+                io: super::super::ProcessIo::CapturedTail,
                 timeout: Some(BOOTSTRAP_TIMEOUT),
                 stdout_limit: Some(MAX_LOG_BYTES),
                 stderr_limit: Some(MAX_LOG_BYTES),
@@ -165,12 +167,12 @@ fn execution_result(
             Ok(ExecutionResult {
                 success,
                 failure_detail: detail,
-                logs: bounded_logs(&output.stdout, &output.stderr),
+                logs: bounded_logs(&output.stdout, &output.stderr, output.output_truncated),
             })
         }
     }
 }
-fn bounded_logs(stdout: &[u8], stderr: &[u8]) -> Vec<String> {
+fn bounded_logs(stdout: &[u8], stderr: &[u8], output_truncated: bool) -> Vec<String> {
     let mut bytes = stdout.to_vec();
     if !stdout.is_empty() && !stderr.is_empty() {
         bytes.push(b'\n');
@@ -185,7 +187,7 @@ fn bounded_logs(stdout: &[u8], stderr: &[u8]) -> Vec<String> {
         .filter(|line| !line.trim().is_empty())
         .map(str::to_string)
         .collect::<Vec<_>>();
-    if truncated {
+    if truncated || output_truncated {
         lines.insert(
             0,
             "installer output truncated at 64 KiB; showing final output".into(),
@@ -258,11 +260,61 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn verbose_installer_finishes_and_keeps_failure_tail() {
+        use crate::runtime::RealHost;
+        let temp =
+            std::env::temp_dir().join(format!("shine-verbose-installer-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let root = temp.as_path();
+        let runtime = CoreRuntime::new(
+            RealHost,
+            RuntimeContext::isolated(
+                root.join("home"),
+                root.join("state"),
+                root.join("presets"),
+                root.join("bin"),
+                RuntimePlatform::Linux,
+            ),
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        );
+        let manifest: SysManifest = toml::from_str(
+            "version = 2\n[[items]]\nid = 'fixture'\nlabel = 'Fixture'\ndetect = { kind = 'path', path = '~/.fixture' }\ninstall = { kind = 'script', path = 'install.sh' }\n"
+        ).unwrap();
+        let script = root.join("install.sh");
+        for (stream, redirect) in [("stdout", ""), ("stderr", " >&2")] {
+            for exit_code in [0, 7] {
+                let marker = root.join("completed");
+                std::fs::write(&script, format!(
+                    "#!/bin/bash\nhead -c 200000 /dev/zero{redirect}\nprintf '\nfinal diagnostic\n'{redirect}\nprintf done > completed\nexit {exit_code}\n"
+                )).unwrap();
+                let result = runtime
+                    .run_sys_script("ubuntu", &script, root, "bash", &manifest.items[0], false)
+                    .await
+                    .unwrap();
+                assert_eq!(std::fs::read(&marker).unwrap(), b"done", "{stream}");
+                std::fs::remove_file(marker).unwrap();
+                assert_eq!(result.success, exit_code == 0);
+                assert_eq!(
+                    result.logs.first().unwrap(),
+                    "installer output truncated at 64 KiB; showing final output"
+                );
+                assert_eq!(result.logs.last().unwrap(), "final diagnostic");
+                if exit_code != 0 {
+                    assert!(result.failure_detail.contains("exit 7"));
+                }
+            }
+        }
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
     #[test]
     fn installer_exit_failures_keep_logs_and_windows_admin_guidance() {
         let result = execution_result(
             Ok(crate::runtime::ProcessOutput {
                 interrupted: false,
+                output_truncated: false,
                 exit_code: Some(5),
                 stdout: b"installer output".to_vec(),
                 stderr: b"failure detail".to_vec(),

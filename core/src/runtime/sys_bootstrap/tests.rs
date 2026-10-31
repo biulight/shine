@@ -168,6 +168,7 @@ async fn provider_invocation_keeps_sudo_proxy_order_limits_and_platform_rejectio
     assert_eq!(request.stdout_limit, Some(MAX_LOG_BYTES));
     assert_eq!(request.stderr_limit, Some(MAX_LOG_BYTES));
     assert!(request.inherit_stdin);
+    assert_eq!(request.io, crate::runtime::ProcessIo::CapturedTail);
     assert_eq!(
         package_preview("ubuntu", SysPackageProvider::Apt, "pkg").unwrap(),
         "sudo apt-get install -y pkg"

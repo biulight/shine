@@ -1240,8 +1240,10 @@ items retain their existing additive profile and receipt handling (ADR 0128).
 
 Every executable sys manifest declares `version = 2`. Each init item has both `[items.detect]` and
 `[items.install]`; Rust performs the read-only detection, invokes a fixed Homebrew/APT/Winget
-provider argv or one per-item script, limits runtime/output, detects again, and produces the
-canonical `sys/<item>` outcome. A v1 or unknown manifest version fails before detection, elevation,
+provider argv or one per-item script, limits runtime and retained logs, detects again, and produces the
+canonical `sys/<item>` outcome. Installers drain both streams to bounded 64 KiB tails, report
+truncation, and preserve their exit status even when logs overflow; detection retains strict output
+limits (ADR 0161). A v1 or unknown manifest version fails before detection, elevation,
 installer execution, or profile writes.
 
 Inspection, preview, preflight, and profile composition read the immutable Sys snapshot without

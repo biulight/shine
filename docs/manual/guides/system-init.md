@@ -70,7 +70,8 @@ On Ubuntu, the built-in Atuin installer runs non-interactively. Shine detects it
 shell integration. After opening a new shell, run
 `atuin import auto` to import existing history, and `atuin register` or `atuin login` if you want
 history synchronization. Bootstrap runs items sequentially, allows up to 30 minutes per installer,
-and stops at the first failed or timed-out item.
+and stops at the first failed or timed-out item. Large installer logs are truncated to their final
+output with a notice; log volume alone does not stop installation.
 
 Ubuntu includes a `minimal` profile for production servers. It installs only Neovim, fzf, bat, eza,
 and zoxide, without shell-history synchronization, a prompt, the Node.js toolchain, or Homebrew.

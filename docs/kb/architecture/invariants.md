@@ -412,8 +412,10 @@ bugs. Check this list before changing the modules named in each entry.
   execution copies. Never re-read source modes at execution time or copy ownership/setuid/setgid
   bits; executable intent also enters approval and snapshot-trust digests (ADR 0093).
 - **Process limits apply while draining pipes.** Bounded reads retain at most the configured stdout
-  and stderr limits, concurrently with stdin writes and child wait. Overflow, timeout, or I/O failure
-  kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
+  and stderr limits, concurrently with stdin writes and child wait. Default capture treats overflow
+  as failure; only Sys installers opt into tail capture, which discards oldest bytes and reports
+  truncation without failing the process. Detection and generators retain strict overflow failure.
+  Timeout, I/O failure, or strict overflow kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
   terminated too, including when the run Future is cancelled. A drop guard retains the group ID
   after the direct child exits; a failed or signalled child terminates the group before waiting for
   inherited output pipes to close. When inherited stdin is the foreground controlling terminal, execution

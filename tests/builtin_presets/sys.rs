@@ -157,6 +157,7 @@ async fn installed_rust_bootstrap_delivers_cargo_path_on_each_platform() {
             let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
             runtime.host().queue_process_output(Ok(ProcessOutput {
                 interrupted: false,
+                output_truncated: false,
                 exit_code: Some(0),
                 stdout: b"rustup fixture\n".to_vec(),
                 stderr: Vec::new(),

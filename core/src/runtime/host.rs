@@ -200,6 +200,8 @@ pub struct ProcessRequest {
 pub enum ProcessIo {
     #[default]
     Captured,
+    /// Keep only the tail within each stream limit; excess logs do not fail the process.
+    CapturedTail,
     Inherit,
 }
 
@@ -207,6 +209,8 @@ pub enum ProcessIo {
 pub struct ProcessOutput {
     /// The child was terminated by an interrupt or termination signal.
     pub interrupted: bool,
+    /// At least one captured stream discarded bytes in tail mode.
+    pub output_truncated: bool,
     pub exit_code: Option<i32>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -567,7 +571,7 @@ impl ProcessHost for RealHost {
                     Stdio::piped()
                 });
             match request.io {
-                ProcessIo::Captured => {
+                ProcessIo::Captured | ProcessIo::CapturedTail => {
                     command.stdout(Stdio::piped()).stderr(Stdio::piped());
                 }
                 ProcessIo::Inherit => {
@@ -603,7 +607,7 @@ impl ProcessHost for RealHost {
             let mut stdout_bytes = Vec::new();
             let mut stderr_bytes = Vec::new();
             let mut completion = Box::pin(async {
-                let (status, (), (), ()) = tokio::try_join!(
+                let (status, (), stdout_truncated, stderr_truncated) = tokio::try_join!(
                     async {
                         let status = child.wait().await?;
                         if !status.success() {
@@ -626,16 +630,18 @@ impl ProcessHost for RealHost {
                         &mut stdout,
                         &mut stdout_bytes,
                         request.stdout_limit,
+                        request.io,
                         "stdout"
                     ),
                     read_process_stream(
                         &mut stderr,
                         &mut stderr_bytes,
                         request.stderr_limit,
+                        request.io,
                         "stderr"
                     ),
                 )?;
-                Ok::<_, std::io::Error>(status)
+                Ok::<_, std::io::Error>((status, stdout_truncated || stderr_truncated))
             });
             let result = if let Some(timeout) = request.timeout {
                 match tokio::time::timeout(timeout, &mut completion).await {
@@ -649,7 +655,7 @@ impl ProcessHost for RealHost {
                 (&mut completion).await
             };
             drop(completion);
-            let status = match result {
+            let (status, output_truncated) = match result {
                 Ok(status) => status,
                 Err(error) => {
                     scope.stop();
@@ -668,6 +674,7 @@ impl ProcessHost for RealHost {
             }
             Ok(ProcessOutput {
                 interrupted: process_interrupted(status),
+                output_truncated,
                 exit_code: status.code(),
                 stdout: stdout_bytes,
                 stderr: stderr_bytes,
@@ -697,8 +704,10 @@ async fn read_process_stream<R: AsyncRead + Unpin>(
     stream: &mut Option<R>,
     output: &mut Vec<u8>,
     limit: Option<usize>,
+    io: ProcessIo,
     name: &'static str,
-) -> std::io::Result<()> {
+) -> std::io::Result<bool> {
+    let mut truncated = false;
     if let Some(stream) = stream {
         let mut buffer = [0u8; 8192];
         loop {
@@ -707,14 +716,26 @@ async fn read_process_stream<R: AsyncRead + Unpin>(
                 break;
             }
             if limit.is_some_and(|limit| count > limit.saturating_sub(output.len())) {
-                return Err(std::io::Error::other(format!(
-                    "process {name} exceeded configured limit"
-                )));
+                if io != ProcessIo::CapturedTail {
+                    return Err(std::io::Error::other(format!(
+                        "process {name} exceeded configured limit"
+                    )));
+                }
+                truncated = true;
+                let limit = limit.expect("overflow requires a limit");
+                if count >= limit {
+                    output.clear();
+                    output.extend_from_slice(&buffer[count - limit..count]);
+                } else {
+                    output.drain(..output.len() - (limit - count));
+                    output.extend_from_slice(&buffer[..count]);
+                }
+                continue;
             }
             output.extend_from_slice(&buffer[..count]);
         }
     }
-    Ok(())
+    Ok(truncated)
 }
 
 impl PrivilegedFileSystemHost for RealHost {
@@ -1343,19 +1364,71 @@ sys.exit(os.waitstatus_to_exitcode(status))
     }
 
     #[tokio::test]
+    async fn tail_capture_still_times_out_and_terminates_descendants() {
+        let marker =
+            std::env::temp_dir().join(format!("shine-tail-timeout-{}", uuid::Uuid::new_v4()));
+        let error = RealHost.run(ProcessRequest {
+            program: "sh".into(),
+            args: vec!["-c".into(),
+                "(sleep 0.3; printf leaked > \"$1\") & while :; do printf 123456789; printf 123456789 >&2; done".into(),
+                "probe".into(), marker.display().to_string()],
+            io: ProcessIo::CapturedTail,
+            stdout_limit: Some(4),
+            stderr_limit: Some(4),
+            timeout: Some(Duration::from_millis(50)),
+            ..Default::default()
+        }).await.unwrap_err();
+        assert!(error.to_string().contains("process timed out"));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn tail_reader_retains_exact_suffix_across_chunks_and_reports_loss() {
+        let input = (0..25000).map(|n| (n % 251) as u8).collect::<Vec<_>>();
+        for limit in [0, 4, 8192, 10000, input.len(), input.len() + 1] {
+            let mut stream = Some(input.as_slice());
+            let mut output = Vec::new();
+            let truncated = read_process_stream(
+                &mut stream,
+                &mut output,
+                Some(limit),
+                ProcessIo::CapturedTail,
+                "stdout",
+            )
+            .await
+            .unwrap();
+            assert_eq!(output, input[input.len().saturating_sub(limit)..]);
+            assert_eq!(truncated, input.len() > limit);
+        }
+    }
+
+    #[tokio::test]
     async fn bounded_reader_accepts_exact_limit_without_retaining_overflow() {
         let mut exact = Some(&b"1234"[..]);
         let mut output = Vec::new();
-        read_process_stream(&mut exact, &mut output, Some(4), "stdout")
-            .await
-            .unwrap();
+        read_process_stream(
+            &mut exact,
+            &mut output,
+            Some(4),
+            ProcessIo::Captured,
+            "stdout",
+        )
+        .await
+        .unwrap();
         assert_eq!(output, b"1234");
         let mut overflow = Some(&b"123456789"[..]);
         output.clear();
         assert!(
-            read_process_stream(&mut overflow, &mut output, Some(4), "stdout")
-                .await
-                .is_err()
+            read_process_stream(
+                &mut overflow,
+                &mut output,
+                Some(4),
+                ProcessIo::Captured,
+                "stdout"
+            )
+            .await
+            .is_err()
         );
         assert!(output.len() <= 4);
     }

@@ -162,6 +162,7 @@ mod tests {
                 .put_file_with_mode(&binary, b"installed".to_vec(), 0o100755);
             runtime.host().queue_process_output(Ok(ProcessOutput {
                 interrupted: false,
+                output_truncated: false,
                 exit_code: Some(0),
                 stdout: b"atuin fixture\n".to_vec(),
                 stderr: Vec::new(),

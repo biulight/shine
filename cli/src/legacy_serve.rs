@@ -288,6 +288,7 @@ mod tests {
     fn queue(host: &InMemoryHost, code: i32, stdout: &str) {
         host.queue_process_output(Ok(ProcessOutput {
             interrupted: false,
+            output_truncated: false,
             exit_code: Some(code),
             stdout: stdout.as_bytes().to_vec(),
             stderr: b"service-manager diagnostic".to_vec(),
@@ -461,6 +462,7 @@ mod tests {
             host.put_file(&registration, b"retain registration".to_vec());
             host.queue_process_output(Ok(ProcessOutput {
                 interrupted: false,
+                output_truncated: false,
                 exit_code: Some(1),
                 stdout: b"ignored stdout".to_vec(),
                 stderr: b"failure\nFORGED\r\t\x1b[31m".to_vec(),

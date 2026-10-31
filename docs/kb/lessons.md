@@ -3670,3 +3670,17 @@ When cutting a release, always diff against the latest stable `v*` tag
   Its unique detection alias prevents ambient Homebrew Atuin from masking the failure. Memory-host
   tests cover missing/non-executable files and newly installed Ubuntu/Homebrew/WinGet commands
   without refreshing the captured PATH.
+
+## 2026-10-31 — Installer log limits interrupted package configuration
+
+- **Symptom**: Ubuntu Yazi bootstrap failed with `process stdout exceeded configured limit`,
+  leaving APT dependencies unpacked but unconfigured and ImageMagick requiring reinstallation.
+- **Root cause**: the 64 KiB diagnostic retention budget also acted as a fatal process output
+  limit, killing APT during an otherwise normal large dependency installation.
+- **Fix**: Sys installers explicitly retain bounded stream tails while continuing to drain;
+  truncation remains visible and actual exit status determines success. Detection and generator
+  output keep their strict limits; timeout, cancellation and process-group cleanup remain intact.
+- **Regression**: real installer scripts exceed the budget on either stream, finish a marker write,
+  and preserve success/failure plus the final diagnostic; reader tests cover chunk and zero limits.
+- **Rule**: distinguish a diagnostic retention budget from a protocol output limit. Do not kill
+  mutating installers merely because their normal logs exceed the retained diagnostic window.
