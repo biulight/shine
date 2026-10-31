@@ -375,7 +375,10 @@ bugs. Check this list before changing the modules named in each entry.
   installed or sourced Shell commands; Sys scripts; and executable profile integrations are marked
   unisolated from typed entry semantics regardless of permission-table presence. Plans separate
   derived operation capabilities, author statements, and code-boundary/trust records. Built-in code
-  uses distribution provenance but carries the same unisolated warning. External Shell live
+  uses distribution provenance. Default CLI review shows source, timing and trust without generic
+  execution disclaimers or the opaque unrestricted marker; detailed review retains the complete
+  permission and author statements (ADR 0159). Rendering never changes the Plan or approval.
+  External Shell live
   deployment requires development trust; snapshot trust permits only snapshot delivery. A shared
   category snapshot replacement includes every installed dependent command as a selected or
   shared-resource-affected code boundary, and each affected external target needs one-time human consent or matching trust before

@@ -6,6 +6,7 @@ use shine_core::plan::{
 pub(in crate::lifecycle_plan) fn render_code_boundaries(
     plan: &PlanV1,
     indent: &str,
+    verbose: bool,
 ) -> Vec<String> {
     if plan.code_boundaries.is_empty() {
         return Vec::new();
@@ -44,10 +45,28 @@ pub(in crate::lifecycle_plan) fn render_code_boundaries(
             CodeTargetRoleV2::Selected => "selected target",
             CodeTargetRoleV2::SharedResourceAffected => "affected by shared code",
         };
-        lines.push(format!(
-            "{indent}  - {} · {role} · {kind} · {timing} · {source} · {trust}",
-            escape_controls(&boundary.target)
-        ));
+        if verbose {
+            lines.push(format!(
+                "{indent}  - {} · {role} · {kind} · {timing} · {source} · {trust}",
+                escape_controls(&boundary.target)
+            ));
+        } else {
+            let role = match boundary.target_role {
+                CodeTargetRoleV2::Selected => "",
+                CodeTargetRoleV2::SharedResourceAffected => " · affected by shared code",
+            };
+            let source = match boundary.source {
+                CodeSourceV2::ShineDistribution => "built-in",
+                CodeSourceV2::ExternalOrOverlay => "external/overlay",
+            };
+            lines.push(format!(
+                "{indent}  - {} · {timing} · {source} · {trust}{role}",
+                escape_controls(&boundary.target)
+            ));
+        }
+    }
+    if !verbose {
+        return lines;
     }
     lines.push(format!(
         "{indent}  {}",

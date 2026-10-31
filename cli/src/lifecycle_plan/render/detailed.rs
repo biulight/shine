@@ -74,7 +74,7 @@ pub(in crate::lifecycle_plan) fn render_plan_lines_with_steps(
         ));
         lines.extend(stale_app_source_guidance(step, "      "));
     }
-    lines.extend(render_code_boundaries(plan, "  "));
+    lines.extend(render_code_boundaries(plan, "  ", true));
     lines.push(format!("  {}", crate::colors::bold("Required permissions")));
     if plan.permissions.required.is_empty() {
         lines.push(format!("    {}", crate::colors::dim("- none")));

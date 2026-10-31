@@ -75,7 +75,10 @@ shine shell uninstall proxy
 shine shell uninstall utils/shine-env-export
 ```
 
-非 dry-run 的 install、uninstall 以及 `shine upgrade` 会显示计划改动和所需权限。确认默认是 No；
+非 dry-run 的 install、uninstall 以及 `shine upgrade` 会显示计划改动、代码来源和信任状态。
+安装内置命令（如 `shine install utils`）时，显示发行版信任，不再附带通用脚本警告。
+Plan 会区分交付后使用的代码和操作期间执行的代码。使用 `--verbose` 查看完整权限和作者说明。
+确认默认是 No；
 自动化必须传入 `--yes`，但 Plan 与安全检查仍会执行。`--dry-run` 是独立预览，不能与 `--yes`
 组合。
 

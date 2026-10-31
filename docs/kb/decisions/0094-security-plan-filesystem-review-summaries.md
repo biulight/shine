@@ -26,8 +26,10 @@ continues to preserve target-local versus shared scope attribution.
 Only uniquely attributed, non-executable filesystem effects in ready, non-recovery Plans are
 summarized. User resources, missing/conflicting attribution and groups containing unplanned
 permissions remain explicit. Recovery and blocked Plans show every permission path. CLI rendering
-never infers ownership from `shine:` or a filename suffix. Steps with exceptional diagnostics, author statements,
-code boundaries, administrator access and non-filesystem capabilities remain visible.
+never infers ownership from `shine:` or a filename suffix. Steps with exceptional diagnostics,
+code sources/timing/trust, administrator access and concrete non-filesystem capabilities remain
+visible. [ADR 0159](0159-concise-default-code-review.md) moves author statements and the abstract
+opaque-code marker to detailed review; missing declarations remain visible in every layout.
 
 Within each displayed scope, the CLI merges Shell command installation effects using typed code
 boundaries, shows profile installation as Shell integration, and combines internal maintenance and

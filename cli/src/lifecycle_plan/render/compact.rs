@@ -107,7 +107,7 @@ pub(in crate::lifecycle_plan) fn render_compact_plan_lines(
             crate::colors::bold_cyan(request.section_label())
         ));
         lines.extend(render_compact_steps(plan));
-        lines.extend(render_code_boundaries(plan, "    "));
+        lines.extend(render_code_boundaries(plan, "    ", false));
         lines.extend(render_compact_permissions(plan));
     }
     if !warnings.is_empty() {

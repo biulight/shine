@@ -728,6 +728,93 @@ mod tests {
         builder.finish()
     }
 
+    #[tokio::test]
+    async fn built_in_utils_review_is_concise_without_changing_approval() {
+        use shine_core::runtime::{
+            InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
+        };
+        let home = std::env::temp_dir().join("shine-utils-review");
+        let mut context = RuntimeContext::isolated(
+            home.clone(),
+            home.join(".shine"),
+            home.join(".shine/presets"),
+            home.join(".shine/bin"),
+            RuntimePlatform::Linux,
+        );
+        context.shell = shine_core::runtime::ShellType::Bash;
+        context.shell_config_paths = vec![home.join(".bashrc")];
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            context,
+            capture_embedded_preset_snapshot(crate::core_runtime::embedded_preset_files()),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("utils".into()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert_eq!(plan.code_boundaries.len(), 3);
+        assert!(plan.code_boundaries.iter().all(|entry| {
+            entry.source == CodeSourceV2::ShineDistribution
+                && entry.trust == CodeTrustStateV2::Distribution
+                && entry.timing == CodeTimingV2::DeliverForLater
+        }));
+        assert!(plan.author_capabilities.contains(&PermissionV1::Command {
+            program: "shine".into(),
+        }));
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let planned = vec![(LifecyclePlanRequest::Shell(request), plan)];
+        let compact = render_compact_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        for expected in [
+            "shell/utils/copyfile",
+            "shell/utils/shine-env-export",
+            "shell/utils/shine-theme-sync",
+            "built-in",
+            "distribution trust",
+            "delivered for later execution/source",
+            "~/.bashrc",
+            "backups for",
+            "Planned effects",
+        ] {
+            assert!(compact.contains(expected), "missing {expected}: {compact}");
+        }
+        for omitted in [
+            "unisolated code",
+            "does not intercept",
+            "Author capability statement",
+            "opaque Preset code",
+            "unrestricted effects",
+            "shell_cache_replace_transaction",
+            "Required permissions",
+        ] {
+            assert!(
+                !compact.contains(omitted),
+                "unexpected {omitted}: {compact}"
+            );
+        }
+        let verbose = render_plan_lines(&planned[0].1, "config")
+            .unwrap()
+            .join("\n");
+        for expected in [
+            "Author capability statement",
+            "command shine",
+            "unrestricted effects",
+            "shell_cache_replace_transaction",
+            "Fingerprint",
+        ] {
+            assert!(verbose.contains(expected), "missing {expected}: {verbose}");
+        }
+        assert_eq!(serde_json::to_value(&planned[0].1).unwrap(), before);
+        assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
+    }
+
     #[test]
     fn confirmation_mentions_external_code_only_when_listed() {
         use shine_core::plan::CodeBoundaryV2;
@@ -955,6 +1042,9 @@ mod tests {
         let rendered = render_bootstrap_plan_lines(&plan, "missing", false)
             .unwrap()
             .join("\n");
+        assert!(!rendered.contains("Author capability statement"));
+        assert!(!rendered.contains("unisolated code"));
+        assert!(!rendered.contains("unrestricted effects"));
         assert!(rendered.contains("Shared changes"));
         assert!(rendered.contains("Installation state and recovery files"));
         assert!(!rendered.contains("shine:sys-manifest.toml"));
@@ -1885,7 +1975,8 @@ mod tests {
         author[0].1.author_capabilities = PermissionSetV1::new([PermissionV1::Network {
             scope: NetworkScopeV1::Any,
         }]);
-        assert!(render(&author).contains("Author capability statement (unverified)"));
+        assert!(render(&author).contains("App Configs"));
+        assert!(!render(&author).contains("Author capability statement (unverified)"));
         let mut unknown = planned.clone();
         unknown[0].1.steps[1]
             .diagnostic_codes
@@ -2412,7 +2503,6 @@ mod tests {
                 "future_permission_diagnostic",
                 "Code execution and trust",
                 "trust missing or stale",
-                "unisolated code",
             ] {
                 assert!(text.contains(required), "missing {required}: {text}");
             }

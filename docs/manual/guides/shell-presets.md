@@ -88,7 +88,10 @@ shine shell uninstall proxy
 shine shell uninstall utils/shine-env-export
 ```
 
-Non-dry-run install and uninstall, plus `shine upgrade`, show the planned changes and permissions.
+Non-dry-run install and uninstall, plus `shine upgrade`, show planned changes, code sources, and
+trust status. For built-in commands such as `shine install utils`, distribution trust is shown
+without generic script warnings. The Plan distinguishes code installed for later use from code
+executed during the operation. Use `--verbose` for full permissions and author statements.
 Confirmation defaults to No; automation must pass `--yes`, while the Plan and safety checks still
 run. `--dry-run` remains a separate preview and cannot be combined with `--yes`.
 

@@ -14,27 +14,11 @@ pub(in crate::lifecycle_plan) fn render_compact_permissions(plan: &PlanV1) -> Ve
     {
         return Vec::new();
     }
-    let mut lines = vec![format!(
-        "    {}",
-        crate::colors::bold("Required permissions")
-    )];
-    if plan.permissions.required.is_empty() {
-        lines.push(format!("      {}", crate::colors::dim("- none")));
-    } else {
-        lines.extend(render_permission_summary(
-            plan,
-            &plan.permissions.required,
-            "      ",
-        ));
-    }
-    if !plan.author_capabilities.is_empty() {
-        lines.push(format!(
-            "    {}",
-            crate::colors::bold("Author capability statement (unverified)")
-        ));
-        for permission in plan.author_capabilities.iter() {
-            lines.push(format!("      - {}", permission_name(permission)));
-        }
+    let effects = render_permission_summary(plan, &plan.permissions.required, "      ");
+    let mut lines = Vec::new();
+    if !effects.is_empty() {
+        lines.push(format!("    {}", crate::colors::bold("Planned effects")));
+        lines.extend(effects);
     }
     if !plan.permissions.missing_declarations.is_empty() {
         lines.push(format!(
@@ -97,6 +81,11 @@ pub(in crate::lifecycle_plan) fn render_permission_summary(
     let mut summaries = BTreeMap::<String, Summary>::new();
     let mut recovery_targets = BTreeSet::new();
     for permission in required.iter() {
+        // Code source, timing and trust are reviewed separately. Keep the marker
+        // in the Plan and verbose review, not as an apparent runtime permission.
+        if matches!(permission, PermissionV1::OpaqueCode { .. }) {
+            continue;
+        }
         let (group, value) = permission_group(permission);
         let associations = plan
             .filesystem_review
