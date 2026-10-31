@@ -201,7 +201,8 @@ async fn installed_rust_bootstrap_delivers_cargo_path_on_each_platform() {
         }
         for operation in runtime.host().operations() {
             if let HostOperation::Run { program, args } = operation {
-                assert_eq!(program, rustup.to_string_lossy());
+                // Windows accepts both separators; compare path components, not spelling.
+                assert_eq!(std::path::Path::new(&program), rustup.as_path());
                 assert_eq!(args, ["--version"], "must not reinstall Rust");
             }
         }

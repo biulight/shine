@@ -1835,6 +1835,10 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
   coverage on every host, with explicit shell, provider, privilege, and shared-write expectations.
 - **Rule**: isolate filesystem I/O and choose host-compatible fixtures independently. Do not weaken
   runtime path validation or drop Windows rendering coverage to accommodate a foreign OS fixture.
+- **2026-10-31 follow-up**: the Rust bootstrap matrix compared process paths as strings and failed
+  on Windows when `join` produced mixed `/` and `\` separators. Compare `Path` values for native
+  command identity; keep exact argv and no-reinstallation assertions. Simulated runtime platforms
+  still use the test host's path grammar.
 
 ## 2026-09-13 — Empty permission sets did not imply missing declarations (superseded by ADR 0091)
 
