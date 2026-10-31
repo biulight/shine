@@ -3613,3 +3613,15 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Regression**: snapshot/live missing-file inspection preserves files, receipts and trust;
   long-line review shows both suffixes, rejection preserves policy bytes, nonce reuse fails,
   and fresh approval stores the original unescaped source path.
+
+## 2026-10-31 — Atuin setup prompts can hide behind bootstrap output capture
+
+- **Symptom**: Ubuntu bootstrap appeared stuck at Atuin even though its binary was installed.
+- **Cause**: the upstream setup script read `/dev/tty` for post-install setup while Shine buffered
+  stdout/stderr. Inheriting stdin does not make a captured prompt visible; piping a script to `sh`
+  does not disable its explicit terminal reads.
+- **Fix**: pass `--non-interactive` to the built-in Atuin setup invocation. History import and account
+  setup remain explicit user actions. Keep sequential execution, the 30-minute installer timeout,
+  and stop-on-first-failure behavior.
+- **Regression**: an isolated fake download exercises the actual preset through Bash, requiring the
+  non-interactive argument and preserving download and installer failures without network access.
