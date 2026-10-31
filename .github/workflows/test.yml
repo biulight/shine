@@ -15,7 +15,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
       - name: Install Rust and Bun with mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@v5
         with:
           version: 2026.10.25
       - name: Install TypeScript dependencies
@@ -65,7 +65,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
       - name: Install Rust and Bun with mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@v5
         with:
           version: 2026.10.25
           install_args: rust bun
