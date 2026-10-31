@@ -3684,3 +3684,15 @@ When cutting a release, always diff against the latest stable `v*` tag
   and preserve success/failure plus the final diagnostic; reader tests cover chunk and zero limits.
 - **Rule**: distinguish a diagnostic retention budget from a protocol output limit. Do not kill
   mutating installers merely because their normal logs exceed the retained diagnostic window.
+
+## 2026-11-01 — Release installer PATH hints target the login shell
+
+- **Symptom**: the Unix installer printed a PATH assignment without a copyable persistence
+  command, leaving users to locate and edit their shell configuration.
+- **Rule**: `curl ... | sh` identifies the installer interpreter, not the user's shell. Label
+  Bash/Zsh hints using `SHELL`, leave other shells to manual setup, and resolve `ZDOTDIR` in the
+  user's Zsh when the command is pasted. Print commands without editing profiles automatically.
+- **Coverage**: `python3 scripts/test-install-path-hints.py` runs the installer with a local
+  archive and executes Bash/Zsh hints in temporary homes, checking literal special characters,
+  preservation of existing config and repeated execution. Fish must receive manual setup guidance
+  without a generated command or automatic profile writes.
