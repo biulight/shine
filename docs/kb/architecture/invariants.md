@@ -421,7 +421,9 @@ bugs. Check this list before changing the modules named in each entry.
   SGR color/intensity sequences, tracks stdout/stderr independently and resets styles before the
   next row. Live progress may redraw only its current row using CLI-authored controls, reserving
   the terminal's final column and keeping the complete source label visible. Normal logs, outcomes
-  and error/cancellation cleanup commit pending rows. Redirected output is append-only; NO_COLOR
+  and error/cancellation cleanup commit pending rows. Terminal log rows explicitly return to
+  column zero even when a child disables output processing; invisible partial fragments preserve
+  a pending progress replacement. Redirected output is append-only; NO_COLOR
   suppresses styles without disabling single-line progress on a capable TTY. Detection and generators retain strict overflow failure.
   Timeout, I/O failure, or strict overflow kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
   terminated too, including when the run Future is cancelled. A drop guard retains the group ID

@@ -72,7 +72,8 @@ be delayed by the installer's own buffering.
 Installer colors and bold text are preserved on color-capable terminals. Set `NO_COLOR=1` to
 disable them; redirected logs are plain text. Explicit `CARGO_TERM_COLOR` settings are respected.
 Labels stay aligned and independent of installer styles. On an interactive terminal, single-line
-progress updates refresh in place. Normal logs remain visible, and long live rows are clipped to
+progress updates refresh in place. Completed logs start on their own lines, including while an
+installer changes terminal modes or replaces a Cargo progress row. Long live rows are clipped to
 the current terminal width. Redirected output and `TERM=dumb` use ordinary log lines. Multi-line
 progress panels and full-screen installer interfaces are not emulated.
 

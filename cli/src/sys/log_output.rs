@@ -26,6 +26,7 @@ pub(super) struct InstallerOutput {
 }
 
 struct Surface {
+    terminal: bool,
     dynamic: bool,
     color: bool,
     columns: usize,
@@ -34,6 +35,7 @@ struct Surface {
 impl Surface {
     fn current() -> Self {
         Self {
+            terminal: std::io::stdout().is_terminal(),
             dynamic: std::io::stdout().is_terminal()
                 && std::env::var("TERM").as_deref() != Ok("dumb"),
             color: installer_color_enabled(),
@@ -61,6 +63,7 @@ impl InstallerOutput {
         surface: &Surface,
     ) -> io::Result<()> {
         let surface = &Surface {
+            terminal: surface.terminal,
             dynamic: surface.dynamic
                 && surface.columns > console::measure_text_width(update.item) + 8,
             color: surface.color,
@@ -120,7 +123,11 @@ impl InstallerOutput {
         } else {
             self.commit(writer, index, surface)?;
         }
-        self.streams[index].replace = update.code == "sys_bootstrap_installer_progress";
+        // Invisible partial fragments (e.g. Cargo's split erase/SGR) must not
+        // consume a preceding CR. Visible text or completion consumes it above.
+        if update.code == "sys_bootstrap_installer_progress" {
+            self.streams[index].replace = true;
+        }
         Ok(())
     }
 
@@ -160,7 +167,10 @@ impl InstallerOutput {
         if self.active.is_some() {
             write!(writer, "\r\x1b[2K")?;
         }
-        writeln!(writer, "{}", self.row(index))?;
+        // Installers can disable OPOST on our shared terminal through stdin.
+        // Keep append-only terminals aligned too; redirected logs retain LF.
+        let ending = if surface.terminal { "\r\n" } else { "\n" };
+        write!(writer, "{}{ending}", self.row(index))?;
         self.streams[index].pending.clear();
         if self.active == Some(index) {
             self.active = None;
@@ -395,8 +405,130 @@ mod tests {
     }
 
     #[test]
+    fn control_only_fragments_preserve_progress_replacement() {
+        let surface = Surface {
+            terminal: true,
+            dynamic: true,
+            color: true,
+            columns: 289,
+        };
+        // Cargo writes a padded progress row + CR, then erase-line and a status.
+        // Timer flushes may split the erase or SGR sequence into empty fragments.
+        for fragments in [vec!["\x1b[K"], vec!["\x1b[", "K", "\x1b[1m", "\x1b[92m"]] {
+            let mut output = InstallerOutput::default();
+            let mut bytes = Vec::new();
+            output
+                .update(
+                    &mut bytes,
+                    event(
+                        "stderr",
+                        "Building 139/686: futures-sink    ",
+                        "sys_bootstrap_installer_progress",
+                    ),
+                    &surface,
+                )
+                .unwrap();
+            for fragment in fragments {
+                output
+                    .update(
+                        &mut bytes,
+                        event("stderr", fragment, "sys_bootstrap_installer_partial"),
+                        &surface,
+                    )
+                    .unwrap();
+            }
+            bytes.clear();
+            output
+                .update(
+                    &mut bytes,
+                    event(
+                        "stderr",
+                        "Compiling powerfmt v0.2.0",
+                        "sys_bootstrap_installer",
+                    ),
+                    &surface,
+                )
+                .unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(!text.contains("Building"), "{text:?}");
+            assert!(text.contains("Compiling powerfmt v0.2.0"));
+        }
+    }
+
+    #[test]
+    fn terminal_lines_return_to_column_zero_without_output_processing() {
+        // Cover capable, narrow and TERM=dumb-like terminal surfaces.
+        for (dynamic, columns) in [(true, 80), (true, 5), (false, 80)] {
+            let surface = Surface {
+                terminal: true,
+                dynamic,
+                color: false,
+                columns,
+            };
+            let mut output = InstallerOutput::default();
+            let mut bytes = Vec::new();
+            for text in ["Selecting package", "Unpacking package"] {
+                output
+                    .update(
+                        &mut bytes,
+                        event("stdout", text, "sys_bootstrap_installer"),
+                        &surface,
+                    )
+                    .unwrap();
+            }
+            assert_eq!(
+                bytes,
+                b"    [yazi] Selecting package\r\n    [yazi] Unpacking package\r\n"
+            );
+            #[cfg(unix)]
+            {
+                use std::{
+                    fs::File,
+                    io::Read,
+                    os::fd::{AsRawFd, FromRawFd},
+                };
+                let (mut master, mut slave) = (-1, -1);
+                // SAFETY: valid output pointers; null arguments request default PTY settings.
+                assert_eq!(
+                    unsafe {
+                        libc::openpty(
+                            &mut master,
+                            &mut slave,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        )
+                    },
+                    0
+                );
+                // SAFETY: openpty returned distinct owned file descriptors.
+                let (mut master, mut slave) =
+                    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) };
+                let mut mode = std::mem::MaybeUninit::uninit();
+                // SAFETY: tcgetattr initializes mode on success.
+                assert_eq!(
+                    unsafe { libc::tcgetattr(slave.as_raw_fd(), mode.as_mut_ptr()) },
+                    0
+                );
+                let mut mode = unsafe { mode.assume_init() };
+                mode.c_oflag &= !libc::OPOST;
+                // SAFETY: mode is initialized and the slave fd remains open.
+                assert_eq!(
+                    unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &mode) },
+                    0
+                );
+                slave.write_all(&bytes).unwrap();
+                let mut received = vec![0; bytes.len()];
+                master.read_exact(&mut received).unwrap();
+                assert_eq!(received, bytes);
+            }
+        }
+    }
+
+    #[test]
     fn progress_rewrites_current_row_and_commits_before_results() {
         let surface = Surface {
+            terminal: true,
             dynamic: true,
             color: false,
             columns: 40,
@@ -430,13 +562,14 @@ mod tests {
         output.finish_on(&mut bytes, &surface).unwrap();
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains("\r\x1b[2K    [yazi] 20%"));
-        assert!(text.ends_with("    [yazi] 20%\n"));
+        assert!(text.ends_with("    [yazi] 20%\r\n"));
         assert_eq!(text.matches('\n').count(), 1);
     }
 
     #[test]
     fn control_only_suffix_does_not_lose_the_last_progress_or_its_newline() {
         let surface = Surface {
+            terminal: true,
             dynamic: true,
             color: true,
             columns: 80,
@@ -464,13 +597,18 @@ mod tests {
                 &surface,
             )
             .unwrap();
-        assert!(String::from_utf8(bytes).unwrap().ends_with("10%\x1b[0m\n"));
+        assert!(
+            String::from_utf8(bytes)
+                .unwrap()
+                .ends_with("10%\x1b[0m\r\n")
+        );
         assert!(output.active.is_none());
     }
 
     #[test]
     fn normal_stderr_logs_do_not_overwrite_stdout_progress() {
         let surface = Surface {
+            terminal: true,
             dynamic: true,
             color: true,
             columns: 60,
@@ -504,15 +642,16 @@ mod tests {
             .unwrap();
         let text = String::from_utf8(bytes).unwrap();
         assert!(
-            text.contains("    [yazi] warning\x1b[0m\n\r\x1b[2K    [yazi] \x1b[31mDownloading")
+            text.contains("    [yazi] warning\x1b[0m\r\n\r\x1b[2K    [yazi] \x1b[31mDownloading")
         );
-        assert!(text.ends_with("    [yazi] \x1b[31mdone\x1b[0m\x1b[0m\n"));
+        assert!(text.ends_with("    [yazi] \x1b[31mdone\x1b[0m\x1b[0m\r\n"));
         assert!(output.active.is_none());
     }
 
     #[test]
     fn redirected_output_is_plain_append_only_and_large_prompts_are_bounded() {
         let surface = Surface {
+            terminal: false,
             dynamic: false,
             color: false,
             columns: 10,
@@ -534,6 +673,7 @@ mod tests {
             "    [yazi] 10%\n    [yazi] 20%\n"
         );
         let surface = Surface {
+            terminal: true,
             dynamic: true,
             color: false,
             columns: 80,
@@ -559,6 +699,7 @@ mod tests {
     #[test]
     fn live_rows_clip_wide_text_and_colors_on_resize_and_preserve_crlf_completion() {
         let mut surface = Surface {
+            terminal: true,
             dynamic: true,
             color: true,
             columns: 22,
@@ -671,6 +812,7 @@ mod tests {
                     code: "sys_bootstrap_installer",
                 },
                 &Surface {
+                    terminal: false,
                     dynamic: false,
                     color: false,
                     columns: 80,

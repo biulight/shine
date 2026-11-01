@@ -3737,3 +3737,16 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Regression**: an isolated PTY executes a probe that accesses `/dev/tty`; a stalled real process
   verifies timeout fallback. PTY tests must verify access to their own controlling terminal before
   testing isolation, because a sandbox denial can otherwise make broken isolation appear correct.
+
+## 2026-11-01 — Installer rendering must survive terminal modes and empty fragments
+
+- **Symptoms**: apt logs drifted diagonally; Cargo occasionally appended `Compiling` after a
+  padded `Building` row. Captured child and CLI writes confirmed two independent failures.
+- **Causes**: apt temporarily disables terminal output processing through inherited stdin, so LF
+  alone no longer returns to column zero. Separately, a timed control-only partial fragment
+  cleared the pending CR replacement flag before the next visible Cargo status arrived.
+- **Fix**: explicitly use CRLF for terminal log rows (including dumb/narrow terminals), retain LF
+  for redirected output, and preserve replacement across invisible partial fragments until visible
+  text or line completion consumes it. Do not forward child cursor/erase commands.
+- **Coverage**: replay fragmented Cargo erase/style sequences, preserve control-only EOF commits,
+  and exercise completed rows on an isolated Unix PTY with output processing disabled.
