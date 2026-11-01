@@ -80,6 +80,10 @@ Shine enables Cargo's single-line progress on supported terminals, respecting ex
 `CARGO_TERM_PROGRESS_WHEN` and `CARGO_TERM_PROGRESS_WIDTH` settings. Other installers may still
 suppress progress when their output is captured.
 
+Optional command-version checks run non-interactively and wait at most 3 seconds. If a version
+check fails or times out, Shine still recognizes the executable as installed and uses its path
+instead of version details.
+
 Installers may prompt for terminal input. Follow the current item's instructions and wait for it to
 finish before starting another operation.
 

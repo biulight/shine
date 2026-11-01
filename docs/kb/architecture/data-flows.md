@@ -1244,7 +1244,9 @@ Every executable sys manifest declares `version = 2`. Each init item has both `[
 provider argv or one per-item script, limits runtime and retained logs, detects again, and produces the
 canonical `sys/<item>` outcome. Installers drain both streams to bounded 64 KiB tails, report
 truncation, and preserve their exit status even when logs overflow; detection retains strict output
-limits (ADR 0161). A bounded Host output channel also forwards installer chunks to Core line events
+limits (ADR 0161). Optional version probes time out after 3 seconds and run without a Unix
+controlling terminal; errors retain command presence and fall back to its path. Installers keep
+their existing foreground terminal handoff. A bounded Host output channel also forwards installer chunks to Core line events
 while the process runs. Core distinguishes LF/CRLF completion, bare-CR progress and bounded partial
 fragments, flushes partial prompts and emits periodic presentation ticks;
 CLI tags child output by item and its own status with `[shine]`, without replaying the

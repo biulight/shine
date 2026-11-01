@@ -66,6 +66,9 @@ shine sys bootstrap --proxy --dry-run
 Shine 会在支持的终端上启用 Cargo 单行进度，并尊重显式设置的 `CARGO_TERM_PROGRESS_WHEN`
 和 `CARGO_TERM_PROGRESS_WIDTH`。其他安装器仍可能因为输出被捕获而关闭进度显示。
 
+可选的命令版本检测以非交互方式运行，最多等待 3 秒。检测失败或超时时，Shine 仍将已找到的
+可执行文件视为已安装，并使用其路径代替版本详情。
+
 安装器可能要求终端输入，请按当前项目的提示操作，等待结束后再开始另一项操作。
 
 Ubuntu 内置的 Atuin 安装器以非交互模式运行。即使当前 Shell 尚未加载新的 PATH，Shine

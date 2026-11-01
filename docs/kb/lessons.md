@@ -3722,3 +3722,18 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Regression**: offline script fixtures retain download/installer failures and enforce the
   target home/no-shell-write options. Approved first-install fixtures verify immediate detection,
   receipts, Bash/Zsh activation and repeat runs; a successful script without a binary still fails.
+
+
+## 2026-11-01 — Version probes can stop on controlling-terminal access
+
+- **Symptom**: Sys bootstrap waited indefinitely for `yazi --version`, although the same command
+  returned immediately from an interactive shell.
+- **Cause**: Yazi opened `/dev/tty` and set terminal attributes even during version output. The
+  bounded child had a separate background process group but retained the controlling terminal,
+  allowing job control to stop it. Optional version probes had output limits but no timeout.
+- **Fix**: impose a 3-second probe timeout and explicitly create a new Unix session, without a
+  preceding `setpgid`. Keep group cleanup and executable-path fallback on probe failure; installers
+  retain foreground terminal handoff and their existing timeout.
+- **Regression**: an isolated PTY executes a probe that accesses `/dev/tty`; a stalled real process
+  verifies timeout fallback. PTY tests must verify access to their own controlling terminal before
+  testing isolation, because a sandbox denial can otherwise make broken isolation appear correct.

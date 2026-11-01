@@ -190,6 +190,9 @@ pub struct ProcessRequest {
     pub env: BTreeMap<String, String>,
     pub stdin: Vec<u8>,
     pub inherit_stdin: bool,
+    /// Start a new Unix session without a controlling terminal.
+    /// Incompatible with inherited stdin; other platforms already lack Unix job control.
+    pub detach_terminal: bool,
     pub timeout: Option<Duration>,
     pub io: ProcessIo,
     pub stdout_limit: Option<usize>,
@@ -606,6 +609,10 @@ impl RealHost {
         output: Option<tokio::sync::mpsc::Sender<ProcessOutputChunk>>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
         Box::pin(async move {
+            anyhow::ensure!(
+                !(request.detach_terminal && request.inherit_stdin),
+                "detached terminal cannot inherit stdin"
+            );
             let mut command = tokio::process::Command::new(&request.program);
             command
                 .args(&request.args)
@@ -630,13 +637,29 @@ impl RealHost {
             if let Some(cwd) = &request.cwd {
                 command.current_dir(cwd);
             }
-            let bounded = request.timeout.is_some()
+            let bounded = request.detach_terminal
+                || request.timeout.is_some()
                 || request.stdout_limit.is_some()
                 || request.stderr_limit.is_some();
             #[cfg(unix)]
             if bounded {
                 use std::os::unix::process::CommandExt;
-                command.as_std_mut().process_group(0);
+                if request.detach_terminal {
+                    // setsid also creates the process group tracked by ProcessScope.
+                    // Do not call setpgid first: a group leader cannot call setsid.
+                    // SAFETY: setsid is async-signal-safe; no allocation or locking
+                    // occurs in this post-fork closure.
+                    unsafe {
+                        command.as_std_mut().pre_exec(|| {
+                            if libc::setsid() == -1 {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                            Ok(())
+                        });
+                    }
+                } else {
+                    command.as_std_mut().process_group(0);
+                }
             }
             command.kill_on_drop(true);
             let mut child = command.spawn()?;
@@ -1226,7 +1249,9 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_terminates_descendants_even_after_parent_exit() {
-        for parent_exits in [false, true] {
+        for (parent_exits, detach_terminal) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let root = std::env::temp_dir().join(format!("shine-cancel-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let ready = root.join("ready");
@@ -1243,6 +1268,7 @@ mod tests {
                     ready.display().to_string(),
                     marker.display().to_string(),
                 ],
+                detach_terminal,
                 timeout: Some(Duration::from_secs(5)),
                 ..Default::default()
             }));
@@ -1368,24 +1394,27 @@ sys.exit(os.waitstatus_to_exitcode(status))
 
     #[tokio::test]
     async fn timed_process_terminates_its_process_group_before_returning() {
-        let marker = std::env::temp_dir().join(format!(
-            "shine-timeout-process-group-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let script = format!("(sleep 0.3; printf leaked > '{}') & wait", marker.display());
-        let error = RealHost
-            .run(ProcessRequest {
-                program: "sh".to_string(),
-                args: vec!["-c".to_string(), script],
-                timeout: Some(Duration::from_millis(50)),
-                ..ProcessRequest::default()
-            })
-            .await
-            .unwrap_err();
+        for detach_terminal in [false, true] {
+            let marker = std::env::temp_dir().join(format!(
+                "shine-timeout-process-group-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let script = format!("(sleep 0.3; printf leaked > '{}') & wait", marker.display());
+            let error = RealHost
+                .run(ProcessRequest {
+                    program: "sh".to_string(),
+                    args: vec!["-c".to_string(), script],
+                    detach_terminal,
+                    timeout: Some(Duration::from_millis(50)),
+                    ..ProcessRequest::default()
+                })
+                .await
+                .unwrap_err();
 
-        assert!(error.to_string().contains("process timed out"));
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        assert!(tokio::fs::metadata(&marker).await.is_err());
+            assert!(error.to_string().contains("process timed out"));
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            assert!(tokio::fs::metadata(&marker).await.is_err());
+        }
     }
     #[tokio::test]
     async fn output_limits_kill_children_before_later_side_effects() {

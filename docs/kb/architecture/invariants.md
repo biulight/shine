@@ -429,6 +429,9 @@ bugs. Check this list before changing the modules named in each entry.
   inherited output pipes to close. When inherited stdin is the foreground controlling terminal, execution
   lends it to the child group and restores the original group on success, error, timeout, or cancellation.
   Signal masks used for terminal handoff are thread-local and immediately restored.
+  Optional Sys command-version probes have a 3-second timeout and explicitly detach from the
+  controlling terminal on Unix via a new session, retaining process-group cleanup. Probe failure
+  falls back to the executable path, never changes presence or triggers reinstallation.
   A post-capture length check is never a memory bound. Drop piped stdin immediately
   after writing to deliver EOF; Tokio's Unix `ChildStdin::shutdown` alone does not close the pipe.
 - **Runtime file types and paths must remain valid across execution.** RealHost rejects FIFOs,
