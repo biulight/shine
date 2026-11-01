@@ -2,6 +2,124 @@ use shine_core::runtime::{PlanningInputVersions, RuntimePlatform, SysBootstrapPl
 
 #[cfg(unix)]
 #[test]
+fn yazi_apt_installer_uses_signed_stable_packages_and_stops_on_failure() {
+    let root = std::env::temp_dir().join(format!("shine-yazi-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let script = root.join("yazi.sh");
+    std::fs::write(
+        &script,
+        cli::presets::read_embedded_asset_bytes("sys/ubuntu/install/yazi.sh").unwrap(),
+    )
+    .unwrap();
+    for failure in ["", "download", "keyring", "source", "update", "install"] {
+        let home = root.join(if failure.is_empty() {
+            "success"
+        } else {
+            failure
+        });
+        std::fs::create_dir(&home).unwrap();
+        std::fs::create_dir(home.join("tmp")).unwrap();
+        std::fs::write(home.join("keyring"), "previous key").unwrap();
+        std::fs::write(home.join("source"), "previous source").unwrap();
+        let output = std::process::Command::new("/bin/bash")
+            .args(["--noprofile", "--norc", "-c", r#"
+step() {
+    printf '%s\n' "$1" >> "$HOME/calls"
+    [ "$FAILURE" != "$1" ] || return 42
+}
+curl() {
+    [ "$#" = 4 ] && [ "$1" = -fsSL ] &&
+        [ "$2" = https://yazi-rs.github.io/builds/yazi-keyring.gpg ] &&
+        [ "$3" = -o ] || return 91
+    printf 'partial key' > "$4"
+    step download || return $?
+    printf 'fixture key' > "$4"
+}
+sudo() {
+    case "$1" in
+        install)
+            [ "$#" = 5 ] && [ "$2 $3" = '-m 0644' ] &&
+                [ "$5" = /usr/share/keyrings/yazi-keyring.gpg ] || return 92
+            step keyring || return $?
+            command install -m 0644 "$4" "$HOME/keyring" ;;
+        tee)
+            [ "$#" = 2 ] && [ "$2" = /etc/apt/sources.list.d/yazi.list ] || return 93
+            step source || return $?
+            command tee "$HOME/source" ;;
+        apt-get)
+            if [ "$2" = update ]; then
+                [ "$*" = 'apt-get update --error-on=any' ] || return 94
+                step update
+            else
+                [ "$*" = 'apt-get install -y yazi file ffmpeg 7zip jq poppler-utils fd-find ripgrep fzf imagemagick xclip' ] || return 95
+                step install
+            fi ;;
+        *) return 96 ;;
+    esac
+}
+export -f step curl sudo
+umask 077
+/bin/bash "$1" || exit $?
+/bin/bash "$1"
+"#, "yazi-fixture"])
+            .arg(&script)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", &home)
+            .env("TMPDIR", home.join("tmp"))
+            .env("FAILURE", failure)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(if failure.is_empty() { 0 } else { 42 }),
+            "{failure}: {output:?}"
+        );
+        let steps = ["download", "keyring", "source", "update", "install"];
+        let expected = if failure.is_empty() {
+            steps.repeat(2)
+        } else {
+            steps[..=steps.iter().position(|step| *step == failure).unwrap()].to_vec()
+        };
+        assert_eq!(
+            std::fs::read_to_string(home.join("calls"))
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(std::fs::read_dir(home.join("tmp")).unwrap().count(), 0);
+        if failure == "download" {
+            assert_eq!(
+                std::fs::read_to_string(home.join("keyring")).unwrap(),
+                "previous key"
+            );
+            assert_eq!(
+                std::fs::read_to_string(home.join("source")).unwrap(),
+                "previous source"
+            );
+        }
+        if failure.is_empty() {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(home.join("keyring"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o644
+            );
+            assert_eq!(
+                std::fs::read_to_string(home.join("source")).unwrap(),
+                "deb [signed-by=/usr/share/keyrings/yazi-keyring.gpg] https://yazi-rs.github.io/builds/ stable main\n"
+            );
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn atuin_bootstrap_is_non_interactive_and_preserves_failures() {
     let home = std::env::temp_dir().join(format!("shine-atuin-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&home).unwrap();
@@ -55,7 +173,7 @@ async fn built_in_sys_bootstrap_plan_is_ready_for_each_platform() {
         let plan = runtime
             .plan_sys_bootstrap(SysBootstrapPlanRequest {
                 os_id: os_id.to_string(),
-                item_ids: vec!["rust".to_string()],
+                item_ids: vec!["rust".to_string(), "yazi".to_string()],
                 sys_shell: shell.to_string(),
                 force_profile: false,
                 input_versions: PlanningInputVersions::default(),

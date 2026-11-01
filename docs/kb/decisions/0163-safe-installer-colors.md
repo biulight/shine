@@ -24,6 +24,8 @@ or the following Shine result. OSC, DCS, cursor/erase commands, conceal and unsu
 not forwarded. Incomplete sequences survive Core's timed/size fragments; CSI buffering is capped
 at 128 bytes, control strings are discarded without retaining their payload. Item outcomes clear
 parser state. Redirected or NO_COLOR output strips styles as well as terminal commands.
+Literal tabs in text are rendered as four spaces, preserving indentation without forwarding
+terminal tab controls. Literal backslash escape text is unchanged; other controls stay encoded.
 
 The CLI enables an explicit Core runtime cosmetic preference only on a color-capable stdout TTY
 without NO_COLOR or an ambient CARGO_TERM_COLOR override. Core defaults off and injects the

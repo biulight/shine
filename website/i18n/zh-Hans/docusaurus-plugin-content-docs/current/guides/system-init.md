@@ -62,6 +62,7 @@ shine sys bootstrap --proxy --dry-run
 
 支持颜色的终端会保留安装器的颜色和加粗。设置 `NO_COLOR=1` 可关闭；重定向日志时输出纯文本。
 显式设置的 `CARGO_TERM_COLOR` 会得到尊重。标签保持对齐，不受安装器样式影响。
+安装日志中的制表符显示为四个空格，保留清晰的缩进。
 交互终端中的单行进度会原地刷新。完整日志会独立成行，即使安装器临时改变终端模式或替换 Cargo
 进度行也能保持对齐。过长的动态行会按当前终端宽度裁剪。
 重定向输出或设置 `TERM=dumb` 时使用普通日志行。Shine 不模拟多行进度面板或全屏安装界面。
@@ -79,6 +80,10 @@ Ubuntu 内置的 Atuin 安装器以非交互模式运行。即使当前 Shell �
 导入已有历史；需要同步历史时，再运行 `atuin register` 或 `atuin login`。
 Bootstrap 按顺序执行项目，每个安装器最多运行 30 分钟，遇到首个失败或超时的项目便停止。
 实时展示日志的同时，Shine 只保留有限的末尾内容用于诊断；不会仅因日志量过大而中止安装。
+
+Ubuntu 内置的 Yazi 项目通过官方 stable APT 源安装预编译软件包及预览、运行依赖。
+添加仓库密钥和软件源需要管理员权限；安装 Yazi 本身无需 Rust 或 Cargo。
+已有的 Yazi 安装会被检测并跳过，不会自动迁移安装方式。
 
 Ubuntu 内置的 pnpm 项目使用官方独立安装器，无需预先安装 Node.js、npm 或 Corepack。
 安装目录为 `~/.local/share/pnpm`，PATH 配置由 Shine 管理。Bootstrap 完成后，打开新 shell 即可使用 `pnpm`。

@@ -56,8 +56,8 @@ eval = ["atuin", "init", "{shell}"]
 [[items]]
 id = "yazi"
 label = "Yazi"
-description = "Install Yazi plus its preview/runtime dependencies."
-permissions = { schema_version = 1, administrator = true, filesystem = [{ access = ["execute"], base = "preset", path = "install/yazi.sh" }], network = [{ scope = "any" }], commands = ["apt-get", "curl", "sh", "sudo"] }
+description = "Install Yazi from its official stable APT repository plus preview/runtime dependencies."
+permissions = { schema_version = 1, administrator = true, filesystem = [{ access = ["execute"], base = "preset", path = "install/yazi.sh" }], network = [{ scope = "any" }], commands = ["apt-get", "curl", "install", "mktemp", "rm", "sudo", "tee"] }
 
 detect = { kind = "command", command = "yazi", version_args = ["--version"] }
 install = { kind = "script", path = "install/yazi.sh" }

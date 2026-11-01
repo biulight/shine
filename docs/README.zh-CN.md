@@ -72,6 +72,24 @@ cargo binstall shine-cli
 cargo install shine-cli
 ```
 
+### Preview 预览版
+
+macOS 与 Linux：
+
+```bash
+curl -fsSL https://github.com/biulight/shine/releases/download/preview/install.sh | sh
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://github.com/biulight/shine/releases/download/preview/install.ps1 | iex
+```
+
+Preview 的稳定性可能低于正式版，会替换同一安装位置已有的二进制文件。
+已设置的 `SHINE_VERSION` 环境变量会覆盖两个平台安装脚本默认的 preview 选择。
+切回正式版可运行 `shine self upgrade --channel stable`。
+
 支持的预编译平台及安装选项见[安装与升级](https://biulight.github.io/shine/zh-Hans/next/installation)。
 
 开发、测试、规划与发布流程以仓库根目录的 [`README.md`](../README.md)、[`AGENTS.md`](../AGENTS.md)、

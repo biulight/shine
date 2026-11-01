@@ -329,7 +329,10 @@ impl StyledLog {
                             output.push_str(&self.style.ansi());
                         }
                         started = true;
-                        if ch.is_control() {
+                        if ch == '\t' {
+                            // Keep installer indentation without terminal-dependent tab stops.
+                            output.push_str("    ");
+                        } else if ch.is_control() {
                             output.push_str(&ch.escape_debug().to_string());
                         } else {
                             output.push(ch);
@@ -779,6 +782,65 @@ mod tests {
         );
         assert_eq!(log.render("\x1b\\link\x1b]8;;\x1b\\", false), "link");
         assert_eq!(log.render("\x1bPdevice\x1b\\done\r\n", false), "done\\r\\n");
+    }
+
+    #[test]
+    fn installer_tabs_render_as_spaces_without_rewriting_literal_escapes() {
+        for color in [false, true] {
+            let mut log = StyledLog::default();
+            let rendered = log.render("\texecx($(starship init xonsh))", color);
+            assert_eq!(
+                console::strip_ansi_codes(&rendered),
+                "    execx($(starship init xonsh))"
+            );
+            let rendered = log.render("a\t\tb\\t\x07", color);
+            assert_eq!(console::strip_ansi_codes(&rendered), "a        b\\t\\u{7}");
+            assert_eq!(log.render("\x1b]52;c;\tignored\x07", color), "");
+        }
+    }
+
+    #[test]
+    fn tagged_installer_tabs_survive_fragments_on_all_surfaces() {
+        for (terminal, dynamic) in [(false, false), (true, false), (true, true)] {
+            for color in [false, true] {
+                let surface = Surface {
+                    terminal,
+                    dynamic,
+                    color,
+                    columns: 80,
+                };
+                let mut output = InstallerOutput::default();
+                let mut bytes = Vec::new();
+                for (text, code) in [
+                    ("\x1b[32m\t", "sys_bootstrap_installer_partial"),
+                    (
+                        "execx($(starship init xonsh))\x1b[0m",
+                        "sys_bootstrap_installer",
+                    ),
+                ] {
+                    output
+                        .update(
+                            &mut bytes,
+                            Update {
+                                item: "starship",
+                                stream: "stdout",
+                                text,
+                                code,
+                            },
+                            &surface,
+                        )
+                        .unwrap();
+                }
+                output.finish_on(&mut bytes, &surface).unwrap();
+                let rendered = String::from_utf8(bytes).unwrap();
+                let plain = console::strip_ansi_codes(&rendered);
+                assert!(!plain.contains("\\t"));
+                assert!(!plain.contains('\t'));
+                assert!(plain.contains("    [starship]     "));
+                assert!(plain.contains("execx($(starship init xonsh))"));
+                assert!(plain.ends_with(if terminal { "\r\n" } else { "\n" }));
+            }
+        }
     }
 
     #[test]

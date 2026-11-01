@@ -15,6 +15,17 @@ All workflows live in `.github/workflows/`.
 
 Notes:
 
+- `test.yml` runs offline release-installer tests on Linux, macOS, and Windows. These execute
+  the real scripts with local archives and mocked downloads, including preview selection and
+  failure preservation. Unix runners also check the existing shell PATH hints.
+- Both stable and preview releases include `install.sh` and `install.ps1` alongside platform
+  tarballs. The preview workflow generates both installer assets with preview as the default,
+  allowing `curl … | sh` and `irm … | iex` without setting `SHINE_VERSION`. Explicit
+  `SHINE_VERSION` values still override the default. Source and stable installer assets default
+  to latest stable. Preview asset URLs use
+  `preview/shine-preview-<target>.tar.gz`.
+  The preview installer commands become available after the first publication containing them.
+
 - `docs.yml` push/PR path filters cover `docs/manual/**`, `website/**`, and the workflow itself.
   KB-only changes do not trigger the public documentation build or deployment; manual dispatch
   remains available independently of these path filters.

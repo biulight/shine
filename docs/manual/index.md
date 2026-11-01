@@ -14,7 +14,7 @@ harder to maintain over time and leaving you to set them up again on another com
 you manage them in one place. It can also store passwords, access keys, and other sensitive
 information encrypted, then provide it on demand when a selected program runs.
 
-This manual applies to **Shine 2.8.0**. Use the version selector to find the 1.8.x manual.
+This manual applies to **Shine 2.9.0**. Use the version selector to find the 1.8.x manual.
 Before upgrading from 2.7 or earlier, read the [2.8 migration steps](./installation.md#upgrade-to-shine-28).
 Before upgrading from 1.x, read the [upgrade guide](./guides/upgrade-to-2.md).
 

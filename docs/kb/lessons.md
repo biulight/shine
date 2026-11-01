@@ -3750,3 +3750,26 @@ When cutting a release, always diff against the latest stable `v*` tag
   text or line completion consumes it. Do not forward child cursor/erase commands.
 - **Coverage**: replay fragmented Cargo erase/style sequences, preserve control-only EOF commits,
   and exercise completed rows on an isolated Unix PTY with output processing disabled.
+
+## 2026-11-01 — Installer indentation is display whitespace
+
+- **Symptom**: Starship shell setup examples displayed a literal `\t` before each command.
+- **Cause**: the installer text renderer encoded horizontal tabs like other control characters.
+- **Fix**: render real tabs as four spaces only in installer text. Preserve literal backslash
+  sequences and keep terminal commands filtered; captured process output remains unchanged.
+- **Coverage**: assert the reported Xonsh example, consecutive tabs, literal escapes, other
+  controls and discarded control strings, plus fragmented tagged output with and without colors
+  on interactive, append-only terminal and redirected surfaces.
+
+## 2026-11-01 — Prefer Yazi's official Ubuntu binary repository
+
+- **Problem**: the Ubuntu Yazi preset bootstrapped Rust and compiled both crates, although
+  upstream now provides signed stable APT binaries for amd64 and arm64. A reported installation
+  failure lacked retained Cargo diagnostics, so its exact cause is not established.
+- **Fix**: configure the official stable source and install Yazi with the existing preview/runtime
+  dependencies. Download the key fully before replacing it, install it with APT-readable mode,
+  and stop on any index refresh failure. Existing detection, approval and shell integration stay
+  unchanged; an existing Cargo installation is not automatically migrated or removed.
+- **Coverage**: execute the embedded script with offline command fixtures for repeat runs,
+  restrictive umask, download/key/source/update/install failures and temporary-key cleanup.
+- **Source**: [Yazi installation](https://yazi-rs.github.io/docs/installation/#debian-and-ubuntu).
