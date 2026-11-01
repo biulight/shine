@@ -378,7 +378,8 @@ bugs. Check this list before changing the modules named in each entry.
   uses distribution provenance. Default CLI review shows source, timing and trust without generic
   execution disclaimers or the opaque unrestricted marker; detailed review retains the complete
   permission and author statements (ADR 0159). Ordinary built-in Shell installation may use the
-  task summary in ADR 0160 only when typed effects are fully accounted for; exceptions retain
+  task summary in ADR 0160 only when typed effects are fully accounted for. Plain environment
+  requirements remain visible by name; secret requirements and other exceptions retain
   expanded review. Rendering never changes the Plan or approval.
   External Shell live
   deployment requires development trust; snapshot trust permits only snapshot delivery. A shared

@@ -3645,6 +3645,17 @@ When cutting a release, always diff against the latest stable `v*` tag
   discovery and a single Cargo PATH entry. Cross-platform profile inspection is not native Windows
   installer or PowerShell execution evidence.
 
+## 2026-11-01 — Plain environment requirements should not expand an ordinary install review
+
+- **Symptom**: `utils` used the concise install summary while `image-tools` showed the expanded
+  Security Plan despite also delivering built-in commands for later execution.
+- **Cause**: the summary accepted only filesystem requirements and the opaque-code marker;
+  `image-tools` runtime environment mappings triggered the catch-all fallback.
+- **Fix**: summarize plain environment requirements by sorted, deduplicated names. Keep secrets
+  and unrelated capabilities in expanded review without changing Plan data or approval.
+- **Coverage**: embedded-snapshot review and isolated install-handler output cover both categories;
+  a secret requirement sharing a plain variable's name still triggers expanded review.
+
 ## 2026-10-31 — Verify the complete accepted terminal layout
 
 - **Symptom**: removing warnings passed negative substring tests, but the default installation still
@@ -3652,7 +3663,8 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Root cause**: tests checked omitted text without asserting the full output or the install handler's
   separate source banner.
 - **Rule**: compare the complete approved layout, including surrounding output and confirmation;
-  retain separate tests for exceptions and unchanged approval data.
+  include color-enabled, redirected and `NO_COLOR` output so missing styles cannot pass plain-text
+  assertions. Retain separate tests for exceptions and unchanged approval data.
 
 ## 2026-10-31 — Atuin post-install detection must precede shell activation
 

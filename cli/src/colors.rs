@@ -85,6 +85,11 @@ pub fn cyan(s: &str) -> String {
         .to_string()
 }
 
+pub fn blue(s: &str) -> String {
+    s.if_supports_color(Stream::Stdout, |t| t.blue())
+        .to_string()
+}
+
 pub fn status_label(s: &str, sym: &str) -> String {
     match sym {
         "✓" => s

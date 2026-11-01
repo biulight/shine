@@ -46,9 +46,18 @@ Apply? [y/N]
 ```
 
 The commands, changed profile paths, and recovery backup paths reflect the current Plan.
+When commands use non-sensitive environment variables, the summary also lists their names, for
+example when installing `image-tools`:
+
+```text
+  Environment  IMAGE_MAX_HEIGHT, IMAGE_MAX_WIDTH, IMAGE_QUALITY
+```
+
+Variable names appear in blue when color is enabled. Redirected output and `NO_COLOR` use plain text.
+
 Use `--verbose` for cache and state files, exact permissions, author statements, and identities.
-External code, code executed during installation, additional permissions, conflicts, and unfamiliar
-diagnostics retain the expanded review.
+Secret environment variables, external code, code executed during installation, other additional
+permissions, conflicts, and unfamiliar diagnostics retain the expanded review.
 
 Open a new terminal or reload the shell profile after installation. To install completions, run:
 

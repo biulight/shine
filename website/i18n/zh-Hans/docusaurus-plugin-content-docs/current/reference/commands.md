@@ -60,6 +60,7 @@ shine upgrade app/starship
 终端建议的命令在 Unix 上使用 POSIX shell 语法，在 Windows 上使用 PowerShell 语法。
 
 普通内置 Shell 安装使用 Source / Commands / Changes / Backup 摘要，添加 `--verbose` 可展开。
+需要非敏感环境变量时，Environment 行会列出变量名；涉及敏感变量时仍使用展开审阅。
 需要额外审阅的操作仍保留详细信息。
 
 应用变更前，请审阅 Plan 中受影响的文件、计划影响、代码来源和执行时机。内置代码显示发行版

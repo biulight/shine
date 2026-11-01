@@ -96,7 +96,8 @@ bootstrap layouts, permissions, code boundaries and labels. Bootstrap retains it
 and distinct permission formatting; incomplete attribution falls back to the full detailed review.
 Ordinary built-in Shell installation can project a task summary when all concrete effects have
 consistent typed attribution; overlapping maintenance attributions may describe the same cache
-write. Source, commands, user destinations and recovery backup paths stay visible, while exceptions
+write. Source, commands, user destinations and recovery backup paths stay visible. Plain environment
+requirements add a sorted, deduplicated names-only row; secret requirements and other exceptions
 retain expanded review (ADR 0160). No rendering module creates approval or changes the reviewed Plan
 (ADR 0126).
 

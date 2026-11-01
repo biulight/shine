@@ -61,6 +61,7 @@ options before `--` and the name after it, for example `shine app uninstall --dr
 Suggested commands use POSIX shell syntax on Unix and PowerShell syntax on Windows.
 
 Ordinary built-in Shell installs use a Source / Commands / Changes / Backup summary.
+An Environment row lists non-sensitive variable names when needed; secret variables keep the expanded review.
 Use `--verbose` to expand it. Operations requiring additional review keep their detailed information.
 
 Before applying changes, review the Plan's affected files, planned effects, code sources, and

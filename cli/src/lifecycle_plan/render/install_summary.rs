@@ -4,7 +4,8 @@ use crate::lifecycle_plan::LifecyclePlanRequest;
 use crate::output::escape_controls;
 use shine_core::plan::{
     CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2, CodeTrustStateV2,
-    FilesystemAccessV1, FilesystemPurposeV1, PermissionV1, PlanActionV1, PlanOperationV1, PlanV1,
+    EnvironmentSensitivityV1, FilesystemAccessV1, FilesystemPurposeV1, PermissionV1, PlanActionV1,
+    PlanOperationV1, PlanV1,
 };
 use std::collections::BTreeSet;
 
@@ -85,9 +86,17 @@ pub(in crate::lifecycle_plan) fn render_install_summary(
 
     let mut destinations = BTreeSet::new();
     let mut backups = BTreeSet::new();
+    let mut environment = BTreeSet::new();
     for permission in plan.permissions.required.iter() {
         match permission {
             PermissionV1::OpaqueCode { .. } => continue,
+            PermissionV1::Environment {
+                name,
+                sensitivity: EnvironmentSensitivityV1::Plain,
+            } => {
+                environment.insert(name.as_str());
+                continue;
+            }
             PermissionV1::Filesystem {
                 access: FilesystemAccessV1::Write | FilesystemAccessV1::Remove,
                 ..
@@ -155,11 +164,21 @@ pub(in crate::lifecycle_plan) fn render_install_summary(
     }
     let backup_text = display_paths(destinations.intersection(&backups).copied().collect());
     let title = request.target.as_deref().unwrap_or("shell commands");
-    Some(vec![
+    let mut lines = vec![
         crate::colors::bold(&format!("Install · {}", escape_controls(title))),
         "  Source       built-in · Shine distribution".into(),
         format!("  Commands     {}", escape_controls(&commands.join(", "))),
         format!("  Changes      {}", escape_controls(&changes.join("; "))),
+    ];
+    if !environment.is_empty() {
+        lines.push(format!(
+            "  Environment  {}",
+            crate::colors::blue(&escape_controls(
+                &environment.into_iter().collect::<Vec<_>>().join(", ")
+            ))
+        ));
+    }
+    lines.extend([
         format!(
             "  Backup       {}",
             if backup_text.is_empty() {
@@ -169,5 +188,6 @@ pub(in crate::lifecycle_plan) fn render_install_summary(
             }
         ),
         String::new(),
-    ])
+    ]);
+    Some(lines)
 }

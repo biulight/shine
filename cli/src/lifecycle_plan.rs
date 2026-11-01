@@ -866,6 +866,83 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn built_in_image_tools_review_summarizes_plain_environment_without_changing_approval() {
+        use shine_core::plan::EnvironmentSensitivityV1;
+        use shine_core::runtime::{
+            InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
+        };
+        let home = std::env::temp_dir().join("shine-image-tools-review");
+        let mut context = RuntimeContext::isolated(
+            home.clone(),
+            home.join(".shine"),
+            home.join(".shine/presets"),
+            home.join(".shine/bin"),
+            RuntimePlatform::Linux,
+        );
+        context.shell = shine_core::runtime::ShellType::Bash;
+        context.shell_config_paths = vec![home.join(".bashrc")];
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            context,
+            capture_embedded_preset_snapshot(crate::core_runtime::embedded_preset_files()),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("image-tools".into()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let planned = vec![(LifecyclePlanRequest::Shell(request), plan)];
+        let compact = render_compact_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert_eq!(
+            format!("{compact}\n{} [y/N]", confirmation_prompt(&planned)),
+            "Install · image-tools\n  Source       built-in · Shine distribution\n  Commands     img-compress, img-convert, img-resize\n  Changes      install 3 commands; update shell integration and ~/.bashrc\n  Environment  IMAGE_MAX_HEIGHT, IMAGE_MAX_WIDTH, IMAGE_QUALITY\n  Backup       ~/.bashrc\n\nApply? [y/N]"
+        );
+        let verbose = render_plan_lines(&planned[0].1, "config")
+            .unwrap()
+            .join("\n");
+        for name in ["IMAGE_MAX_HEIGHT", "IMAGE_MAX_WIDTH", "IMAGE_QUALITY"] {
+            assert!(verbose.contains(name), "{verbose}");
+        }
+        assert!(verbose.contains("plain"), "{verbose}");
+        assert_eq!(serde_json::to_value(&planned[0].1).unwrap(), before);
+        assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
+
+        // A plain variable must not hide a secret requirement with the same name,
+        // or allow unrelated capabilities into the summary.
+        for permission in [
+            PermissionV1::Environment {
+                name: "IMAGE_QUALITY".into(),
+                sensitivity: EnvironmentSensitivityV1::Secret,
+            },
+            PermissionV1::Network {
+                scope: NetworkScopeV1::Any,
+            },
+            PermissionV1::Command {
+                program: "bun".into(),
+            },
+        ] {
+            let mut exceptional = planned.clone();
+            exceptional[0].1.permissions.required.insert(permission);
+            let before = serde_json::to_value(&exceptional[0].1).unwrap();
+            assert!(render_install_summary(&exceptional).is_none());
+            assert!(
+                render_compact_plan_lines(&exceptional, "config").unwrap()[0]
+                    .contains("Security Plan")
+            );
+            assert_eq!(confirmation_prompt(&exceptional), "Apply this Plan?");
+            assert_eq!(serde_json::to_value(&exceptional[0].1).unwrap(), before);
+        }
+    }
+
     #[test]
     fn confirmation_mentions_external_code_only_when_listed() {
         use shine_core::plan::CodeBoundaryV2;
