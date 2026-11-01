@@ -83,7 +83,7 @@ cargo install shine-cli
 ```
 
 See [installation and upgrades](https://biulight.github.io/shine/next/installation) for supported
-prebuilt targets and installation options.
+prebuilt targets and installation options, including [direct preview installation](https://biulight.github.io/shine/next/installation#install-preview).
 
 ## Development
 

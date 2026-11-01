@@ -64,6 +64,9 @@ function Get-DownloadUrl {
         [string]$Target
     )
 
+    if ($Version -eq 'preview') {
+        return "https://github.com/$ShineRepo/releases/download/preview/shine-preview-$Target.tar.gz"
+    }
     $asset = "shine-v$Version-$Target.tar.gz"
     return "https://github.com/$ShineRepo/releases/download/v$Version/$asset"
 }

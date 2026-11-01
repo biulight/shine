@@ -47,6 +47,29 @@ $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
 $env:SHINE_VERSION = "2.8.0"; .\install.ps1
 ```
 
+## Install preview
+
+To install the rolling preview build directly on macOS or Linux:
+
+```bash
+curl -fsSL https://github.com/biulight/shine/releases/download/preview/install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+irm https://github.com/biulight/shine/releases/download/preview/install.ps1 | iex
+```
+
+These commands install preview to the same destination as stable releases, replacing any existing
+Shine binary there. Both preview installer scripts select preview by default; an existing
+`SHINE_VERSION` environment variable overrides that default. Preview builds are prereleases and may be
+less stable. Check the installed build with `shine --version`.
+
+Update preview with `shine self upgrade --channel preview`, or return to the latest stable release
+with `shine self upgrade --channel stable`. Installing preview does not persist an update-channel
+setting: `shine self upgrade` without a channel still selects stable.
+
 ## Install with cargo-binstall
 
 With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed, download a prebuilt

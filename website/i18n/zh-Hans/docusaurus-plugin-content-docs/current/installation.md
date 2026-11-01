@@ -44,6 +44,28 @@ $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
 $env:SHINE_VERSION = "2.8.0"; .\install.ps1
 ```
 
+## 安装 preview
+
+在 macOS 或 Linux 上直接安装滚动更新的 preview 版本：
+
+```bash
+curl -fsSL https://github.com/biulight/shine/releases/download/preview/install.sh | sh
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://github.com/biulight/shine/releases/download/preview/install.ps1 | iex
+```
+
+这些命令使用与正式版相同的安装位置，并替换该位置已有的 Shine 二进制文件。
+两个平台的 preview 安装脚本均默认安装预览版；如果已设置 `SHINE_VERSION` 环境变量，则以该变量为准。preview 是预发布版本，稳定性可能低于正式版。安装后运行
+`shine --version` 检查版本。
+
+使用 `shine self upgrade --channel preview` 更新预览版，或通过
+`shine self upgrade --channel stable` 切回最新正式版。安装 preview 不会保存更新通道设置：
+不指定通道的 `shine self upgrade` 仍选择正式版。
+
 ## 使用 cargo-binstall 安装
 
 已安装 [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 时，可从官方 GitHub Releases

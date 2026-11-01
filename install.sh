@@ -41,6 +41,10 @@ detect_target() {
 build_download_url() {
   version="$1"
   target="$2"
+  if [ "$version" = "preview" ]; then
+    printf 'https://github.com/%s/releases/download/preview/shine-preview-%s.tar.gz' "$SHINE_REPO" "$target"
+    return
+  fi
   asset="shine-v${version}-${target}.tar.gz"
   printf 'https://github.com/%s/releases/download/v%s/%s' "$SHINE_REPO" "$version" "$asset"
 }

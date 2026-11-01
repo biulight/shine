@@ -59,6 +59,9 @@ jobs:
           path: dist
       - name: Prepare preview release files
         run: |
+          mkdir -p dist/installers
+          python3 scripts/prepare-preview-installer.py dist/installers/install.sh
+          python3 scripts/prepare-preview-installer.py dist/installers/install.ps1
           cat > PREVIEW_BODY.md <<EOF
           Automated preview build from the release branch.
 
@@ -67,6 +70,24 @@ jobs:
           - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
           This prerelease is overwritten daily.
+          EOF
+          cat >> PREVIEW_BODY.md <<'EOF'
+
+          Install on macOS or Linux:
+
+          ```sh
+          curl -fsSL https://github.com/biulight/shine/releases/download/preview/install.sh | sh
+          ```
+
+          Install on Windows PowerShell:
+
+          ```powershell
+          irm https://github.com/biulight/shine/releases/download/preview/install.ps1 | iex
+          ```
+
+          These commands replace any Shine binary at the installation destination.
+          Update with `shine self upgrade --channel preview`; return to stable with
+          `shine self upgrade --channel stable`.
           EOF
           find dist -type f -name 'shine-preview-*.tar.gz' -print
       - name: Delete existing preview release
@@ -83,4 +104,7 @@ jobs:
           make_latest: "legacy"
           overwrite_files: true
           fail_on_unmatched_files: true
-          files: dist/**/*.tar.gz
+          files: |
+            dist/**/*.tar.gz
+            dist/installers/install.sh
+            dist/installers/install.ps1

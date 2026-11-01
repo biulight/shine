@@ -7,6 +7,22 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  release-installers:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify release installers offline
+        run: python3 scripts/test-release-installers.py
+      - name: Verify Unix shell syntax and PATH hints
+        if: runner.os != 'Windows'
+        run: |
+          sh -n install.sh
+          python3 scripts/test-install-path-hints.py
+
   quality:
     runs-on: ubuntu-latest
     steps:
