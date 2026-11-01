@@ -82,6 +82,24 @@ From source on crates.io with Rust 1.90 or later:
 cargo install shine-cli
 ```
 
+### Preview builds
+
+macOS and Linux:
+
+```bash
+curl -fsSL https://github.com/biulight/shine/releases/download/preview/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://github.com/biulight/shine/releases/download/preview/install.ps1 | iex
+```
+
+Preview builds may be less stable and replace the existing binary at the same installation
+location. An existing `SHINE_VERSION` environment variable overrides either installer's
+preview default. To return to stable, run `shine self upgrade --channel stable`.
+
 See [installation and upgrades](https://biulight.github.io/shine/next/installation) for supported
 prebuilt targets and installation options, including [direct preview installation](https://biulight.github.io/shine/next/installation#install-preview).
 

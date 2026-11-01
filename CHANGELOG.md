@@ -5,6 +5,23 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [2.9.0] — 2026-11-02
+
+### Features
+
+- Install rolling preview builds directly with the Unix and PowerShell release installers.
+
+### Bug Fixes
+
+- Install Ubuntu Yazi from the official stable APT repository without requiring Rust or Cargo;
+  existing installations remain detected and skipped.
+- Render tabs in system installer logs as four spaces to preserve readable indentation.
+
+### Docs
+
+- Update English and Simplified Chinese installation and system bootstrap guidance, and publish
+  2.9 stable documentation snapshots, replacing 2.8 while retaining the 1.8 manual.
+
 ## [2.8.0] — 2026-11-01
 
 ### Features

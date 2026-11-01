@@ -73,7 +73,8 @@ A blank line separates the previous item’s result from the next installer’s 
 
 Installer colors and bold text are preserved on color-capable terminals. Set `NO_COLOR=1` to
 disable them; redirected logs are plain text. Explicit `CARGO_TERM_COLOR` settings are respected.
-Labels stay aligned and independent of installer styles. On an interactive terminal, single-line
+Labels stay aligned and independent of installer styles. Tabs in installer logs appear as four
+spaces to preserve readable indentation. On an interactive terminal, single-line
 progress updates refresh in place. Completed logs start on their own lines, including while an
 installer changes terminal modes or replaces a Cargo progress row. Long live rows are clipped to
 the current terminal width. Redirected output and `TERM=dumb` use ordinary log lines. Multi-line
@@ -97,6 +98,11 @@ shell integration. After opening a new shell, run
 history synchronization. Bootstrap runs items sequentially, allows up to 30 minutes per installer,
 and stops at the first failed or timed-out item. Shine retains only a bounded tail for diagnostics
 while streaming output; log volume alone does not stop installation.
+
+On Ubuntu, the built-in Yazi item installs prebuilt packages from the official stable APT
+repository, along with preview/runtime dependencies. It requires administrator access to add
+the repository key and source; Yazi installation itself does not require Rust or Cargo.
+Existing Yazi installations are detected and skipped rather than migrated between installers.
 
 On Ubuntu, the built-in pnpm item uses the official standalone installer; Node.js, npm and
 Corepack are not prerequisites. It installs under `~/.local/share/pnpm`; Shine manages its PATH
