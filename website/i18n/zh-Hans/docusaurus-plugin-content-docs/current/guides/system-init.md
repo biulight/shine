@@ -74,6 +74,9 @@ Ubuntu 内置的 Atuin 安装器以非交互模式运行。即使当前 Shell �
 Bootstrap 按顺序执行项目，每个安装器最多运行 30 分钟，遇到首个失败或超时的项目便停止。
 实时展示日志的同时，Shine 只保留有限的末尾内容用于诊断；不会仅因日志量过大而中止安装。
 
+Ubuntu 内置的 pnpm 项目使用官方独立安装器，无需预先安装 Node.js、npm 或 Corepack。
+安装目录为 `~/.local/share/pnpm`，PATH 配置由 Shine 管理。Bootstrap 完成后，打开新 shell 即可使用 `pnpm`。
+
 Ubuntu 还提供 `minimal` profile，适合生产服务器：仅安装 Neovim、fzf、bat、eza 和 zoxide，不包含 shell 历史同步、提示符、Node.js 工具链或 Homebrew。运行前仍应先执行 `shine sys bootstrap --preset minimal --dry-run` 复核当前版本的实际步骤。
 
 下载需要经过 HTTP 代理时，添加 `--proxy`。Shine 会根据 `[env]` 中的 `PROXY_HOST`、`HTTP_PROXY_PORT` 和 `PROXY_NO_PROXY` 为初始化脚本设置大小写两套代理变量；默认地址为 `http://127.0.0.1:6152`。先配合 `--dry-run` 检查实际注入值。

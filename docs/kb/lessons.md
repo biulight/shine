@@ -3696,3 +3696,17 @@ When cutting a release, always diff against the latest stable `v*` tag
   archive and executes Bash/Zsh hints in temporary homes, checking literal special characters,
   preservation of existing config and repeated execution. Fish must receive manual setup guidance
   without a generated command or automatic profile writes.
+
+
+## 2026-11-01 — Ubuntu pnpm bootstrap cannot assume Corepack
+
+- **Symptom**: pnpm bootstrap exited 127 on a fresh Ubuntu host at `corepack enable`.
+- **Cause**: the preset required undeclared preinstalled Node/Corepack; installing another
+  bootstrap item did not supply them, and recent Node distributions need not include Corepack.
+- **Fix**: use the official standalone installer with explicit target PNPM_HOME and
+  PNPM_NO_MODIFY_PATH=1. Shine retains shell integration ownership. Upstream versions without
+  no-modify-path support fail rather than modifying startup files. Append the newer
+  `~/.local/share/pnpm/bin` layout to shared command fallback roots, preserving lookup precedence.
+- **Regression**: offline script fixtures retain download/installer failures and enforce the
+  target home/no-shell-write options. Approved first-install fixtures verify immediate detection,
+  receipts, Bash/Zsh activation and repeat runs; a successful script without a binary still fails.

@@ -182,7 +182,7 @@ fragment = "profile/bun.sh"
 id = "pnpm"
 label = "pnpm"
 description = "Install the pnpm package manager."
-permissions = { schema_version = 1, filesystem = [{ access = ["execute"], base = "preset", path = "install/pnpm.sh" }], network = [{ scope = "any" }], commands = ["corepack"] }
+permissions = { schema_version = 1, filesystem = [{ access = ["execute"], base = "preset", path = "install/pnpm.sh" }], network = [{ scope = "any" }], commands = ["curl", "sh"] }
 
 detect = { kind = "command", command = "pnpm", version_args = ["--version"] }
 install = { kind = "script", path = "install/pnpm.sh" }

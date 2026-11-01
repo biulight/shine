@@ -422,3 +422,207 @@ EOF
         std::fs::remove_dir_all(home.parent().unwrap()).unwrap();
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn pnpm_standalone_installer_preserves_failures_and_shell_configuration() {
+    let home = std::env::temp_dir().join(format!("shine-pnpm-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(home.join(".bashrc"), "# existing startup\n").unwrap();
+    let script =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("presets/sys/ubuntu/install/pnpm.sh");
+    for (download_exit, installer_exit, expected) in [(0, 0, 0), (22, 0, 22), (0, 17, 17)] {
+        let output = std::process::Command::new("/bin/bash")
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                r#"
+curl() {
+    [ "$*" = '-fsSL https://get.pnpm.io/install.sh' ] || return 91
+    [ "$DOWNLOAD_EXIT" = 0 ] || return "$DOWNLOAD_EXIT"
+    printf '%s\n' '[ "$PNPM_NO_MODIFY_PATH" = 1 ] || exit 92' \
+        '[ "$PNPM_HOME" = "$SHINE_TARGET_HOME/.local/share/pnpm" ] || exit 93' \
+        'echo standalone-installer-reached' 'exit "$INSTALLER_EXIT"'
+}
+export -f curl
+exec /bin/bash "$1"
+"#,
+                "pnpm-fixture",
+            ])
+            .arg(&script)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", home.join("other-home"))
+            .env("SHINE_TARGET_HOME", &home)
+            .env("DOWNLOAD_EXIT", download_exit.to_string())
+            .env("INSTALLER_EXIT", installer_exit.to_string())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(expected), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).contains("standalone-installer-reached"),
+            download_exit == 0
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join(".bashrc")).unwrap(),
+            "# existing startup\n"
+        );
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pnpm_first_install_is_detected_before_shell_activation() {
+    use shine_core::plan::PlanApprovalV1;
+    use shine_core::runtime::{
+        CoreRuntime, RealHost, ShellType, SysItemStatus, SysRunManifest,
+        capture_embedded_preset_snapshot,
+    };
+    for (shell, kind, creates_binary) in [
+        ("bash", ShellType::Bash, true),
+        ("zsh", ShellType::Zsh, true),
+        ("bash", ShellType::Bash, false),
+    ] {
+        let embedded = super::support::runtime(RuntimePlatform::Linux);
+        let mut context = embedded.context().clone();
+        context.shell = kind;
+        context.shine_dir = context.home_dir.join(".shine");
+        context.shell_config_paths =
+            vec![cli::shells::get_shell_config_path(&kind, &context.home_dir).unwrap()];
+        context.path_env = Some("/usr/bin:/bin".into());
+        let home = context.home_dir.clone();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(&context.shell_config_paths[0], "# existing startup\n").unwrap();
+        let mut files = embedded.presets().files().clone();
+        // Prevent an ambient pnpm in a provider root from hiding first-install failures.
+        let alias = format!("pnpm-fixture-{}", uuid::Uuid::new_v4());
+        let manifest = String::from_utf8(files["sys/ubuntu/shine.toml"].clone()).unwrap();
+        let detection =
+            r#"detect = { kind = "command", command = "pnpm", version_args = ["--version"] }"#;
+        assert_eq!(manifest.matches(detection).count(), 1);
+        files.insert(
+            "sys/ubuntu/shine.toml".into(),
+            manifest
+                .replace(
+                    detection,
+                    &detection.replace("\"pnpm\"", &format!("\"{alias}\"")),
+                )
+                .into_bytes(),
+        );
+        let script = String::from_utf8(files["sys/ubuntu/install/pnpm.sh"].clone()).unwrap();
+        files.insert(
+            "sys/ubuntu/install/pnpm.sh".into(),
+            format!(
+                "curl() {{ cat \"$SHINE_SYS_PRESET_ROOT/install/pnpm-fixture.sh\"; }}\n{script}"
+            )
+            .into_bytes(),
+        );
+        let installer = if creates_binary {
+            format!(
+                r#"set -eu
+[ "$PNPM_NO_MODIFY_PATH" = 1 ]
+[ "$PNPM_HOME" = "$SHINE_TARGET_HOME/.local/share/pnpm" ]
+printf 'installed\n' >> "$SHINE_TARGET_HOME/install-count"
+mkdir -p "$PNPM_HOME/bin"
+printf '#!/bin/sh\necho pnpm-fixture\n' > "$PNPM_HOME/bin/pnpm"
+chmod +x "$PNPM_HOME/bin/pnpm"
+ln -s pnpm "$PNPM_HOME/bin/{alias}"
+"#
+            )
+        } else {
+            "exit 0\n".into()
+        };
+        files.insert(
+            "sys/ubuntu/install/pnpm-fixture.sh".into(),
+            installer.into_bytes(),
+        );
+        let runtime = CoreRuntime::new(
+            RealHost,
+            context,
+            capture_embedded_preset_snapshot(files.into_iter().collect()),
+        );
+        let request = SysBootstrapPlanRequest {
+            os_id: "ubuntu".into(),
+            item_ids: vec!["pnpm".into()],
+            sys_shell: shell.into(),
+            force_profile: false,
+            input_versions: Default::default(),
+        };
+        let expected = if creates_binary {
+            vec![SysItemStatus::Installed, SysItemStatus::AlreadyInstalled]
+        } else {
+            vec![SysItemStatus::Failed]
+        };
+        for status in expected {
+            let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            let report = runtime
+                .run_sys_bootstrap_approved(
+                    request.clone(),
+                    &approval,
+                    &mut NoBootstrapInteraction,
+                    &mut shine_core::runtime::NullObserver,
+                )
+                .await
+                .unwrap();
+            assert_eq!(report.outcomes[0].status, status, "{:?}", report.outcomes);
+        }
+        let receipt = SysRunManifest::load(&RealHost, &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        if creates_binary {
+            assert_eq!(
+                std::fs::read_to_string(home.join("install-count")).unwrap(),
+                "installed\n"
+            );
+            assert_eq!(receipt.entries.len(), 1);
+            assert_eq!(receipt.entries[0].item_id, "pnpm");
+            assert!(receipt.entries[0].profile_enabled);
+            let startup =
+                std::fs::read_to_string(&runtime.context().shell_config_paths[0]).unwrap();
+            assert_eq!(startup.matches("# existing startup\n").count(), 1);
+            assert!(!startup.contains("PNPM_HOME"));
+            let pre =
+                std::fs::read_to_string(home.join(".shine/profile/ubuntu-sys.pre.sh")).unwrap();
+            if let Some(executable) =
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                    .map(|dir| dir.join(shell))
+                    .find(|path| path.is_file())
+            {
+                let output = std::process::Command::new(executable)
+                    .args([
+                        "-f",
+                        "-c",
+                        &format!("{pre}\n{pre}\ncommand -v pnpm\nprintf '%s' \"$PATH\""),
+                    ])
+                    .env_clear()
+                    .env("HOME", &home)
+                    .env("PATH", "/usr/bin:/bin")
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{output:?}");
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                let mut lines = stdout.lines();
+                let bin = home.join(".local/share/pnpm/bin");
+                assert_eq!(
+                    std::path::Path::new(lines.next().unwrap()),
+                    bin.join("pnpm")
+                );
+                assert_eq!(
+                    lines
+                        .next()
+                        .unwrap()
+                        .split(':')
+                        .filter(|path| std::path::Path::new(path) == bin)
+                        .count(),
+                    1
+                );
+            }
+        } else {
+            assert!(receipt.entries.iter().all(|entry| entry.item_id != "pnpm"));
+        }
+        std::fs::remove_dir_all(home.parent().unwrap()).unwrap();
+    }
+}

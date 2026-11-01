@@ -91,6 +91,10 @@ history synchronization. Bootstrap runs items sequentially, allows up to 30 minu
 and stops at the first failed or timed-out item. Shine retains only a bounded tail for diagnostics
 while streaming output; log volume alone does not stop installation.
 
+On Ubuntu, the built-in pnpm item uses the official standalone installer; Node.js, npm and
+Corepack are not prerequisites. It installs under `~/.local/share/pnpm`; Shine manages its PATH
+integration. Open a new shell after bootstrap to use `pnpm`.
+
 Ubuntu includes a `minimal` profile for production servers. It installs only Neovim, fzf, bat, eza,
 and zoxide, without shell-history synchronization, a prompt, the Node.js toolchain, or Homebrew.
 Always review the current steps with `shine sys bootstrap --preset minimal --dry-run` first.

@@ -109,9 +109,11 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn atuin_detection_finds_new_installs_without_refreshing_captured_path() {
+    async fn command_detection_finds_new_installs_without_refreshing_captured_path() {
         for (platform, directory, command) in [
             (RuntimePlatform::Linux, ".atuin/bin", "atuin"),
+            (RuntimePlatform::Linux, ".local/share/pnpm", "pnpm"),
+            (RuntimePlatform::Linux, ".local/share/pnpm/bin", "pnpm"),
             (RuntimePlatform::Macos, "/opt/homebrew/bin", "atuin"),
             (RuntimePlatform::Macos, "/usr/local/bin", "atuin"),
             (
@@ -120,7 +122,7 @@ mod tests {
                 "atuin.exe",
             ),
         ] {
-            let home = std::env::temp_dir().join("shine-atuin-detection");
+            let home = std::env::temp_dir().join("shine-command-detection");
             let context = RuntimeContext::isolated(
                 home.clone(),
                 home.join("state"),
@@ -135,7 +137,7 @@ mod tests {
                 PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
             );
             let detection = SysDetection::Command {
-                command: "atuin".into(),
+                command: command.trim_end_matches(".exe").into(),
                 version_args: vec!["--version".into()],
             };
             assert!(matches!(
@@ -164,11 +166,11 @@ mod tests {
                 interrupted: false,
                 output_truncated: false,
                 exit_code: Some(0),
-                stdout: b"atuin fixture\n".to_vec(),
+                stdout: b"command fixture\n".to_vec(),
                 stderr: Vec::new(),
             }));
             assert!(
-                matches!(runtime.detect_sys_item(&detection).await.unwrap(), DetectionResult::Present(detail) if detail == "atuin fixture")
+                matches!(runtime.detect_sys_item(&detection).await.unwrap(), DetectionResult::Present(detail) if detail == "command fixture")
             );
             let requests = runtime.host().process_requests();
             assert_eq!(requests.len(), 1);
