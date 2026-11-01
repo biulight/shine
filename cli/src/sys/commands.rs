@@ -482,6 +482,7 @@ async fn handle_init_for_os(
 #[derive(Default)]
 struct BatchBootstrapObserver {
     label_width: usize,
+    separate_next_install: bool,
     logs: super::log_output::InstallerOutput,
 }
 
@@ -518,6 +519,9 @@ impl shine_core::runtime::RuntimeObserver for BatchBootstrapObserver {
                 label,
                 requires_admin,
             } => {
+                if std::mem::take(&mut self.separate_next_install) {
+                    println!();
+                }
                 println!(
                     "{}",
                     item_install_start_line(&item_id, &label, requires_admin)
@@ -555,6 +559,7 @@ impl shine_core::runtime::RuntimeObserver for BatchBootstrapObserver {
                 for line in bootstrap_outcome_lines(&outcome, self.label_width.max(14)) {
                     println!("{line}");
                 }
+                self.separate_next_install = true;
             }
             _ => {}
         }

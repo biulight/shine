@@ -69,6 +69,8 @@ the installer's exit status and an installation check; a success message inside 
 alone does not confirm success. Logs are not repeated after each item finishes. Output can still
 be delayed by the installer's own buffering.
 
+A blank line separates the previous item’s result from the next installer’s start.
+
 Installer colors and bold text are preserved on color-capable terminals. Set `NO_COLOR=1` to
 disable them; redirected logs are plain text. Explicit `CARGO_TERM_COLOR` settings are respected.
 Labels stay aligned and independent of installer styles. On an interactive terminal, single-line
