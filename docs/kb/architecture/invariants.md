@@ -419,8 +419,10 @@ bugs. Check this list before changing the modules named in each entry.
   partial-line buffers; presentation never interprets child text as installation status, and child
   controls cannot overwrite CLI source tags. Installer rendering accepts only bounded, validated
   SGR color/intensity sequences, tracks stdout/stderr independently and resets styles before the
-  next row. Live progress may redraw only its current row using CLI-authored controls, reserving
-  the terminal's final column and keeping the complete source label visible. Normal logs, outcomes
+  next row. Installer text tabs become four spaces; literal backslash escapes remain unchanged
+  and other text controls remain encoded. Live progress may redraw only its current row using
+  CLI-authored controls, reserving the terminal's final column and keeping the complete source
+  label visible. Normal logs, outcomes
   and error/cancellation cleanup commit pending rows. Terminal log rows explicitly return to
   column zero even when a child disables output processing; invisible partial fragments preserve
   a pending progress replacement. Redirected output is append-only; NO_COLOR

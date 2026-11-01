@@ -73,7 +73,8 @@ A blank line separates the previous item’s result from the next installer’s 
 
 Installer colors and bold text are preserved on color-capable terminals. Set `NO_COLOR=1` to
 disable them; redirected logs are plain text. Explicit `CARGO_TERM_COLOR` settings are respected.
-Labels stay aligned and independent of installer styles. On an interactive terminal, single-line
+Labels stay aligned and independent of installer styles. Tabs in installer logs appear as four
+spaces to preserve readable indentation. On an interactive terminal, single-line
 progress updates refresh in place. Completed logs start on their own lines, including while an
 installer changes terminal modes or replaces a Cargo progress row. Long live rows are clipped to
 the current terminal width. Redirected output and `TERM=dumb` use ordinary log lines. Multi-line

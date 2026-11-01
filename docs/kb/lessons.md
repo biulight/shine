@@ -3750,3 +3750,13 @@ When cutting a release, always diff against the latest stable `v*` tag
   text or line completion consumes it. Do not forward child cursor/erase commands.
 - **Coverage**: replay fragmented Cargo erase/style sequences, preserve control-only EOF commits,
   and exercise completed rows on an isolated Unix PTY with output processing disabled.
+
+## 2026-11-01 — Installer indentation is display whitespace
+
+- **Symptom**: Starship shell setup examples displayed a literal `\t` before each command.
+- **Cause**: the installer text renderer encoded horizontal tabs like other control characters.
+- **Fix**: render real tabs as four spaces only in installer text. Preserve literal backslash
+  sequences and keep terminal commands filtered; captured process output remains unchanged.
+- **Coverage**: assert the reported Xonsh example, consecutive tabs, literal escapes, other
+  controls and discarded control strings, plus fragmented tagged output with and without colors
+  on interactive, append-only terminal and redirected surfaces.
