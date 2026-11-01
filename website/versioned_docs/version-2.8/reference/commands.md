@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.7.0. Run `shine <COMMAND> --help` for every option supported by the
+This page reflects Shine 2.8.0. Run `shine <COMMAND> --help` for every option supported by the
 installed version. The task guides explain complete workflows; this page is a compact command index.
 
 ## Targets
@@ -60,9 +60,20 @@ Quote target names containing spaces or shell punctuation. For names beginning w
 options before `--` and the name after it, for example `shine app uninstall --dry-run -- -demo`.
 Suggested commands use POSIX shell syntax on Unix and PowerShell syntax on Windows.
 
-Before applying changes, review the Plan's affected files, required permissions, and external code.
-Use `--verbose` for detailed steps and paths. For upgrades, add `--full-plan` with `--verbose` to
-include unchanged items. If relevant files or settings change after review, review a new Plan.
+Ordinary built-in Shell installs use a Source / Commands / Changes / Backup summary.
+An Environment row lists non-sensitive variable names when needed; secret variables keep the expanded review.
+Use `--verbose` to expand it. Operations requiring additional review keep their detailed information.
+
+Before applying changes, review the Plan's affected files, planned effects, code sources, and
+execution timing. Built-in code is shown with distribution trust; external code retains its trust
+status and any required confirmation. Missing declarations, administrator access, and blocking
+diagnostics remain visible.
+
+Use `--verbose` for full permissions, author capability statements, paths, and diagnostic details.
+The default view omits general script-execution disclaimers and the abstract unrestricted-code
+permission. These display choices do not change trust or approval checks. For upgrades, add
+`--full-plan` with `--verbose` to include unchanged items. If relevant files or settings change
+after review, review a new Plan.
 
 Interactive confirmation can authorize external code for that operation without saving persistent
 trust. Automation and `--yes` require existing trust. Preset scripts are not sandboxed.
@@ -267,7 +278,7 @@ shine env delete <KEY> [--global|--project|--overlay] [--env-file]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--file-group <NAME>]... [--dry-run] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
-shine env workspace export --format files [--workspace <FILE>] --mode <MODE> --file-group <NAME>... [--dry-run]
+shine env workspace export --format files [--workspace <FILE>] --mode <MODE> --file-group <NAME>... [--secret-broker] [--dry-run]
 shine env proxy install <COMMAND> --with <KEY[=ALIAS]>... [--project]
 shine env proxy list
 shine env proxy uninstall <COMMAND>

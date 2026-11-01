@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.7.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
+本页适用于 Shine 2.8.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
 请阅读对应指南；本页只提供便于查找的命令索引。
 
 ## 目标名称
@@ -59,9 +59,16 @@ shine upgrade app/starship
 名称放在其后，例如 `shine app uninstall --dry-run -- -demo`。
 终端建议的命令在 Unix 上使用 POSIX shell 语法，在 Windows 上使用 PowerShell 语法。
 
-应用变更前，请审阅 Plan 中受影响的文件、所需权限和外部代码。使用 `--verbose` 查看步骤和
-路径详情；升级时可同时添加 `--full-plan`，包含未变化的项目。审阅后相关文件或设置发生变化时，
-需要重新审阅 Plan。
+普通内置 Shell 安装使用 Source / Commands / Changes / Backup 摘要，添加 `--verbose` 可展开。
+需要非敏感环境变量时，Environment 行会列出变量名；涉及敏感变量时仍使用展开审阅。
+需要额外审阅的操作仍保留详细信息。
+
+应用变更前，请审阅 Plan 中受影响的文件、计划影响、代码来源和执行时机。内置代码显示发行版
+信任；外部代码保留信任状态及所需确认。缺失声明、管理员权限和阻断诊断仍会显示。
+
+使用 `--verbose` 查看完整权限、作者能力说明、路径和诊断详情。默认视图省略通用脚本执行
+免责声明和抽象的无限制代码权限项，信任与审批检查保持不变。升级时可同时添加 `--full-plan`
+和 `--verbose`，包含未变化的项目。审阅后相关文件或设置发生变化时，需要重新审阅 Plan。
 
 交互确认可仅授权本次使用外部代码，不保存长期信任。自动化与 `--yes` 必须已有匹配的信任授权。
 预设脚本未被沙箱隔离。
@@ -250,7 +257,7 @@ shine env delete <KEY> [--global|--project|--overlay] [--env-file]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--file-group <NAME>]... [--dry-run] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
-shine env workspace export --format files [--workspace <FILE>] --mode <MODE> --file-group <NAME>... [--dry-run]
+shine env workspace export --format files [--workspace <FILE>] --mode <MODE> --file-group <NAME>... [--secret-broker] [--dry-run]
 shine env proxy install <COMMAND> --with <KEY[=ALIAS]>... [--project]
 shine env proxy list
 shine env proxy uninstall <COMMAND>

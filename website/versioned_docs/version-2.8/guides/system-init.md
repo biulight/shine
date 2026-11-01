@@ -62,8 +62,45 @@ Use `--verbose` for detailed paths and steps. A permission declaration is not a 
 custom scripts and executable profile content run with your permissions and are not sandboxed.
 External code requires review and authorization.
 
+During installation, Shine streams both standard output and standard error with the same item
+label, such as `[rust]`. Standard error can contain normal progress messages. Shine's own start
+and result messages use `[shine]`. The final result follows
+the installer's exit status and an installation check; a success message inside an installer log
+alone does not confirm success. Logs are not repeated after each item finishes. Output can still
+be delayed by the installer's own buffering.
+
+A blank line separates the previous item’s result from the next installer’s start.
+
+Installer colors and bold text are preserved on color-capable terminals. Set `NO_COLOR=1` to
+disable them; redirected logs are plain text. Explicit `CARGO_TERM_COLOR` settings are respected.
+Labels stay aligned and independent of installer styles. On an interactive terminal, single-line
+progress updates refresh in place. Completed logs start on their own lines, including while an
+installer changes terminal modes or replaces a Cargo progress row. Long live rows are clipped to
+the current terminal width. Redirected output and `TERM=dumb` use ordinary log lines. Multi-line
+progress panels and full-screen installer interfaces are not emulated.
+
+Shine enables Cargo's single-line progress on supported terminals, respecting explicit
+`CARGO_TERM_PROGRESS_WHEN` and `CARGO_TERM_PROGRESS_WIDTH` settings. Other installers may still
+suppress progress when their output is captured.
+
+Optional command-version checks run non-interactively and wait at most 3 seconds. If a version
+check fails or times out, Shine still recognizes the executable as installed and uses its path
+instead of version details.
+
 Installers may prompt for terminal input. Follow the current item's instructions and wait for it to
 finish before starting another operation.
+
+On Ubuntu, the built-in Atuin installer runs non-interactively. Shine detects its default
+`~/.atuin/bin` installation before the current shell has loaded the new PATH, then enables its
+shell integration. After opening a new shell, run
+`atuin import auto` to import existing history, and `atuin register` or `atuin login` if you want
+history synchronization. Bootstrap runs items sequentially, allows up to 30 minutes per installer,
+and stops at the first failed or timed-out item. Shine retains only a bounded tail for diagnostics
+while streaming output; log volume alone does not stop installation.
+
+On Ubuntu, the built-in pnpm item uses the official standalone installer; Node.js, npm and
+Corepack are not prerequisites. It installs under `~/.local/share/pnpm`; Shine manages its PATH
+integration. Open a new shell after bootstrap to use `pnpm`.
 
 Ubuntu includes a `minimal` profile for production servers. It installs only Neovim, fzf, bat, eza,
 and zoxide, without shell-history synchronization, a prompt, the Node.js toolchain, or Homebrew.
@@ -102,6 +139,15 @@ shell profile content, but it does not create or update mise configuration and d
 runtime versions. Use mise for `mise.toml`, tool installation, and version upgrades.
 
 ## Manage shell integration state
+
+Rust bootstrap makes the default Cargo binary directory (`~/.cargo/bin`) available in Ubuntu
+Bash/Zsh, macOS Zsh, and Windows PowerShell profiles. Open a new shell after bootstrap to use
+`rustup`, `cargo`, and `rustc`; bootstrap cannot change the calling shell's PATH.
+
+If an older Ubuntu setup reports Rust as installed but the commands are missing, upgrade Shine,
+then run `shine sys bootstrap rust` and open a new shell. This repairs the shell integration without
+reinstalling an already detected Rust installation. For the current Bash/Zsh session, you can run
+`. "$HOME/.cargo/env"` if that file exists.
 
 A successful bootstrap enables only the selected items' declared shell integrations. It does not
 disable integrations enabled by an earlier run, and a named selection profile is not a desired-state
