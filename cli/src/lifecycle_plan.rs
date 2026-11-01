@@ -92,7 +92,17 @@ impl LifecyclePlanRequest {
 
     fn configure_runtime(&self, runtime: CoreRuntime<RealHost>) -> CoreRuntime<RealHost> {
         match self {
-            Self::SysBootstrap { proxy_env, .. } => runtime.with_proxy_env(proxy_env.clone()),
+            Self::SysBootstrap { request, proxy_env } => {
+                let (progress, width) =
+                    crate::sys::execution::installer_progress_settings(&request.item_ids);
+                runtime
+                    .with_proxy_env(proxy_env.clone())
+                    .with_installer_color(
+                        crate::sys::execution::installer_color_enabled()
+                            && std::env::var_os("CARGO_TERM_COLOR").is_none(),
+                    )
+                    .with_installer_progress(progress, width)
+            }
             _ => runtime,
         }
     }

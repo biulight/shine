@@ -146,7 +146,14 @@ async fn provider_invocation_keeps_sudo_proxy_order_limits_and_platform_rejectio
         .host()
         .queue_process_output(Ok(crate::runtime::ProcessOutput::default()));
     runtime
-        .run_package("ubuntu", SysPackageProvider::Apt, "pkg", true)
+        .run_package(
+            "ubuntu",
+            SysPackageProvider::Apt,
+            "pkg",
+            true,
+            "pkg",
+            &mut NullObserver,
+        )
         .await
         .unwrap();
     let requests = runtime.host().process_requests();
@@ -176,7 +183,14 @@ async fn provider_invocation_keeps_sudo_proxy_order_limits_and_platform_rejectio
     assert!(package_preview("windows", SysPackageProvider::Homebrew, "pkg").is_err());
     assert!(
         runtime
-            .run_package("macos", SysPackageProvider::Apt, "pkg", false)
+            .run_package(
+                "macos",
+                SysPackageProvider::Apt,
+                "pkg",
+                false,
+                "pkg",
+                &mut NullObserver
+            )
             .await
             .is_err()
     );

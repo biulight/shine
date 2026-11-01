@@ -2605,11 +2605,11 @@ below still applies to any future background process.
 
 - **Symptom**: `shine sys bootstrap` could show a sudo password prompt without identifying which
   selected software caused it.
-- **Root cause**: installer output is buffered until completion, including output from install
+- **Root cause**: installer output was buffered until completion, including output from install
   scripts that invoke `sudo` themselves.
 - **Fix**: announce each missing item from the bootstrap runner before starting its installer.
 - **Rule**: a bootstrap action must identify its owning item before any authorization interaction;
-  do not rely on installer output that the runner buffers until completion.
+  do not rely on installer output, which can be delayed by child buffering even with live forwarding.
 
 ## 2026-08-21 — External-code errors hid the active trust boundary
 
@@ -3678,7 +3678,7 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Root cause**: the 64 KiB diagnostic retention budget also acted as a fatal process output
   limit, killing APT during an otherwise normal large dependency installation.
 - **Fix**: Sys installers explicitly retain bounded stream tails while continuing to drain;
-  truncation remains visible and actual exit status determines success. Detection and generator
+  truncation remains recorded in the diagnostic tail and actual exit status determines success. Detection and generator
   output keep their strict limits; timeout, cancellation and process-group cleanup remain intact.
 - **Regression**: real installer scripts exceed the budget on either stream, finish a marker write,
   and preserve success/failure plus the final diagnostic; reader tests cover chunk and zero limits.

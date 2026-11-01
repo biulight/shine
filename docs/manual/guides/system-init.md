@@ -62,6 +62,24 @@ Use `--verbose` for detailed paths and steps. A permission declaration is not a 
 custom scripts and executable profile content run with your permissions and are not sandboxed.
 External code requires review and authorization.
 
+During installation, Shine streams both standard output and standard error with the same item
+label, such as `[rust]`. Standard error can contain normal progress messages. Shine's own start
+and result messages use `[shine]`. The final result follows
+the installer's exit status and an installation check; a success message inside an installer log
+alone does not confirm success. Logs are not repeated after each item finishes. Output can still
+be delayed by the installer's own buffering.
+
+Installer colors and bold text are preserved on color-capable terminals. Set `NO_COLOR=1` to
+disable them; redirected logs are plain text. Explicit `CARGO_TERM_COLOR` settings are respected.
+Labels stay aligned and independent of installer styles. On an interactive terminal, single-line
+progress updates refresh in place. Normal logs remain visible, and long live rows are clipped to
+the current terminal width. Redirected output and `TERM=dumb` use ordinary log lines. Multi-line
+progress panels and full-screen installer interfaces are not emulated.
+
+Shine enables Cargo's single-line progress on supported terminals, respecting explicit
+`CARGO_TERM_PROGRESS_WHEN` and `CARGO_TERM_PROGRESS_WIDTH` settings. Other installers may still
+suppress progress when their output is captured.
+
 Installers may prompt for terminal input. Follow the current item's instructions and wait for it to
 finish before starting another operation.
 
@@ -70,8 +88,8 @@ On Ubuntu, the built-in Atuin installer runs non-interactively. Shine detects it
 shell integration. After opening a new shell, run
 `atuin import auto` to import existing history, and `atuin register` or `atuin login` if you want
 history synchronization. Bootstrap runs items sequentially, allows up to 30 minutes per installer,
-and stops at the first failed or timed-out item. Large installer logs are truncated to their final
-output with a notice; log volume alone does not stop installation.
+and stops at the first failed or timed-out item. Shine retains only a bounded tail for diagnostics
+while streaming output; log volume alone does not stop installation.
 
 Ubuntu includes a `minimal` profile for production servers. It installs only Neovim, fzf, bat, eza,
 and zoxide, without shell-history synchronization, a prompt, the Node.js toolchain, or Homebrew.

@@ -26,3 +26,5 @@ based on exit status followed by the existing detection and receipt flow.
 Large normal logs cannot themselves interrupt package installation. Earlier diagnostics can be
 lost, explicitly reported as truncated; stdout/stderr tails are not a chronological merged log.
 This does not resume interrupted package operations or change installation authorization.
+[ADR 0162](0162-tagged-live-bootstrap-output.md) adds live presentation alongside this retained tail;
+the CLI no longer replays installer tails after completion.

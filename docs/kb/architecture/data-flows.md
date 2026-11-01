@@ -1243,7 +1243,16 @@ Every executable sys manifest declares `version = 2`. Each init item has both `[
 provider argv or one per-item script, limits runtime and retained logs, detects again, and produces the
 canonical `sys/<item>` outcome. Installers drain both streams to bounded 64 KiB tails, report
 truncation, and preserve their exit status even when logs overflow; detection retains strict output
-limits (ADR 0161). A v1 or unknown manifest version fails before detection, elevation,
+limits (ADR 0161). A bounded Host output channel also forwards installer chunks to Core line events
+while the process runs. Core distinguishes LF/CRLF completion, bare-CR progress and bounded partial
+fragments, flushes partial prompts and emits periodic presentation ticks;
+CLI tags child output by item and its own status with `[shine]`, without replaying the
+retained tail. Profile diagnostics still render once at completion (ADR 0162). CLI installer
+rendering keeps bounded per-stream SGR state, filters terminal commands and isolates styles from
+source labels. A frontend-supplied cosmetic preference enables Cargo colors through the existing
+installer env/sudo paths without overriding explicit color settings (ADR 0163). The CLI owns one
+bounded live row, interleaves normal logs without overwriting them and falls back to append-only
+logs outside a capable TTY. Cargo progress defaults use the same explicit cosmetic path (ADR 0164). A v1 or unknown manifest version fails before detection, elevation,
 installer execution, or profile writes.
 
 Inspection, preview, preflight, and profile composition read the immutable Sys snapshot without

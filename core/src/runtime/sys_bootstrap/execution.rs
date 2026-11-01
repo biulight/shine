@@ -15,11 +15,14 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         provider: SysPackageProvider,
         package: &str,
         admin: bool,
+        item_id: &str,
+        observer: &mut impl RuntimeObserver,
     ) -> Result<ExecutionResult> {
         let ProviderInvocation {
             program, mut args, ..
         } = package_command(os_id, provider, package, &self.context().proxy_env)?;
         let mut env = self.context().proxy_env.clone();
+        self.add_installer_display_env(&mut env);
         let program = if admin && !self.context().running_as_admin {
             let mut sudo_args = vec!["-n".to_string()];
             if !env.is_empty() {
@@ -34,18 +37,21 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             program
         };
         let output = self
-            .host()
-            .run(ProcessRequest {
-                program,
-                args,
-                env: std::mem::take(&mut env),
-                inherit_stdin: true,
-                io: super::super::ProcessIo::CapturedTail,
-                timeout: Some(BOOTSTRAP_TIMEOUT),
-                stdout_limit: Some(MAX_LOG_BYTES),
-                stderr_limit: Some(MAX_LOG_BYTES),
-                ..ProcessRequest::default()
-            })
+            .run_installer(
+                ProcessRequest {
+                    program,
+                    args,
+                    env: std::mem::take(&mut env),
+                    inherit_stdin: true,
+                    io: super::super::ProcessIo::CapturedTail,
+                    timeout: Some(BOOTSTRAP_TIMEOUT),
+                    stdout_limit: Some(MAX_LOG_BYTES),
+                    stderr_limit: Some(MAX_LOG_BYTES),
+                    ..ProcessRequest::default()
+                },
+                item_id,
+                observer,
+            )
             .await;
         execution_result(
             output,
@@ -56,14 +62,14 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
 
     pub(super) async fn run_sys_script(
         &self,
-        os_id: &str,
+        request: &SysBootstrapRequest,
         script: &Path,
         root: &Path,
-        shell: &str,
         item: &SysItem,
         admin: bool,
+        observer: &mut impl RuntimeObserver,
     ) -> Result<ExecutionResult> {
-        let (program, mut args) = match os_id {
+        let (program, mut args) = match request.os_id.as_str() {
             "windows" => (
                 "powershell.exe".to_string(),
                 vec![
@@ -79,7 +85,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         args.push(script.display().to_string());
         let mut env = BTreeMap::from([
             ("SHINE_SYS_PRESET_ROOT".into(), root.display().to_string()),
-            ("SHINE_SYS_SHELL".into(), shell.to_string()),
+            ("SHINE_SYS_SHELL".into(), request.sys_shell.clone()),
             (
                 "SHINE_TARGET_HOME".into(),
                 self.context().home_dir.display().to_string(),
@@ -91,6 +97,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             }
         }
         env.extend(self.context().proxy_env.clone());
+        self.add_installer_display_env(&mut env);
         let (program, args) = if admin && !self.context().running_as_admin {
             let mut sudo = vec![
                 "-n".to_string(),
@@ -106,25 +113,173 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             (program, args)
         };
         let output = self
-            .host()
-            .run(ProcessRequest {
-                program,
-                args,
-                cwd: script.parent().map(Path::to_path_buf),
-                env,
-                inherit_stdin: true,
-                io: super::super::ProcessIo::CapturedTail,
-                timeout: Some(BOOTSTRAP_TIMEOUT),
-                stdout_limit: Some(MAX_LOG_BYTES),
-                stderr_limit: Some(MAX_LOG_BYTES),
-                ..ProcessRequest::default()
-            })
+            .run_installer(
+                ProcessRequest {
+                    program,
+                    args,
+                    cwd: script.parent().map(Path::to_path_buf),
+                    env,
+                    inherit_stdin: true,
+                    io: super::super::ProcessIo::CapturedTail,
+                    timeout: Some(BOOTSTRAP_TIMEOUT),
+                    stdout_limit: Some(MAX_LOG_BYTES),
+                    stderr_limit: Some(MAX_LOG_BYTES),
+                    ..ProcessRequest::default()
+                },
+                &item.id,
+                observer,
+            )
             .await;
         execution_result(
             output,
             format!("sys item `{}` install script failed", item.id),
-            item.requires_admin && os_id == "windows",
+            item.requires_admin && request.os_id == "windows",
         )
+    }
+
+    fn add_installer_display_env(&self, env: &mut BTreeMap<String, String>) {
+        if self.installer_color && !self.context().env.contains_key("CARGO_TERM_COLOR") {
+            env.entry("CARGO_TERM_COLOR".into())
+                .or_insert_with(|| "always".into());
+        }
+        if self.installer_progress.0 && !self.context().env.contains_key("CARGO_TERM_PROGRESS_WHEN")
+        {
+            env.entry("CARGO_TERM_PROGRESS_WHEN".into())
+                .or_insert_with(|| "always".into());
+        }
+        if let Some(width) = self.installer_progress.1
+            && !self.context().env.contains_key("CARGO_TERM_PROGRESS_WIDTH")
+        {
+            env.entry("CARGO_TERM_PROGRESS_WIDTH".into())
+                .or_insert_with(|| width.to_string());
+        }
+    }
+
+    async fn run_installer(
+        &self,
+        request: ProcessRequest,
+        item_id: &str,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<crate::runtime::ProcessOutput> {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let mut run = self.host().run_with_output(request, sender);
+        let mut stdout = InstallerLines::default();
+        let mut stderr = InstallerLines::default();
+        let mut emit = |stream, text, code| {
+            observer.emit(RuntimeEvent::ProcessOutput {
+                code,
+                target: item_id.to_string(),
+                stream,
+                text,
+            })
+        };
+        let mut flush = tokio::time::interval(Duration::from_millis(100));
+        flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let result = loop {
+            tokio::select! {
+                _ = flush.tick() => {
+                    stdout.flush_partial("stdout", &mut emit);
+                    stderr.flush_partial("stderr", &mut emit);
+                    emit("stdout", String::new(), "sys_bootstrap_installer_tick");
+                }
+                result = &mut run => break result,
+                Some(chunk) = receiver.recv() => {
+                    let lines = if chunk.stream == "stdout" { &mut stdout } else { &mut stderr };
+                    lines.push(&chunk.bytes, chunk.stream, &mut emit);
+                }
+            }
+        };
+        // The process can finish with chunks still in the bounded channel.
+        while let Ok(chunk) = receiver.try_recv() {
+            let lines = if chunk.stream == "stdout" {
+                &mut stdout
+            } else {
+                &mut stderr
+            };
+            lines.push(&chunk.bytes, chunk.stream, &mut emit);
+        }
+        stdout.finish("stdout", &mut emit);
+        stderr.finish("stderr", &mut emit);
+        result
+    }
+}
+
+/// Preserve line endings while bounding incomplete UTF-8 fragments.
+#[derive(Default)]
+struct InstallerLines {
+    pending: Vec<u8>,
+    carriage_return: bool,
+}
+
+impl InstallerLines {
+    fn push(
+        &mut self,
+        bytes: &[u8],
+        stream: &'static str,
+        emit: &mut impl FnMut(&'static str, String, &'static str),
+    ) {
+        for &byte in bytes {
+            if self.carriage_return {
+                self.carriage_return = false;
+                if byte == b'\n' {
+                    self.emit_pending(stream, "sys_bootstrap_installer", emit);
+                    continue;
+                }
+                self.emit_pending(stream, "sys_bootstrap_installer_progress", emit);
+            }
+            match byte {
+                b'\r' => self.carriage_return = true,
+                b'\n' => self.emit_pending(stream, "sys_bootstrap_installer", emit),
+                _ => {
+                    self.pending.push(byte);
+                    if self.pending.len() >= 8192 {
+                        self.flush_partial(stream, emit);
+                    }
+                }
+            }
+        }
+    }
+
+    fn flush_partial(
+        &mut self,
+        stream: &'static str,
+        emit: &mut impl FnMut(&'static str, String, &'static str),
+    ) {
+        if self.carriage_return {
+            self.carriage_return = false;
+            self.emit_pending(stream, "sys_bootstrap_installer_progress", emit);
+            return;
+        }
+        let end = match std::str::from_utf8(&self.pending) {
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            _ => self.pending.len(),
+        };
+        if end > 0 {
+            let text = String::from_utf8_lossy(&self.pending[..end]).into_owned();
+            self.pending.drain(..end);
+            emit(stream, text, "sys_bootstrap_installer_partial");
+        }
+    }
+
+    fn emit_pending(
+        &mut self,
+        stream: &'static str,
+        code: &'static str,
+        emit: &mut impl FnMut(&'static str, String, &'static str),
+    ) {
+        let text = String::from_utf8_lossy(&self.pending).into_owned();
+        self.pending.clear();
+        emit(stream, text, code);
+    }
+
+    fn finish(
+        &mut self,
+        stream: &'static str,
+        emit: &mut impl FnMut(&'static str, String, &'static str),
+    ) {
+        // EOF commits even a row whose bytes were already emitted by a timed flush.
+        self.carriage_return = false;
+        self.emit_pending(stream, "sys_bootstrap_installer", emit);
     }
 }
 
@@ -218,6 +373,176 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn color_fallback_is_opt_in_and_preserved_through_sudo() {
+        let runtime = runtime().with_installer_color(true);
+        runtime
+            .run_package(
+                "ubuntu",
+                SysPackageProvider::Apt,
+                "example",
+                true,
+                "example",
+                &mut crate::runtime::NullObserver,
+            )
+            .await
+            .unwrap();
+        let requests = runtime.host().process_requests();
+        assert_eq!(
+            requests[0].env.get("CARGO_TERM_COLOR").map(String::as_str),
+            Some("always")
+        );
+        assert!(
+            requests[0]
+                .args
+                .windows(2)
+                .any(|args| args == ["env", "CARGO_TERM_COLOR=always"])
+        );
+        let mut env = BTreeMap::from([("CARGO_TERM_COLOR".into(), "never".into())]);
+        runtime.add_installer_display_env(&mut env);
+        assert_eq!(env["CARGO_TERM_COLOR"], "never");
+        let runtime = runtime.with_installer_color(false);
+        let mut env = BTreeMap::new();
+        runtime.add_installer_display_env(&mut env);
+        assert!(env.is_empty());
+    }
+
+    #[test]
+    fn installer_line_events_distinguish_crlf_progress_partial_and_eof() {
+        let mut lines = InstallerLines::default();
+        let mut events = Vec::new();
+        let mut emit = |_stream, text, code| events.push((code, text));
+        lines.push(b"log\r", "stdout", &mut emit);
+        lines.push(b"\n10%\r20%", "stdout", &mut emit);
+        lines.flush_partial("stdout", &mut emit);
+        lines.push(b"\r\n", "stdout", &mut emit);
+        lines.finish("stdout", &mut emit);
+        assert_eq!(
+            events,
+            [
+                ("sys_bootstrap_installer", "log".into()),
+                ("sys_bootstrap_installer_progress", "10%".into()),
+                ("sys_bootstrap_installer_partial", "20%".into()),
+                ("sys_bootstrap_installer", String::new()),
+                ("sys_bootstrap_installer", String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn progress_env_fallbacks_preserve_explicit_values() {
+        let runtime = runtime().with_installer_progress(true, Some(64));
+        let mut env = BTreeMap::new();
+        runtime.add_installer_display_env(&mut env);
+        assert_eq!(env["CARGO_TERM_PROGRESS_WHEN"], "always");
+        assert_eq!(env["CARGO_TERM_PROGRESS_WIDTH"], "64");
+        env.insert("CARGO_TERM_PROGRESS_WHEN".into(), "never".into());
+        env.insert("CARGO_TERM_PROGRESS_WIDTH".into(), "40".into());
+        runtime.add_installer_display_env(&mut env);
+        assert_eq!(env["CARGO_TERM_PROGRESS_WHEN"], "never");
+        assert_eq!(env["CARGO_TERM_PROGRESS_WIDTH"], "40");
+    }
+
+    #[test]
+    fn installer_lines_handle_utf8_progress_partial_prompts_and_bounded_fragments() {
+        let mut lines = InstallerLines::default();
+        let mut output = Vec::new();
+        let mut emit = |stream, text, _code| output.push((stream, text));
+        lines.push(b"one\r\ntwo\r", "stdout", &mut emit);
+        let chinese = "中文".as_bytes();
+        lines.push(&chinese[..2], "stdout", &mut emit);
+        lines.flush_partial("stdout", &mut emit);
+        lines.push(&chinese[2..], "stdout", &mut emit);
+        lines.push(b"\nPassword: ", "stdout", &mut emit);
+        lines.flush_partial("stdout", &mut emit);
+        lines.push(&vec![b'x'; 100_000], "stdout", &mut emit);
+        assert!(lines.pending.len() < 8192);
+        lines.finish("stdout", &mut emit);
+        assert_eq!(
+            &output[..4],
+            &[
+                ("stdout", "one".into()),
+                ("stdout", "two".into()),
+                ("stdout", "中文".into()),
+                ("stdout", "Password: ".into()),
+            ]
+        );
+        assert_eq!(
+            output[4..]
+                .iter()
+                .map(|(_, text)| text.len())
+                .sum::<usize>(),
+            100_000
+        );
+        assert!(output.iter().all(|(_, text)| text.len() <= 8192));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn installer_streams_both_pipes_and_unterminated_prompt_before_exit() {
+        use crate::runtime::RealHost;
+        struct Observer {
+            marker: PathBuf,
+            events: Vec<(String, String)>,
+        }
+        impl RuntimeObserver for Observer {
+            fn emit(&mut self, event: RuntimeEvent) {
+                if let RuntimeEvent::ProcessOutput {
+                    code,
+                    target,
+                    stream,
+                    text,
+                } = event
+                {
+                    if code == "sys_bootstrap_installer_tick" {
+                        return;
+                    }
+                    assert_eq!(target, "fixture");
+                    if text == "Continue? " {
+                        std::fs::write(&self.marker, b"continue").unwrap();
+                    }
+                    self.events.push((stream.to_string(), text));
+                }
+            }
+        }
+        let temp =
+            std::env::temp_dir().join(format!("shine-live-installer-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let runtime = CoreRuntime::new(
+            RealHost,
+            RuntimeContext::isolated(
+                temp.join("home"),
+                temp.join("state"),
+                temp.join("presets"),
+                temp.join("bin"),
+                RuntimePlatform::Linux,
+            ),
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        );
+        let mut observer = Observer {
+            marker: temp.join("continue"),
+            events: Vec::new(),
+        };
+        let result = runtime.run_installer(ProcessRequest {
+            program: "bash".into(),
+            args: vec!["-c".into(), "printf 'first\n'; printf 'warning\n' >&2; printf 'Continue? '; while [ ! -f continue ]; do sleep 0.02; done; printf 'done\n'; exit 7".into()],
+            cwd: Some(temp.clone()), io: super::super::super::ProcessIo::CapturedTail,
+            timeout: Some(Duration::from_secs(5)), stdout_limit: Some(64), stderr_limit: Some(64),
+            ..ProcessRequest::default()
+        }, "fixture", &mut observer).await.unwrap();
+        assert_eq!(result.exit_code, Some(7));
+        assert!(observer.events.contains(&("stdout".into(), "first".into())));
+        assert!(
+            observer
+                .events
+                .contains(&("stderr".into(), "warning".into()))
+        );
+        assert!(observer.events.contains(&("stdout".into(), "done".into())));
+        assert!(result.stdout.ends_with(b"done\n"));
+        assert_eq!(result.stderr, b"warning\n");
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
     async fn installer_timeout_uses_error_kind_through_context_and_arbitrary_wording() {
         let runtime = runtime();
         runtime
@@ -228,7 +553,14 @@ mod tests {
             ))
             .context("waiting for installer")));
         let report = runtime
-            .run_package("ubuntu", SysPackageProvider::Apt, "example", false)
+            .run_package(
+                "ubuntu",
+                SysPackageProvider::Apt,
+                "example",
+                false,
+                "example",
+                &mut crate::runtime::NullObserver,
+            )
             .await
             .unwrap();
         assert!(!report.success);
@@ -251,7 +583,14 @@ mod tests {
             let runtime = runtime();
             runtime.host().queue_process_output(Err(error));
             let error = runtime
-                .run_package("ubuntu", SysPackageProvider::Apt, "example", false)
+                .run_package(
+                    "ubuntu",
+                    SysPackageProvider::Apt,
+                    "example",
+                    false,
+                    "example",
+                    &mut crate::runtime::NullObserver,
+                )
                 .await
                 .err()
                 .expect("non-timeout errors must propagate");
@@ -290,7 +629,18 @@ mod tests {
                     "#!/bin/bash\nhead -c 200000 /dev/zero{redirect}\nprintf '\nfinal diagnostic\n'{redirect}\nprintf done > completed\nexit {exit_code}\n"
                 )).unwrap();
                 let result = runtime
-                    .run_sys_script("ubuntu", &script, root, "bash", &manifest.items[0], false)
+                    .run_sys_script(
+                        &SysBootstrapRequest {
+                            os_id: "ubuntu".into(),
+                            item_id: "fixture".into(),
+                            sys_shell: "bash".into(),
+                        },
+                        &script,
+                        root,
+                        &manifest.items[0],
+                        false,
+                        &mut crate::runtime::NullObserver,
+                    )
                     .await
                     .unwrap();
                 assert_eq!(std::fs::read(&marker).unwrap(), b"done", "{stream}");

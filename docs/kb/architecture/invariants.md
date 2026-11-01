@@ -414,7 +414,14 @@ bugs. Check this list before changing the modules named in each entry.
 - **Process limits apply while draining pipes.** Bounded reads retain at most the configured stdout
   and stderr limits, concurrently with stdin writes and child wait. Default capture treats overflow
   as failure; only Sys installers opt into tail capture, which discards oldest bytes and reports
-  truncation without failing the process. Detection and generators retain strict overflow failure.
+  truncation without failing the process. Installer live output uses a bounded channel and bounded
+  partial-line buffers; presentation never interprets child text as installation status, and child
+  controls cannot overwrite CLI source tags. Installer rendering accepts only bounded, validated
+  SGR color/intensity sequences, tracks stdout/stderr independently and resets styles before the
+  next row. Live progress may redraw only its current row using CLI-authored controls, reserving
+  the terminal's final column and keeping the complete source label visible. Normal logs, outcomes
+  and error/cancellation cleanup commit pending rows. Redirected output is append-only; NO_COLOR
+  suppresses styles without disabling single-line progress on a capable TTY. Detection and generators retain strict overflow failure.
   Timeout, I/O failure, or strict overflow kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
   terminated too, including when the run Future is cancelled. A drop guard retains the group ID
   after the direct child exits; a failed or signalled child terminates the group before waiting for

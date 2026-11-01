@@ -65,8 +65,8 @@ pub use fixture::{
 pub use host::{
     FileKind, FileMetadata, FileSystemHost, FileSystemObservationHost, HostError, HostOperation,
     NullObserver, PrivilegedFileSystemHost, PrivilegedOperationGuard, ProcessHost, ProcessIo,
-    ProcessOutput, ProcessRequest, RealHost, RuntimeEvent, RuntimeInteraction, RuntimeObserver,
-    SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SplitDnsState,
+    ProcessOutput, ProcessOutputChunk, ProcessRequest, RealHost, RuntimeEvent, RuntimeInteraction,
+    RuntimeObserver, SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SplitDnsState,
 };
 pub(crate) use inspection::JournalInspection;
 pub use inspection::{
@@ -253,6 +253,8 @@ pub struct CoreRuntime<H> {
     secret_changes: std::sync::Mutex<std::collections::BTreeSet<String>>,
     secret_provider: Option<std::sync::Arc<dyn secret_files::SecretFileProvider>>,
     host: H,
+    installer_color: bool,
+    installer_progress: (bool, Option<u16>),
     context: RuntimeContext,
     presets: std::sync::Arc<PresetSnapshot>,
 }
@@ -266,6 +268,8 @@ impl<H> CoreRuntime<H> {
             analysis: CodeAnalysisSession::default(),
             analysis_source: std::sync::OnceLock::new(),
             host,
+            installer_color: false,
+            installer_progress: (false, None),
             context,
             presets: std::sync::Arc::new(presets),
         }
@@ -287,6 +291,19 @@ impl<H> CoreRuntime<H> {
     /// Approval validation still binds the resulting captured inputs.
     pub fn with_proxy_env(mut self, proxy_env: BTreeMap<String, String>) -> Self {
         self.context.proxy_env = proxy_env;
+        self
+    }
+
+    /// Cosmetic Cargo color preference for captured Sys installers; defaults to off.
+    /// Frontends must respect explicit user color settings before enabling this fallback.
+    pub fn with_installer_color(mut self, enabled: bool) -> Self {
+        self.installer_color = enabled;
+        self
+    }
+
+    /// Cosmetic Cargo single-line progress defaults, selected by the frontend.
+    pub fn with_installer_progress(mut self, enable: bool, width: Option<u16>) -> Self {
+        self.installer_progress = (enable, width);
         self
     }
 

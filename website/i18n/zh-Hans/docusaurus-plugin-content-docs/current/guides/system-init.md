@@ -54,13 +54,25 @@ shine sys bootstrap --proxy --dry-run
 权限声明并非安全保证：自定义脚本和可执行 profile 内容以你的权限运行，没有沙箱隔离；
 外部代码需要审阅和授权。
 
+安装过程中，Shine 会实时展示安装器的标准输出和标准错误，两者均使用 `[rust]` 这样的项目标签。
+标准错误也可能包含正常的进度信息。Shine 自己的开始和结果提示使用 `[shine]`。最终结果依据安装器退出状态及安装后检测判断，
+安装日志中的成功提示本身不代表安装已成功。每个项目结束后不会重复打印日志；安装器自身的缓冲仍可能造成输出延迟。
+
+支持颜色的终端会保留安装器的颜色和加粗。设置 `NO_COLOR=1` 可关闭；重定向日志时输出纯文本。
+显式设置的 `CARGO_TERM_COLOR` 会得到尊重。标签保持对齐，不受安装器样式影响。
+交互终端中的单行进度会原地刷新；普通日志会保留，过长的动态行会按当前终端宽度裁剪。
+重定向输出或设置 `TERM=dumb` 时使用普通日志行。Shine 不模拟多行进度面板或全屏安装界面。
+
+Shine 会在支持的终端上启用 Cargo 单行进度，并尊重显式设置的 `CARGO_TERM_PROGRESS_WHEN`
+和 `CARGO_TERM_PROGRESS_WIDTH`。其他安装器仍可能因为输出被捕获而关闭进度显示。
+
 安装器可能要求终端输入，请按当前项目的提示操作，等待结束后再开始另一项操作。
 
 Ubuntu 内置的 Atuin 安装器以非交互模式运行。即使当前 Shell 尚未加载新的 PATH，Shine
 也会检测默认安装目录 `~/.atuin/bin`，然后启用 Shell 集成。打开新的 Shell 后，可运行 `atuin import auto`
 导入已有历史；需要同步历史时，再运行 `atuin register` 或 `atuin login`。
 Bootstrap 按顺序执行项目，每个安装器最多运行 30 分钟，遇到首个失败或超时的项目便停止。
-安装日志过长时只保留末尾内容，并提示日志已截断；不会仅因日志量过大而中止安装。
+实时展示日志的同时，Shine 只保留有限的末尾内容用于诊断；不会仅因日志量过大而中止安装。
 
 Ubuntu 还提供 `minimal` profile，适合生产服务器：仅安装 Neovim、fzf、bat、eza 和 zoxide，不包含 shell 历史同步、提示符、Node.js 工具链或 Homebrew。运行前仍应先执行 `shine sys bootstrap --preset minimal --dry-run` 复核当前版本的实际步骤。
 

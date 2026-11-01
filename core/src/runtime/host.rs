@@ -216,7 +216,38 @@ pub struct ProcessOutput {
     pub stderr: Vec<u8>,
 }
 
+/// A bounded chunk from a captured child pipe. Stream order is preserved per pipe.
+#[derive(Debug)]
+pub struct ProcessOutputChunk {
+    pub stream: &'static str,
+    pub bytes: Vec<u8>,
+}
+
 pub trait ProcessHost {
+    /// Forward captured output through a bounded channel while retaining normal supervision.
+    /// Hosts without streaming support deliver their captured output at completion.
+    fn run_with_output<'a>(
+        &'a self,
+        request: ProcessRequest,
+        output: tokio::sync::mpsc::Sender<ProcessOutputChunk>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
+        let run = self.run(request);
+        Box::pin(async move {
+            let result = run.await?;
+            for (stream, bytes) in [("stdout", &result.stdout), ("stderr", &result.stderr)] {
+                for chunk in bytes.chunks(8192) {
+                    let _ = output
+                        .send(ProcessOutputChunk {
+                            stream,
+                            bytes: chunk.to_vec(),
+                        })
+                        .await;
+                }
+            }
+            Ok(result)
+        })
+    }
+
     fn run<'a>(
         &'a self,
         request: ProcessRequest,
@@ -556,6 +587,24 @@ impl ProcessHost for RealHost {
         &'a self,
         request: ProcessRequest,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
+        self.run_process(request, None)
+    }
+
+    fn run_with_output<'a>(
+        &'a self,
+        request: ProcessRequest,
+        output: tokio::sync::mpsc::Sender<ProcessOutputChunk>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
+        self.run_process(request, Some(output))
+    }
+}
+
+impl RealHost {
+    fn run_process<'a>(
+        &'a self,
+        request: ProcessRequest,
+        output: Option<tokio::sync::mpsc::Sender<ProcessOutputChunk>>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
         Box::pin(async move {
             let mut command = tokio::process::Command::new(&request.program);
             command
@@ -631,14 +680,16 @@ impl ProcessHost for RealHost {
                         &mut stdout_bytes,
                         request.stdout_limit,
                         request.io,
-                        "stdout"
+                        "stdout",
+                        output.as_ref()
                     ),
                     read_process_stream(
                         &mut stderr,
                         &mut stderr_bytes,
                         request.stderr_limit,
                         request.io,
-                        "stderr"
+                        "stderr",
+                        output.as_ref()
                     ),
                 )?;
                 Ok::<_, std::io::Error>((status, stdout_truncated || stderr_truncated))
@@ -706,6 +757,7 @@ async fn read_process_stream<R: AsyncRead + Unpin>(
     limit: Option<usize>,
     io: ProcessIo,
     name: &'static str,
+    live_output: Option<&tokio::sync::mpsc::Sender<ProcessOutputChunk>>,
 ) -> std::io::Result<bool> {
     let mut truncated = false;
     if let Some(stream) = stream {
@@ -714,6 +766,15 @@ async fn read_process_stream<R: AsyncRead + Unpin>(
             let count = stream.read(&mut buffer).await?;
             if count == 0 {
                 break;
+            }
+            if let Some(sender) = live_output {
+                // Closing the presentation channel must not change installer semantics.
+                let _ = sender
+                    .send(ProcessOutputChunk {
+                        stream: name,
+                        bytes: buffer[..count].to_vec(),
+                    })
+                    .await;
             }
             if limit.is_some_and(|limit| count > limit.saturating_sub(output.len())) {
                 if io != ProcessIo::CapturedTail {
@@ -1384,6 +1445,65 @@ sys.exit(os.waitstatus_to_exitcode(status))
     }
 
     #[tokio::test]
+    async fn live_output_closed_receiver_preserves_result_and_stalled_receiver_still_times_out() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        drop(receiver);
+        let output = RealHost
+            .run_with_output(
+                ProcessRequest {
+                    program: "sh".into(),
+                    args: vec![
+                        "-c".into(),
+                        "printf result; printf warning >&2; exit 7".into(),
+                    ],
+                    io: ProcessIo::CapturedTail,
+                    stdout_limit: Some(64),
+                    stderr_limit: Some(64),
+                    timeout: Some(Duration::from_secs(5)),
+                    ..Default::default()
+                },
+                sender,
+            )
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, Some(7));
+        assert_eq!(output.stdout, b"result");
+        assert_eq!(output.stderr, b"warning");
+
+        let marker =
+            std::env::temp_dir().join(format!("shine-live-timeout-{}", uuid::Uuid::new_v4()));
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        let error =
+            RealHost
+                .run_with_output(
+                    ProcessRequest {
+                        program: "sh".into(),
+                        args: vec!["-c".into(),
+                "(sleep 0.3; printf leaked > \"$1\") & while :; do printf 123456789; done".into(),
+                "probe".into(), marker.display().to_string()],
+                        io: ProcessIo::CapturedTail,
+                        stdout_limit: Some(4),
+                        stderr_limit: Some(4),
+                        timeout: Some(Duration::from_millis(50)),
+                        ..Default::default()
+                    },
+                    sender,
+                )
+                .await
+                .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
+        );
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            !marker.exists(),
+            "stalled presentation left descendants running"
+        );
+    }
+
+    #[tokio::test]
     async fn tail_reader_retains_exact_suffix_across_chunks_and_reports_loss() {
         let input = (0..25000).map(|n| (n % 251) as u8).collect::<Vec<_>>();
         for limit in [0, 4, 8192, 10000, input.len(), input.len() + 1] {
@@ -1395,6 +1515,7 @@ sys.exit(os.waitstatus_to_exitcode(status))
                 Some(limit),
                 ProcessIo::CapturedTail,
                 "stdout",
+                None,
             )
             .await
             .unwrap();
@@ -1413,6 +1534,7 @@ sys.exit(os.waitstatus_to_exitcode(status))
             Some(4),
             ProcessIo::Captured,
             "stdout",
+            None,
         )
         .await
         .unwrap();
@@ -1425,7 +1547,8 @@ sys.exit(os.waitstatus_to_exitcode(status))
                 &mut output,
                 Some(4),
                 ProcessIo::Captured,
-                "stdout"
+                "stdout",
+                None,
             )
             .await
             .is_err()

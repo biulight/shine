@@ -7,8 +7,8 @@ use crate::output::escape_controls;
 
 use super::detect::detect_os_id;
 use super::execution::{
-    item_install_start_line, print_item_outcome, print_run_header, print_sys_summary, status_text,
-    sys_item_label_width,
+    bootstrap_outcome_lines, item_install_start_line, print_item_outcome, print_run_header,
+    print_sys_summary, status_text, sys_item_label_width,
 };
 use super::managed::managed_updates;
 use super::render::{driver_name, item_mode_name, print_available_item, print_dry_run};
@@ -452,7 +452,7 @@ async fn handle_init_for_os(
     .next()
     .context("missing reviewed Sys bootstrap Plan")?;
     let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
-    let report = match crate::lifecycle_plan::execute_reviewed(
+    let execution = crate::lifecycle_plan::execute_reviewed(
         config,
         runtime,
         reviewed,
@@ -460,8 +460,9 @@ async fn handle_init_for_os(
         &mut observer,
         &mut interaction,
     )
-    .await?
-    {
+    .await;
+    observer.logs.finish(&mut std::io::stdout().lock())?;
+    let report = match execution? {
         shine_core::frontend::OperationDetails::SysBootstrap(report) => *report,
         _ => unreachable!("reviewed operation result type"),
     };
@@ -481,6 +482,7 @@ async fn handle_init_for_os(
 #[derive(Default)]
 struct BatchBootstrapObserver {
     label_width: usize,
+    logs: super::log_output::InstallerOutput,
 }
 
 impl shine_core::runtime::RuntimeObserver for BatchBootstrapObserver {
@@ -521,10 +523,47 @@ impl shine_core::runtime::RuntimeObserver for BatchBootstrapObserver {
                     item_install_start_line(&item_id, &label, requires_admin)
                 );
             }
+            shine_core::runtime::RuntimeEvent::ProcessOutput {
+                code:
+                    code @ ("sys_bootstrap_installer"
+                    | "sys_bootstrap_installer_progress"
+                    | "sys_bootstrap_installer_partial"
+                    | "sys_bootstrap_installer_tick"),
+                target,
+                stream,
+                text,
+            } => {
+                self.logs
+                    .write(
+                        &mut std::io::stdout().lock(),
+                        super::log_output::Update {
+                            item: &target,
+                            stream,
+                            text: &text,
+                            code,
+                        },
+                    )
+                    .expect("writing installer output");
+                // Also show prompts/progress promptly when stdout is redirected.
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
             shine_core::runtime::RuntimeEvent::SysBootstrapOutcome(outcome) => {
-                print_item_outcome(&outcome, self.label_width.max(14));
+                self.logs
+                    .finish(&mut std::io::stdout().lock())
+                    .expect("finishing installer output");
+                for line in bootstrap_outcome_lines(&outcome, self.label_width.max(14)) {
+                    println!("{line}");
+                }
             }
             _ => {}
         }
+    }
+}
+
+impl Drop for BatchBootstrapObserver {
+    fn drop(&mut self) {
+        // No raw terminal mode is used; commit a pending row on cancellation too.
+        let _ = self.logs.finish(&mut std::io::stdout().lock());
     }
 }
