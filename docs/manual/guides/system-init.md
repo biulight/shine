@@ -99,6 +99,11 @@ history synchronization. Bootstrap runs items sequentially, allows up to 30 minu
 and stops at the first failed or timed-out item. Shine retains only a bounded tail for diagnostics
 while streaming output; log volume alone does not stop installation.
 
+On Ubuntu, the built-in Yazi item installs prebuilt packages from the official stable APT
+repository, along with preview/runtime dependencies. It requires administrator access to add
+the repository key and source; Yazi installation itself does not require Rust or Cargo.
+Existing Yazi installations are detected and skipped rather than migrated between installers.
+
 On Ubuntu, the built-in pnpm item uses the official standalone installer; Node.js, npm and
 Corepack are not prerequisites. It installs under `~/.local/share/pnpm`; Shine manages its PATH
 integration. Open a new shell after bootstrap to use `pnpm`.
