@@ -28,6 +28,31 @@ shine install shell/utils/shine-env-export
 类别 target 会启用当前平台可用的全部命令；只需要其中一个命令时，使用明确的
 `category/command` target。修改型命令不接受裸命令名，因为不同类别可能出现同名命令。
 
+正常的内置 Shell 安装会在确认前显示简短摘要：
+
+```text
+Install · utils
+  Source       built-in · Shine distribution
+  Commands     copyfile, shine-env-export, shine-theme-sync
+  Changes      install 3 commands; update shell integration and ~/.bashrc
+  Backup       ~/.bashrc
+
+Apply? [y/N]
+```
+
+命令、变更的 shell 配置路径和恢复备份路径以当前 Plan 为准。
+命令使用非敏感环境变量时，摘要还会列出变量名，例如安装 `image-tools` 时：
+
+```text
+  Environment  IMAGE_MAX_HEIGHT, IMAGE_MAX_WIDTH, IMAGE_QUALITY
+```
+
+启用颜色时，变量名以蓝色显示；输出重定向或设置 `NO_COLOR` 时使用纯文本。
+
+使用 `--verbose` 查看缓存与状态文件、完整权限、作者说明和计划身份。
+涉及敏感环境变量、外部代码、安装期间执行代码、其他额外权限、冲突或未知诊断时，
+仍显示展开的审阅信息。
+
 安装后需打开新终端或重新加载 shell profile。需要补全时运行：
 
 ```bash
@@ -75,7 +100,8 @@ shine shell uninstall proxy
 shine shell uninstall utils/shine-env-export
 ```
 
-非 dry-run 的 install、uninstall 以及 `shine upgrade` 会显示计划改动和所需权限。确认默认是 No；
+uninstall 和 `shine upgrade` 也会显示各自的计划改动。
+确认默认是 No；
 自动化必须传入 `--yes`，但 Plan 与安全检查仍会执行。`--dry-run` 是独立预览，不能与 `--yes`
 组合。
 

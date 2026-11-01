@@ -5,7 +5,7 @@ use unicode_normalization::UnicodeNormalization;
 
 /// Install handlers before the first password operation. Cancellation drops staging
 /// guards before returning; command execution has its own process-tree supervision.
-pub(super) async fn prepare<T>(future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+pub(crate) async fn prepare<T>(future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
     #[cfg(unix)]
     let mut signals = [
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?,
@@ -39,30 +39,30 @@ pub(super) async fn prepare<T>(future: impl std::future::Future<Output = Result<
 #[path = "platform/windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub(super) use windows::{
+pub(crate) use windows::{
     Identity, command_status, create_private, directory_identity, identity, is_link,
     lock_directory, lock_file, open_directory, open_read, path_identity, private_directory,
-    publish_new, sync_cipher_parents,
+    publish_new, sync_cipher_parents, verify_acl,
 };
 
 #[cfg(unix)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) struct Identity(u64, u64);
+pub(crate) struct Identity(u64, u64);
 
 #[cfg(unix)]
-pub(super) fn is_link(metadata: &Metadata) -> bool {
+pub(crate) fn is_link(metadata: &Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
 #[cfg(unix)]
-pub(super) fn directory_identity(file: &File) -> Result<Identity> {
+pub(crate) fn directory_identity(file: &File) -> Result<Identity> {
     use std::os::unix::fs::MetadataExt;
     let m = file.metadata()?;
     Ok(Identity(m.dev(), m.ino()))
 }
 
 #[cfg(unix)]
-pub(super) fn identity(file: &File) -> Result<Identity> {
+pub(crate) fn identity(file: &File) -> Result<Identity> {
     metadata_identity(&file.metadata()?)
 }
 
@@ -78,12 +78,12 @@ fn metadata_identity(m: &Metadata) -> Result<Identity> {
 
 /// Observe identity without requiring plaintext read access; never follow links.
 #[cfg(unix)]
-pub(super) fn path_identity(path: &Path) -> Result<Identity> {
+pub(crate) fn path_identity(path: &Path) -> Result<Identity> {
     metadata_identity(&fs::symlink_metadata(path)?)
 }
 
 #[cfg(unix)]
-pub(super) fn open_read(path: &Path) -> Result<File> {
+pub(crate) fn open_read(path: &Path) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     Ok(OpenOptions::new()
         .read(true)
@@ -92,7 +92,7 @@ pub(super) fn open_read(path: &Path) -> Result<File> {
 }
 
 #[cfg(unix)]
-pub(super) fn open_directory(path: &Path) -> Result<File> {
+pub(crate) fn open_directory(path: &Path) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     Ok(OpenOptions::new()
         .read(true)
@@ -101,7 +101,7 @@ pub(super) fn open_directory(path: &Path) -> Result<File> {
 }
 
 #[cfg(unix)]
-pub(super) fn create_private(path: &Path) -> Result<File> {
+pub(crate) fn create_private(path: &Path) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     Ok(OpenOptions::new()
         .read(true)
@@ -113,7 +113,7 @@ pub(super) fn create_private(path: &Path) -> Result<File> {
 }
 
 #[cfg(unix)]
-pub(super) fn private_directory(path: &Path) -> Result<bool> {
+pub(crate) fn private_directory(path: &Path) -> Result<bool> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     let created = match fs::DirBuilder::new().mode(0o700).create(path) {
         Ok(()) => true,
@@ -133,14 +133,14 @@ pub(super) fn private_directory(path: &Path) -> Result<bool> {
 }
 
 #[cfg(unix)]
-pub(super) fn lock_directory() -> Result<String> {
+pub(crate) fn lock_directory() -> Result<String> {
     Ok(format!("shine-file-group-locks-{}", unsafe {
         libc::geteuid()
     }))
 }
 
 #[cfg(unix)]
-pub(super) fn lock_file(path: &Path) -> Result<File> {
+pub(crate) fn lock_file(path: &Path) -> Result<File> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let file = OpenOptions::new()
         .read(true)
@@ -159,7 +159,7 @@ pub(super) fn lock_file(path: &Path) -> Result<File> {
     Ok(file)
 }
 
-pub(super) fn path_key(path: &Path) -> Vec<u8> {
+pub(crate) fn path_key(path: &Path) -> Vec<u8> {
     // Normalize before and after case conversion so canonically equivalent
     // APFS names share both overlap checks and path locks on every platform.
     path.to_string_lossy()
@@ -172,7 +172,7 @@ pub(super) fn path_key(path: &Path) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-pub(super) fn publish_new(temp: &Path, path: &Path) -> Result<()> {
+pub(crate) fn publish_new(temp: &Path, path: &Path) -> Result<()> {
     // Atomic no-clobber publication, followed by durable namespace synchronization.
     fs::hard_link(temp, path)?;
     fs::remove_file(temp)?;
@@ -180,7 +180,7 @@ pub(super) fn publish_new(temp: &Path, path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-pub(super) fn sync_cipher_parents(root: &Path, path: &Path) -> Result<()> {
+pub(crate) fn sync_cipher_parents(root: &Path, path: &Path) -> Result<()> {
     // Newly created nested directories must also be durable before plaintext deletion.
     for parent in path
         .parent()
@@ -196,7 +196,7 @@ pub(super) fn sync_cipher_parents(root: &Path, path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-pub(super) async fn command_status(
+pub(crate) async fn command_status(
     command: &[OsString],
     values: &BTreeMap<String, String>,
     override_env: bool,

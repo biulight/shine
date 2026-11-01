@@ -143,7 +143,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
 | `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap and Frontend Service construction; tests cover live overlay readers versus captured snapshots and review authority |
 | `cli/src/lifecycle_plan.rs` | Default-No/non-TTY approval policy, input identities and batch prevalidation; retains the public review adapter |
-| `cli/src/lifecycle_plan/render.rs`, `render/` | Pure Plan display facade with compact/detailed/bootstrap layouts, conservative permission summaries, code-boundary warnings and semantic labels |
+| `cli/src/lifecycle_plan/render.rs`, `render/` | Pure Plan display facade with built-in install summaries and compact/detailed/bootstrap layouts, conservative permission summaries, code-boundary review and semantic labels |
 | `cli/src/lifecycle_plan/prepared.rs` | Private reviewed-request handoffs, named three-domain upgrade prevalidation and consuming typed report execution; Core retains fresh approval checks |
 | `cli/src/lifecycle_plan/prepared/tests.rs` | Batch shape/domain rejection before capture, all-domain prevalidation before execution and apply-time revalidation regressions |
 | `cli/src/lifecycle_plan/classification.rs` | Terminal-only typed grouping of unchanged Plan steps, routine notices and conservative unknown-diagnostic fallback |
@@ -350,3 +350,13 @@ See [`data-flows.md`](data-flows.md#ssh-environment-forwarding),
 | `presets/sys/windows/` | Windows bootstrap manifest and PowerShell profile fragments |
 
 Authoring rules and verification live in [`../preset-authoring.md`](../preset-authoring.md).
+
+## App secret files and file release
+
+| Path | Responsibility |
+| --- | --- |
+| `core/src/runtime/secret_files.rs` | Declaration/mapping validation and immutable file-release contracts |
+| `core/src/runtime/secret_files/managed.rs` | Secret ownership, preparation, mutation and recovery |
+| `core/src/runtime/planner/app_secrets.rs` | Read-only secret Plan contributions |
+| `cli/src/apps/secret_files.rs` | Native private I/O and local/broker decryption provider |
+| `cli/src/ssh/file_broker.rs` | Bounded file transport, exact file policies and authoring commands |

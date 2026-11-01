@@ -76,6 +76,36 @@ resolve_version() {
   fi
 }
 
+# Quote one literal argument for POSIX shells (also accepted by Bash and Zsh).
+quote_arg() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+add_path_hint() {
+  log "Warning: $SHINE_INSTALL_DIR is not in PATH"
+  shell_name="${SHELL:-}"
+  shell_name="${shell_name##*/}"
+  case "$shell_name" in
+    bash|zsh)
+      if [ "$shell_name" = bash ]; then
+        profile='"$HOME/.bashrc"'
+      else
+        # Resolve ZDOTDIR in the user's shell, where it may be set but not exported.
+        profile='"${ZDOTDIR:-$HOME}/.zshrc"'
+      fi
+      escaped_dir="$(printf '%s' "$SHINE_INSTALL_DIR" | sed 's/[\\"$`]/\\&/g')"
+      path_line="export PATH=\"$escaped_dir:\$PATH\""
+      quoted_line="$(quote_arg "$path_line")"
+      log "For $shell_name (from SHELL), run this command, then open a new shell:"
+      log "  grep -Fqx -- $quoted_line $profile 2>/dev/null || printf '\\n%s\\n' $quoted_line >> $profile"
+      ;;
+    *)
+      log "Automatic PATH configuration commands are only provided for Bash and Zsh (from SHELL)."
+      log "Add the installation directory to PATH in your shell configuration, then open a new shell."
+      ;;
+  esac
+}
+
 main() {
   need_cmd tar
   target="$(detect_target)"
@@ -110,9 +140,7 @@ main() {
   case ":$PATH:" in
     *":$SHINE_INSTALL_DIR:"*) ;;
     *)
-      log "Warning: $SHINE_INSTALL_DIR is not in PATH"
-      log "Add this to your shell config:"
-      log "  export PATH=\"$SHINE_INSTALL_DIR:\$PATH\""
+      add_path_hint
       ;;
   esac
 }

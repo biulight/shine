@@ -67,7 +67,9 @@ pub(super) async fn print_app_file(
         let diff_output = app_diff_output(config, item).await?;
         print_block("Diff", &app_current_path(item), &diff_output);
     }
-    if verbose {
+    if verbose && item.assessment_diagnostic == Some("app_secret_content_redacted") {
+        println!("Secret file content is redacted.");
+    } else if verbose {
         print_file_content(
             &item.destination,
             "Content",
@@ -410,6 +412,12 @@ fn colored_shell_status(status: &str) -> String {
 }
 
 async fn app_diff_output(_config: &Config, item: &AppInfoFile) -> Result<String> {
+    if item.assessment_diagnostic == Some("app_secret_content_redacted") {
+        return Ok(
+            "Secret file content is redacted; status uses protected ownership observations.\n"
+                .into(),
+        );
+    }
     let Some(expected) = &item.desired_content else {
         return Ok("Unable to render expected content from the active preset.\n".to_string());
     };

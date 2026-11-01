@@ -88,7 +88,13 @@ async fn from_config_with_preset_mode(
         },
     )
     .await
-    .map(shine_core::frontend::FrontendService::into_runtime)
+    .map(|service| {
+        service
+            .into_runtime()
+            .with_secret_file_provider(std::sync::Arc::new(
+                crate::apps::secret_files::Provider::new(config.clone()),
+            ))
+    })
     .map_err(shine_core::frontend::FrontendServiceError::into_source)
 }
 
@@ -353,7 +359,7 @@ generator = { script = 'gen.sh', env = [{ source = 'SOURCE', sensitivity = 'plai
             .await
             .unwrap();
         AppManifest {
-            schema_version: 1,
+            schema_version: 2,
             entries: vec![AppEntry {
                 source: "app/demo/generated.txt".into(),
                 destination: destination.clone(),

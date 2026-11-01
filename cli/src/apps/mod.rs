@@ -1134,3 +1134,5 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }
+
+pub(crate) mod secret_files;

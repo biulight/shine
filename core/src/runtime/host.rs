@@ -190,6 +190,9 @@ pub struct ProcessRequest {
     pub env: BTreeMap<String, String>,
     pub stdin: Vec<u8>,
     pub inherit_stdin: bool,
+    /// Start a new Unix session without a controlling terminal.
+    /// Incompatible with inherited stdin; other platforms already lack Unix job control.
+    pub detach_terminal: bool,
     pub timeout: Option<Duration>,
     pub io: ProcessIo,
     pub stdout_limit: Option<usize>,
@@ -200,6 +203,8 @@ pub struct ProcessRequest {
 pub enum ProcessIo {
     #[default]
     Captured,
+    /// Keep only the tail within each stream limit; excess logs do not fail the process.
+    CapturedTail,
     Inherit,
 }
 
@@ -207,12 +212,45 @@ pub enum ProcessIo {
 pub struct ProcessOutput {
     /// The child was terminated by an interrupt or termination signal.
     pub interrupted: bool,
+    /// At least one captured stream discarded bytes in tail mode.
+    pub output_truncated: bool,
     pub exit_code: Option<i32>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
 }
 
+/// A bounded chunk from a captured child pipe. Stream order is preserved per pipe.
+#[derive(Debug)]
+pub struct ProcessOutputChunk {
+    pub stream: &'static str,
+    pub bytes: Vec<u8>,
+}
+
 pub trait ProcessHost {
+    /// Forward captured output through a bounded channel while retaining normal supervision.
+    /// Hosts without streaming support deliver their captured output at completion.
+    fn run_with_output<'a>(
+        &'a self,
+        request: ProcessRequest,
+        output: tokio::sync::mpsc::Sender<ProcessOutputChunk>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
+        let run = self.run(request);
+        Box::pin(async move {
+            let result = run.await?;
+            for (stream, bytes) in [("stdout", &result.stdout), ("stderr", &result.stderr)] {
+                for chunk in bytes.chunks(8192) {
+                    let _ = output
+                        .send(ProcessOutputChunk {
+                            stream,
+                            bytes: chunk.to_vec(),
+                        })
+                        .await;
+                }
+            }
+            Ok(result)
+        })
+    }
+
     fn run<'a>(
         &'a self,
         request: ProcessRequest,
@@ -552,7 +590,29 @@ impl ProcessHost for RealHost {
         &'a self,
         request: ProcessRequest,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
+        self.run_process(request, None)
+    }
+
+    fn run_with_output<'a>(
+        &'a self,
+        request: ProcessRequest,
+        output: tokio::sync::mpsc::Sender<ProcessOutputChunk>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
+        self.run_process(request, Some(output))
+    }
+}
+
+impl RealHost {
+    fn run_process<'a>(
+        &'a self,
+        request: ProcessRequest,
+        output: Option<tokio::sync::mpsc::Sender<ProcessOutputChunk>>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
         Box::pin(async move {
+            anyhow::ensure!(
+                !(request.detach_terminal && request.inherit_stdin),
+                "detached terminal cannot inherit stdin"
+            );
             let mut command = tokio::process::Command::new(&request.program);
             command
                 .args(&request.args)
@@ -567,7 +627,7 @@ impl ProcessHost for RealHost {
                     Stdio::piped()
                 });
             match request.io {
-                ProcessIo::Captured => {
+                ProcessIo::Captured | ProcessIo::CapturedTail => {
                     command.stdout(Stdio::piped()).stderr(Stdio::piped());
                 }
                 ProcessIo::Inherit => {
@@ -577,13 +637,29 @@ impl ProcessHost for RealHost {
             if let Some(cwd) = &request.cwd {
                 command.current_dir(cwd);
             }
-            let bounded = request.timeout.is_some()
+            let bounded = request.detach_terminal
+                || request.timeout.is_some()
                 || request.stdout_limit.is_some()
                 || request.stderr_limit.is_some();
             #[cfg(unix)]
             if bounded {
                 use std::os::unix::process::CommandExt;
-                command.as_std_mut().process_group(0);
+                if request.detach_terminal {
+                    // setsid also creates the process group tracked by ProcessScope.
+                    // Do not call setpgid first: a group leader cannot call setsid.
+                    // SAFETY: setsid is async-signal-safe; no allocation or locking
+                    // occurs in this post-fork closure.
+                    unsafe {
+                        command.as_std_mut().pre_exec(|| {
+                            if libc::setsid() == -1 {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                            Ok(())
+                        });
+                    }
+                } else {
+                    command.as_std_mut().process_group(0);
+                }
             }
             command.kill_on_drop(true);
             let mut child = command.spawn()?;
@@ -603,7 +679,7 @@ impl ProcessHost for RealHost {
             let mut stdout_bytes = Vec::new();
             let mut stderr_bytes = Vec::new();
             let mut completion = Box::pin(async {
-                let (status, (), (), ()) = tokio::try_join!(
+                let (status, (), stdout_truncated, stderr_truncated) = tokio::try_join!(
                     async {
                         let status = child.wait().await?;
                         if !status.success() {
@@ -626,16 +702,20 @@ impl ProcessHost for RealHost {
                         &mut stdout,
                         &mut stdout_bytes,
                         request.stdout_limit,
-                        "stdout"
+                        request.io,
+                        "stdout",
+                        output.as_ref()
                     ),
                     read_process_stream(
                         &mut stderr,
                         &mut stderr_bytes,
                         request.stderr_limit,
-                        "stderr"
+                        request.io,
+                        "stderr",
+                        output.as_ref()
                     ),
                 )?;
-                Ok::<_, std::io::Error>(status)
+                Ok::<_, std::io::Error>((status, stdout_truncated || stderr_truncated))
             });
             let result = if let Some(timeout) = request.timeout {
                 match tokio::time::timeout(timeout, &mut completion).await {
@@ -649,7 +729,7 @@ impl ProcessHost for RealHost {
                 (&mut completion).await
             };
             drop(completion);
-            let status = match result {
+            let (status, output_truncated) = match result {
                 Ok(status) => status,
                 Err(error) => {
                     scope.stop();
@@ -668,6 +748,7 @@ impl ProcessHost for RealHost {
             }
             Ok(ProcessOutput {
                 interrupted: process_interrupted(status),
+                output_truncated,
                 exit_code: status.code(),
                 stdout: stdout_bytes,
                 stderr: stderr_bytes,
@@ -697,8 +778,11 @@ async fn read_process_stream<R: AsyncRead + Unpin>(
     stream: &mut Option<R>,
     output: &mut Vec<u8>,
     limit: Option<usize>,
+    io: ProcessIo,
     name: &'static str,
-) -> std::io::Result<()> {
+    live_output: Option<&tokio::sync::mpsc::Sender<ProcessOutputChunk>>,
+) -> std::io::Result<bool> {
+    let mut truncated = false;
     if let Some(stream) = stream {
         let mut buffer = [0u8; 8192];
         loop {
@@ -706,15 +790,36 @@ async fn read_process_stream<R: AsyncRead + Unpin>(
             if count == 0 {
                 break;
             }
+            if let Some(sender) = live_output {
+                // Closing the presentation channel must not change installer semantics.
+                let _ = sender
+                    .send(ProcessOutputChunk {
+                        stream: name,
+                        bytes: buffer[..count].to_vec(),
+                    })
+                    .await;
+            }
             if limit.is_some_and(|limit| count > limit.saturating_sub(output.len())) {
-                return Err(std::io::Error::other(format!(
-                    "process {name} exceeded configured limit"
-                )));
+                if io != ProcessIo::CapturedTail {
+                    return Err(std::io::Error::other(format!(
+                        "process {name} exceeded configured limit"
+                    )));
+                }
+                truncated = true;
+                let limit = limit.expect("overflow requires a limit");
+                if count >= limit {
+                    output.clear();
+                    output.extend_from_slice(&buffer[count - limit..count]);
+                } else {
+                    output.drain(..output.len() - (limit - count));
+                    output.extend_from_slice(&buffer[..count]);
+                }
+                continue;
             }
             output.extend_from_slice(&buffer[..count]);
         }
     }
-    Ok(())
+    Ok(truncated)
 }
 
 impl PrivilegedFileSystemHost for RealHost {
@@ -1144,7 +1249,9 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_terminates_descendants_even_after_parent_exit() {
-        for parent_exits in [false, true] {
+        for (parent_exits, detach_terminal) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let root = std::env::temp_dir().join(format!("shine-cancel-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let ready = root.join("ready");
@@ -1161,6 +1268,7 @@ mod tests {
                     ready.display().to_string(),
                     marker.display().to_string(),
                 ],
+                detach_terminal,
                 timeout: Some(Duration::from_secs(5)),
                 ..Default::default()
             }));
@@ -1286,24 +1394,27 @@ sys.exit(os.waitstatus_to_exitcode(status))
 
     #[tokio::test]
     async fn timed_process_terminates_its_process_group_before_returning() {
-        let marker = std::env::temp_dir().join(format!(
-            "shine-timeout-process-group-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let script = format!("(sleep 0.3; printf leaked > '{}') & wait", marker.display());
-        let error = RealHost
-            .run(ProcessRequest {
-                program: "sh".to_string(),
-                args: vec!["-c".to_string(), script],
-                timeout: Some(Duration::from_millis(50)),
-                ..ProcessRequest::default()
-            })
-            .await
-            .unwrap_err();
+        for detach_terminal in [false, true] {
+            let marker = std::env::temp_dir().join(format!(
+                "shine-timeout-process-group-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let script = format!("(sleep 0.3; printf leaked > '{}') & wait", marker.display());
+            let error = RealHost
+                .run(ProcessRequest {
+                    program: "sh".to_string(),
+                    args: vec!["-c".to_string(), script],
+                    detach_terminal,
+                    timeout: Some(Duration::from_millis(50)),
+                    ..ProcessRequest::default()
+                })
+                .await
+                .unwrap_err();
 
-        assert!(error.to_string().contains("process timed out"));
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        assert!(tokio::fs::metadata(&marker).await.is_err());
+            assert!(error.to_string().contains("process timed out"));
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            assert!(tokio::fs::metadata(&marker).await.is_err());
+        }
     }
     #[tokio::test]
     async fn output_limits_kill_children_before_later_side_effects() {
@@ -1343,19 +1454,133 @@ sys.exit(os.waitstatus_to_exitcode(status))
     }
 
     #[tokio::test]
+    async fn tail_capture_still_times_out_and_terminates_descendants() {
+        let marker =
+            std::env::temp_dir().join(format!("shine-tail-timeout-{}", uuid::Uuid::new_v4()));
+        let error = RealHost.run(ProcessRequest {
+            program: "sh".into(),
+            args: vec!["-c".into(),
+                "(sleep 0.3; printf leaked > \"$1\") & while :; do printf 123456789; printf 123456789 >&2; done".into(),
+                "probe".into(), marker.display().to_string()],
+            io: ProcessIo::CapturedTail,
+            stdout_limit: Some(4),
+            stderr_limit: Some(4),
+            timeout: Some(Duration::from_millis(50)),
+            ..Default::default()
+        }).await.unwrap_err();
+        assert!(error.to_string().contains("process timed out"));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn live_output_closed_receiver_preserves_result_and_stalled_receiver_still_times_out() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        drop(receiver);
+        let output = RealHost
+            .run_with_output(
+                ProcessRequest {
+                    program: "sh".into(),
+                    args: vec![
+                        "-c".into(),
+                        "printf result; printf warning >&2; exit 7".into(),
+                    ],
+                    io: ProcessIo::CapturedTail,
+                    stdout_limit: Some(64),
+                    stderr_limit: Some(64),
+                    timeout: Some(Duration::from_secs(5)),
+                    ..Default::default()
+                },
+                sender,
+            )
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, Some(7));
+        assert_eq!(output.stdout, b"result");
+        assert_eq!(output.stderr, b"warning");
+
+        let marker =
+            std::env::temp_dir().join(format!("shine-live-timeout-{}", uuid::Uuid::new_v4()));
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        let error =
+            RealHost
+                .run_with_output(
+                    ProcessRequest {
+                        program: "sh".into(),
+                        args: vec!["-c".into(),
+                "(sleep 0.3; printf leaked > \"$1\") & while :; do printf 123456789; done".into(),
+                "probe".into(), marker.display().to_string()],
+                        io: ProcessIo::CapturedTail,
+                        stdout_limit: Some(4),
+                        stderr_limit: Some(4),
+                        timeout: Some(Duration::from_millis(50)),
+                        ..Default::default()
+                    },
+                    sender,
+                )
+                .await
+                .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
+        );
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            !marker.exists(),
+            "stalled presentation left descendants running"
+        );
+    }
+
+    #[tokio::test]
+    async fn tail_reader_retains_exact_suffix_across_chunks_and_reports_loss() {
+        let input = (0..25000).map(|n| (n % 251) as u8).collect::<Vec<_>>();
+        for limit in [0, 4, 8192, 10000, input.len(), input.len() + 1] {
+            let mut stream = Some(input.as_slice());
+            let mut output = Vec::new();
+            let truncated = read_process_stream(
+                &mut stream,
+                &mut output,
+                Some(limit),
+                ProcessIo::CapturedTail,
+                "stdout",
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(output, input[input.len().saturating_sub(limit)..]);
+            assert_eq!(truncated, input.len() > limit);
+        }
+    }
+
+    #[tokio::test]
     async fn bounded_reader_accepts_exact_limit_without_retaining_overflow() {
         let mut exact = Some(&b"1234"[..]);
         let mut output = Vec::new();
-        read_process_stream(&mut exact, &mut output, Some(4), "stdout")
-            .await
-            .unwrap();
+        read_process_stream(
+            &mut exact,
+            &mut output,
+            Some(4),
+            ProcessIo::Captured,
+            "stdout",
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(output, b"1234");
         let mut overflow = Some(&b"123456789"[..]);
         output.clear();
         assert!(
-            read_process_stream(&mut overflow, &mut output, Some(4), "stdout")
-                .await
-                .is_err()
+            read_process_stream(
+                &mut overflow,
+                &mut output,
+                Some(4),
+                ProcessIo::Captured,
+                "stdout",
+                None,
+            )
+            .await
+            .is_err()
         );
         assert!(output.len() <= 4);
     }

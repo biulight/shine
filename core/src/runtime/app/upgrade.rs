@@ -116,7 +116,11 @@ where
             restart_hints: BTreeSet::new(),
             lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, false),
         };
-        let changed = BTreeSet::new();
+        let changed = self
+            .secret_changes
+            .lock()
+            .map_err(|_| anyhow::anyhow!("secret change lock poisoned"))?
+            .clone();
         let mut state = UpgradeState {
             approved,
             manifest,

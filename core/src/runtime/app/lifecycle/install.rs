@@ -167,7 +167,11 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
             state: InstallState {
                 manifest,
                 report,
-                changed: BTreeSet::new(),
+                changed: self
+                    .secret_changes
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("secret change lock poisoned"))?
+                    .clone(),
             },
             categories,
             assessed,

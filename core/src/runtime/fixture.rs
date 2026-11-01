@@ -576,7 +576,9 @@ fn validate_receipt_document(name: &str, document: &str) -> Result<(), &'static 
         "app-manifest.toml" => {
             let manifest = toml::from_str::<crate::install::manifest::AppManifest>(document)
                 .map_err(|_| "fixture_receipt_invalid")?;
-            if manifest.schema_version != crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION {
+            if !(1..=crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION)
+                .contains(&manifest.schema_version)
+            {
                 return Err("fixture_receipt_schema_unsupported");
             }
         }

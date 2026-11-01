@@ -293,6 +293,22 @@ impl<H: FileSystemObservationHost> FrontendService<H> {
             .map_err(|error| {
                 FrontendServiceError::new("frontend_inventory_app_state_failed", error)
             })?;
+        for entry in self
+            .runtime
+            .secret_store()
+            .map_err(|error| {
+                FrontendServiceError::new("frontend_inventory_app_secret_state_failed", error)
+            })?
+            .entries
+        {
+            mark_installed(
+                states,
+                diagnostics,
+                CapabilityKindV1::App,
+                format!("app/{}", entry.category),
+                include_available,
+            );
+        }
         for entry in manifest.entries {
             let Some(category) = app_manifest_category(&entry.source) else {
                 diagnostics.push(FrontendDiagnosticV1::warning(
@@ -938,6 +954,7 @@ auto = false
             .host()
             .queue_process_output(Ok(crate::runtime::ProcessOutput {
                 interrupted: false,
+                output_truncated: false,
                 exit_code: Some(0),
                 stdout: b"new".to_vec(),
                 stderr: Vec::new(),

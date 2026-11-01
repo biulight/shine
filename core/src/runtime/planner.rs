@@ -380,6 +380,7 @@ mod app_convergence;
 mod app_file_plan;
 mod app_plan;
 mod app_remove_actions;
+mod app_secrets;
 mod app_specialized;
 mod app_stale_plan;
 mod approved;

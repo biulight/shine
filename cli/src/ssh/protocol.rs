@@ -24,7 +24,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// v2: switched from custom byte-streaming (`PutFile`/`GetFile` + raw bodies)
 /// to a control channel driving a local `rsync`/`scp` (ADR 0011).
 /// v3: added session-scoped direct/workspace secret broker requests.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// There is no separate raw file-body stream. This cap bounds both broker
 /// workspace/source snapshots and metadata/log frames against a hostile peer;
@@ -44,6 +44,15 @@ pub enum Direction {
 #[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
+    FileRelease {
+        token: String,
+        nonce: String,
+        describe: bool,
+        length: usize,
+    },
+    FileBrokerStatus {
+        token: String,
+    },
     Hello {
         protocol_version: u32,
     },
@@ -120,6 +129,13 @@ pub enum LogStream {
 #[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerMessage {
+    FileBrokerStatus {
+        enabled: bool,
+    },
+    FileReady,
+    FileComplete {
+        count: usize,
+    },
     HelloAck {
         protocol_version: u32,
     },
@@ -163,7 +179,12 @@ where
     W: AsyncWrite + Unpin,
     T: Serialize,
 {
-    let payload = serde_json::to_vec(message).context("failed to serialize protocol message")?;
+    let payload = zeroize::Zeroizing::new(
+        serde_json::to_vec(message).context("failed to serialize protocol message")?,
+    );
+    if payload.len() > MAX_CONTROL_FRAME_BYTES as usize {
+        bail!("protocol message exceeds frame limit");
+    }
     let len = u32::try_from(payload.len()).context("protocol message too large")?;
     writer
         .write_all(&len.to_le_bytes())
@@ -194,7 +215,7 @@ where
     if len > MAX_CONTROL_FRAME_BYTES {
         bail!("protocol control frame of {len} bytes exceeds the maximum allowed size");
     }
-    let mut payload = vec![0u8; len as usize];
+    let mut payload = zeroize::Zeroizing::new(vec![0u8; len as usize]);
     reader
         .read_exact(&mut payload)
         .await

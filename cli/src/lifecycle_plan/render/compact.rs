@@ -35,6 +35,9 @@ pub(in crate::lifecycle_plan) fn render_compact_plan_lines(
     planned: &[(LifecyclePlanRequest, PlanV1)],
     _config_digest: &str,
 ) -> Result<Vec<String>> {
+    if let Some(lines) = super::render_install_summary(planned) {
+        return Ok(lines);
+    }
     let Some((_, first)) = planned.first() else {
         return Ok(Vec::new());
     };
@@ -107,7 +110,7 @@ pub(in crate::lifecycle_plan) fn render_compact_plan_lines(
             crate::colors::bold_cyan(request.section_label())
         ));
         lines.extend(render_compact_steps(plan));
-        lines.extend(render_code_boundaries(plan, "    "));
+        lines.extend(render_code_boundaries(plan, "    ", false));
         lines.extend(render_compact_permissions(plan));
     }
     if !warnings.is_empty() {

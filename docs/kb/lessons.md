@@ -1,5 +1,37 @@
 # Lessons Learned
 
+## 2026-10-31 — Secret creation needs durable identity and usable parent directories
+
+- **Failure**: after creation but before the applied journal write, recovery accepted equal-content
+  replacements because a missing identity counted as a match. Separately, root-created `0700`
+  parents made a service-owned secret inaccessible to that service account.
+- **Rule**: never infer a created file's identity from its content. Preserve evidence when the
+  applied identity was not persisted. For another non-root owner, require pre-created parents with
+  applicable Unix search permission before decryption; leave shared directory permissions alone.
+- **Coverage**: `missing_applied_identity_blocks_creation_and_update_recovery`,
+  `service_owner_missing_parents_fail_before_decryption_or_writes`, and
+  `service_owner_requires_traversable_existing_parents` cover the journal failure window, early
+  rejection and parent traversal in `cli/src/apps/secret_files/tests.rs`.
+
+## 2026-10-31 — Broker request paths belong to the peer's platform
+
+- **Symptom**: Windows CI rejected POSIX file-release workspaces as non-absolute paths, breaking
+  local authorization of Linux requests before policy matching.
+- **Rule**: validate slash-rooted POSIX paths independently of the broker host's native absolute
+  path rule; retain native Windows paths for local App decryption and reject traversal.
+- **Coverage**: `file_release_workspace_paths_support_posix_peers_on_every_host` and the file broker
+  authorization/inspection tests run in the native Windows CI matrix.
+
+## 2026-10-30 — Secret recovery and ownership must retain filesystem identity
+
+- **Risk**: first-create recovery has no rollback file, but must still check the observed applied
+  identity before deleting a failed write. Equal bytes and permissions do not authorize removing a
+  replacement. Ordinary and secret ownership also need the same conservative case/Unicode path key.
+- **Rule**: check applied identity in both first-create and update recovery; compare ownership paths
+  using the workspace alias policy before either resource can adopt a target.
+- **Coverage**: `initial_secret_receipt_failure_recovers_only_the_created_file` and
+  `secret_and_ordinary_ownership_reject_case_alias_takeover` in `cli/src/apps/secret_files/tests.rs`.
+
 ## 2026-10-28 — Git absence diagnostics differ at filesystem boundaries
 
 - **Symptom**: Ubuntu CI failed file-group seal/run/export and rollback tests with
@@ -1803,6 +1835,10 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
   coverage on every host, with explicit shell, provider, privilege, and shared-write expectations.
 - **Rule**: isolate filesystem I/O and choose host-compatible fixtures independently. Do not weaken
   runtime path validation or drop Windows rendering coverage to accommodate a foreign OS fixture.
+- **2026-10-31 follow-up**: the Rust bootstrap matrix compared process paths as strings and failed
+  on Windows when `join` produced mixed `/` and `\` separators. Compare `Path` values for native
+  command identity; keep exact argv and no-reinstallation assertions. Simulated runtime platforms
+  still use the test host's path grammar.
 
 ## 2026-09-13 — Empty permission sets did not imply missing declarations (superseded by ADR 0091)
 
@@ -2569,11 +2605,11 @@ below still applies to any future background process.
 
 - **Symptom**: `shine sys bootstrap` could show a sudo password prompt without identifying which
   selected software caused it.
-- **Root cause**: installer output is buffered until completion, including output from install
+- **Root cause**: installer output was buffered until completion, including output from install
   scripts that invoke `sudo` themselves.
 - **Fix**: announce each missing item from the bootstrap runner before starting its installer.
 - **Rule**: a bootstrap action must identify its owning item before any authorization interaction;
-  do not rely on installer output that the runner buffers until completion.
+  do not rely on installer output, which can be delayed by child buffering even with live forwarding.
 
 ## 2026-08-21 — External-code errors hid the active trust boundary
 
@@ -3581,3 +3617,136 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Regression**: snapshot/live missing-file inspection preserves files, receipts and trust;
   long-line review shows both suffixes, rejection preserves policy bytes, nonce reuse fails,
   and fresh approval stores the original unescaped source path.
+
+## 2026-10-31 — Atuin setup prompts can hide behind bootstrap output capture
+
+- **Symptom**: Ubuntu bootstrap appeared stuck at Atuin even though its binary was installed.
+- **Cause**: the upstream setup script read `/dev/tty` for post-install setup while Shine buffered
+  stdout/stderr. Inheriting stdin does not make a captured prompt visible; piping a script to `sh`
+  does not disable its explicit terminal reads.
+- **Fix**: pass `--non-interactive` to the built-in Atuin setup invocation. History import and account
+  setup remain explicit user actions. Keep sequential execution, the 30-minute installer timeout,
+  and stop-on-first-failure behavior.
+- **Regression**: an isolated fake download exercises the actual preset through Bash, requiring the
+  non-interactive argument and preserving download and installer failures without network access.
+
+## 2026-10-31 — Rust presence does not establish shell PATH integration
+
+- **Symptom**: Ubuntu bootstrap reported Rust already installed while Bash could not find `rustup`.
+- **Cause**: detection also searches `~/.cargo/bin`, but the Ubuntu installer uses
+  `--no-modify-path` and its item lacked a PATH integration. Detection does not modify the caller's
+  environment. macOS and Windows already include Cargo in their base pre profiles.
+- **Fix**: declare `$HOME/.cargo/bin` as an Ubuntu Rust pre-phase PATH integration for Bash/Zsh.
+  Rerunning bootstrap for an existing Rust installation enables the integration and records it;
+  the user must then start a new shell or load the environment in the current one.
+- **Regression**: approved bootstrap with embedded presets and an existing Rust installation
+  covers Ubuntu Bash/Zsh, macOS Zsh and Windows PowerShell profile content, preserves installation,
+  and keeps reruns stable. Native Bash/Zsh checks load generated profiles twice and verify command
+  discovery and a single Cargo PATH entry. Cross-platform profile inspection is not native Windows
+  installer or PowerShell execution evidence.
+
+## 2026-11-01 — Plain environment requirements should not expand an ordinary install review
+
+- **Symptom**: `utils` used the concise install summary while `image-tools` showed the expanded
+  Security Plan despite also delivering built-in commands for later execution.
+- **Cause**: the summary accepted only filesystem requirements and the opaque-code marker;
+  `image-tools` runtime environment mappings triggered the catch-all fallback.
+- **Fix**: summarize plain environment requirements by sorted, deduplicated names. Keep secrets
+  and unrelated capabilities in expanded review without changing Plan data or approval.
+- **Coverage**: embedded-snapshot review and isolated install-handler output cover both categories;
+  a secret requirement sharing a plain variable's name still triggers expanded review.
+
+## 2026-10-31 — Verify the complete accepted terminal layout
+
+- **Symptom**: removing warnings passed negative substring tests, but the default installation still
+  printed the detailed plan instead of the accepted task summary.
+- **Root cause**: tests checked omitted text without asserting the full output or the install handler's
+  separate source banner.
+- **Rule**: compare the complete approved layout, including surrounding output and confirmation;
+  include color-enabled, redirected and `NO_COLOR` output so missing styles cannot pass plain-text
+  assertions. Retain separate tests for exceptions and unchanged approval data.
+
+## 2026-10-31 — Atuin post-install detection must precede shell activation
+
+- **Symptom**: Ubuntu's Atuin installer exited successfully, but bootstrap reported the declared
+  command missing and omitted Atuin from profile activation and receipts.
+- **Cause**: the installer wrote `~/.atuin/bin/atuin`, outside the captured PATH and known command
+  roots. Sourcing its env file in a later shell cannot update the running bootstrap process.
+- **Fix**: append `~/.atuin/bin` to the shared planner/executor command roots, preserving existing
+  lookup precedence and regular executable/symlink validation. Successful detection then enables
+  the existing pre-phase env loader and post-phase guarded init; no success checks are bypassed.
+- **Platform boundary**: built-in macOS uses Homebrew and Windows uses WinGet portable installation;
+  their existing provider roots remain supported. This does not cover arbitrary custom install roots.
+- **Regression**: an offline first-install fixture reproduces the original failure, then verifies
+  detection, receipts, Bash/Zsh activation, repeated loading and rerun without reinstallation.
+  Its unique detection alias prevents ambient Homebrew Atuin from masking the failure. Memory-host
+  tests cover missing/non-executable files and newly installed Ubuntu/Homebrew/WinGet commands
+  without refreshing the captured PATH.
+
+## 2026-10-31 — Installer log limits interrupted package configuration
+
+- **Symptom**: Ubuntu Yazi bootstrap failed with `process stdout exceeded configured limit`,
+  leaving APT dependencies unpacked but unconfigured and ImageMagick requiring reinstallation.
+- **Root cause**: the 64 KiB diagnostic retention budget also acted as a fatal process output
+  limit, killing APT during an otherwise normal large dependency installation.
+- **Fix**: Sys installers explicitly retain bounded stream tails while continuing to drain;
+  truncation remains recorded in the diagnostic tail and actual exit status determines success. Detection and generator
+  output keep their strict limits; timeout, cancellation and process-group cleanup remain intact.
+- **Regression**: real installer scripts exceed the budget on either stream, finish a marker write,
+  and preserve success/failure plus the final diagnostic; reader tests cover chunk and zero limits.
+- **Rule**: distinguish a diagnostic retention budget from a protocol output limit. Do not kill
+  mutating installers merely because their normal logs exceed the retained diagnostic window.
+
+## 2026-11-01 — Release installer PATH hints target the login shell
+
+- **Symptom**: the Unix installer printed a PATH assignment without a copyable persistence
+  command, leaving users to locate and edit their shell configuration.
+- **Rule**: `curl ... | sh` identifies the installer interpreter, not the user's shell. Label
+  Bash/Zsh hints using `SHELL`, leave other shells to manual setup, and resolve `ZDOTDIR` in the
+  user's Zsh when the command is pasted. Print commands without editing profiles automatically.
+- **Coverage**: `python3 scripts/test-install-path-hints.py` runs the installer with a local
+  archive and executes Bash/Zsh hints in temporary homes, checking literal special characters,
+  preservation of existing config and repeated execution. Fish must receive manual setup guidance
+  without a generated command or automatic profile writes.
+
+
+## 2026-11-01 — Ubuntu pnpm bootstrap cannot assume Corepack
+
+- **Symptom**: pnpm bootstrap exited 127 on a fresh Ubuntu host at `corepack enable`.
+- **Cause**: the preset required undeclared preinstalled Node/Corepack; installing another
+  bootstrap item did not supply them, and recent Node distributions need not include Corepack.
+- **Fix**: use the official standalone installer with explicit target PNPM_HOME and
+  PNPM_NO_MODIFY_PATH=1. Shine retains shell integration ownership. Upstream versions without
+  no-modify-path support fail rather than modifying startup files. Append the newer
+  `~/.local/share/pnpm/bin` layout to shared command fallback roots, preserving lookup precedence.
+- **Regression**: offline script fixtures retain download/installer failures and enforce the
+  target home/no-shell-write options. Approved first-install fixtures verify immediate detection,
+  receipts, Bash/Zsh activation and repeat runs; a successful script without a binary still fails.
+
+
+## 2026-11-01 — Version probes can stop on controlling-terminal access
+
+- **Symptom**: Sys bootstrap waited indefinitely for `yazi --version`, although the same command
+  returned immediately from an interactive shell.
+- **Cause**: Yazi opened `/dev/tty` and set terminal attributes even during version output. The
+  bounded child had a separate background process group but retained the controlling terminal,
+  allowing job control to stop it. Optional version probes had output limits but no timeout.
+- **Fix**: impose a 3-second probe timeout and explicitly create a new Unix session, without a
+  preceding `setpgid`. Keep group cleanup and executable-path fallback on probe failure; installers
+  retain foreground terminal handoff and their existing timeout.
+- **Regression**: an isolated PTY executes a probe that accesses `/dev/tty`; a stalled real process
+  verifies timeout fallback. PTY tests must verify access to their own controlling terminal before
+  testing isolation, because a sandbox denial can otherwise make broken isolation appear correct.
+
+## 2026-11-01 — Installer rendering must survive terminal modes and empty fragments
+
+- **Symptoms**: apt logs drifted diagonally; Cargo occasionally appended `Compiling` after a
+  padded `Building` row. Captured child and CLI writes confirmed two independent failures.
+- **Causes**: apt temporarily disables terminal output processing through inherited stdin, so LF
+  alone no longer returns to column zero. Separately, a timed control-only partial fragment
+  cleared the pending CR replacement flag before the next visible Cargo status arrived.
+- **Fix**: explicitly use CRLF for terminal log rows (including dumb/narrow terminals), retain LF
+  for redirected output, and preserve replacement across invisible partial fragments until visible
+  text or line completion consumes it. Do not forward child cursor/erase commands.
+- **Coverage**: replay fragmented Cargo erase/style sequences, preserve control-only EOF commits,
+  and exercise completed rows on an isolated Unix PTY with output processing disabled.

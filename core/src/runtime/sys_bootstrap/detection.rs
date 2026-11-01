@@ -59,6 +59,8 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             .run(ProcessRequest {
                 program: program.display().to_string(),
                 args: version_args.to_vec(),
+                timeout: Some(std::time::Duration::from_secs(3)),
+                detach_terminal: true,
                 stdout_limit: Some(MAX_LOG_BYTES),
                 stderr_limit: Some(MAX_LOG_BYTES),
                 ..ProcessRequest::default()
@@ -97,5 +99,224 @@ fn captured_expand(raw: &str, home: &Path) -> PathBuf {
         home.join(rest)
     } else {
         PathBuf::from(raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{
+        InMemoryHost, PresetSnapshot, PresetSourceKind, ProcessOutput, RuntimeContext,
+        RuntimePlatform,
+    };
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn version_probe_is_bounded_and_detached_from_terminal() {
+        use crate::runtime::RealHost;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        const FIXTURE: &str = "SHINE_VERSION_PROBE_PTY";
+        if std::env::var_os(FIXTURE).is_some() {
+            let original = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
+            assert_eq!(original, unsafe { libc::getpgrp() });
+            let tty = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("/dev/tty")
+                .expect("PTY fixture must have an accessible controlling terminal");
+            drop(tty);
+            let root =
+                std::env::temp_dir().join(format!("shine-version-probe-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let binary = root.as_path().join("probe");
+            let runtime = CoreRuntime::new(
+                RealHost,
+                RuntimeContext::isolated(
+                    root.as_path().into(),
+                    root.as_path().join("state"),
+                    root.as_path().join("presets"),
+                    root.as_path().join("bin"),
+                    RuntimePlatform::Linux,
+                ),
+                PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+            );
+            // Like Yazi, touch /dev/tty even with redirected stdin/stdout.
+            std::fs::write(
+                &binary,
+                r#"#!/usr/bin/env python3
+import os, signal, termios
+signal.signal(signal.SIGTTOU, signal.SIG_DFL)
+try:
+    fd = os.open('/dev/tty', os.O_RDWR)
+except OSError:
+    print('probe 1.0 detached')
+else:
+    termios.tcsetattr(fd, termios.TCSANOW, termios.tcgetattr(fd))
+    print('unexpected controlling terminal')
+"#,
+            )
+            .unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(8),
+                runtime.detect_command(binary.to_str().unwrap(), &["--version".into()]),
+            )
+            .await
+            .expect("version probe hung on terminal access")
+            .unwrap();
+            assert!(
+                matches!(result, DetectionResult::Present(detail) if detail == "probe 1.0 detached")
+            );
+            assert_eq!(unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) }, original);
+            std::fs::remove_dir_all(&root).unwrap();
+            return;
+        }
+        let output = tokio::task::spawn_blocking(|| {
+            std::process::Command::new("python3").args(["-c", r#"
+import os, pty, select, signal, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ['SHINE_VERSION_PROBE_PTY'] = '1'
+    os.execv(sys.argv[1], [sys.argv[1], '--exact', 'runtime::sys_bootstrap::detection::tests::version_probe_is_bounded_and_detached_from_terminal', '--nocapture'])
+output = bytearray()
+status = None
+deadline = time.monotonic() + 12
+while time.monotonic() < deadline:
+    if select.select([fd], [], [], 0.05)[0]:
+        try: chunk = os.read(fd, 4096)
+        except OSError: break
+        if not chunk: break
+        output.extend(chunk)
+    done, value = os.waitpid(pid, os.WNOHANG)
+    if done:
+        status = value
+        break
+if status is None:
+    done, value = os.waitpid(pid, os.WNOHANG)
+    if done: status = value
+    else:
+        os.kill(pid, signal.SIGKILL)
+        _, status = os.waitpid(pid, 0)
+os.close(fd)
+sys.stdout.buffer.write(output)
+sys.exit(os.waitstatus_to_exitcode(status))
+"#]).arg(std::env::current_exe().unwrap()).output().unwrap()
+        }).await.unwrap();
+        assert!(
+            output.status.success(),
+            "PTY probe failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_version_probe_falls_back_to_existing_executable() {
+        use crate::runtime::RealHost;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+        let root =
+            std::env::temp_dir().join(format!("shine-version-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let binary = root.as_path().join("probe");
+        std::fs::write(&binary, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runtime = CoreRuntime::new(
+            RealHost,
+            RuntimeContext::isolated(
+                root.as_path().into(),
+                root.as_path().join("state"),
+                root.as_path().join("presets"),
+                root.as_path().join("bin"),
+                RuntimePlatform::Linux,
+            ),
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(8),
+            runtime.detect_command(binary.to_str().unwrap(), &["--version".into()]),
+        )
+        .await
+        .expect("version probe has no deadline")
+        .unwrap();
+        assert!(
+            matches!(result, DetectionResult::Present(detail) if detail == binary.display().to_string())
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn command_detection_finds_new_installs_without_refreshing_captured_path() {
+        for (platform, directory, command) in [
+            (RuntimePlatform::Linux, ".atuin/bin", "atuin"),
+            (RuntimePlatform::Linux, ".local/share/pnpm", "pnpm"),
+            (RuntimePlatform::Linux, ".local/share/pnpm/bin", "pnpm"),
+            (RuntimePlatform::Macos, "/opt/homebrew/bin", "atuin"),
+            (RuntimePlatform::Macos, "/usr/local/bin", "atuin"),
+            (
+                RuntimePlatform::Windows,
+                "AppData/Local/Microsoft/WinGet/Links",
+                "atuin.exe",
+            ),
+        ] {
+            let home = std::env::temp_dir().join("shine-command-detection");
+            let context = RuntimeContext::isolated(
+                home.clone(),
+                home.join("state"),
+                home.join("presets"),
+                home.join("bin"),
+                platform,
+            );
+            let host = InMemoryHost::new();
+            let runtime = CoreRuntime::new(
+                host,
+                context,
+                PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+            );
+            let detection = SysDetection::Command {
+                command: command.trim_end_matches(".exe").into(),
+                version_args: vec!["--version".into()],
+            };
+            assert!(matches!(
+                runtime.detect_sys_item(&detection).await.unwrap(),
+                DetectionResult::Missing
+            ));
+            let binary = if directory.starts_with('/') {
+                PathBuf::from(directory)
+            } else {
+                home.join(directory)
+            }
+            .join(command);
+            if platform != RuntimePlatform::Windows {
+                runtime
+                    .host()
+                    .put_file_with_mode(&binary, b"not executable".to_vec(), 0o100644);
+                assert!(matches!(
+                    runtime.detect_sys_item(&detection).await.unwrap(),
+                    DetectionResult::Missing
+                ));
+            }
+            runtime
+                .host()
+                .put_file_with_mode(&binary, b"installed".to_vec(), 0o100755);
+            runtime.host().queue_process_output(Ok(ProcessOutput {
+                interrupted: false,
+                output_truncated: false,
+                exit_code: Some(0),
+                stdout: b"command fixture\n".to_vec(),
+                stderr: Vec::new(),
+            }));
+            assert!(
+                matches!(runtime.detect_sys_item(&detection).await.unwrap(), DetectionResult::Present(detail) if detail == "command fixture")
+            );
+            let requests = runtime.host().process_requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(Path::new(&requests[0].program), binary.as_path());
+            assert_eq!(requests[0].args, ["--version"]);
+            assert!(runtime.context().path_env.is_none());
+        }
     }
 }

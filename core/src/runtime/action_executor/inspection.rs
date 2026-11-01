@@ -16,6 +16,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
     /// Plan an explicit rollback of an interrupted App managed-file action.
     /// Recovery is never an implicit side effect of ordinary planning.
     pub async fn plan_app_operation_recovery(&self) -> Result<PlanV1> {
+        if let Some(plan) = self.plan_secret_recovery()? {
+            return Ok(plan);
+        }
         let (journal, journal_bytes) =
             load_app_operation_journal(self.host(), &self.context().shine_dir)
                 .await?
@@ -29,6 +32,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
     pub(crate) async fn inspect_app_operation_journal(
         &self,
     ) -> Result<Option<crate::runtime::JournalInspection>> {
+        if let Some(plan) = self.plan_secret_recovery()? {
+            return Ok(Some(crate::runtime::JournalInspection {
+                operation_id: "app-secret-operation".into(),
+                prepared_actions: 1,
+                applied_actions: 0,
+                receipt_committed_actions: 0,
+                recovery_plan: plan,
+            }));
+        }
         let Some((journal, journal_bytes)) =
             load_app_operation_journal(self.host(), &self.context().shine_dir).await?
         else {

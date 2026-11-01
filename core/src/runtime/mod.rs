@@ -32,6 +32,7 @@ mod process_scope;
 mod profile;
 mod review_path;
 mod schema;
+pub mod secret_files;
 mod shell;
 mod shell_action_executor;
 mod shell_launch;
@@ -64,8 +65,8 @@ pub use fixture::{
 pub use host::{
     FileKind, FileMetadata, FileSystemHost, FileSystemObservationHost, HostError, HostOperation,
     NullObserver, PrivilegedFileSystemHost, PrivilegedOperationGuard, ProcessHost, ProcessIo,
-    ProcessOutput, ProcessRequest, RealHost, RuntimeEvent, RuntimeInteraction, RuntimeObserver,
-    SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SplitDnsState,
+    ProcessOutput, ProcessOutputChunk, ProcessRequest, RealHost, RuntimeEvent, RuntimeInteraction,
+    RuntimeObserver, SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SplitDnsState,
 };
 pub(crate) use inspection::JournalInspection;
 pub use inspection::{
@@ -249,7 +250,11 @@ pub struct CoreRuntime<H> {
     pub(crate) analysis: CodeAnalysisSession,
     analysis_source: std::sync::OnceLock<crate::plan::SnapshotDigestV1>,
     pub(crate) operation_code_grants: Vec<crate::trust::TrustGrantV1>,
+    secret_changes: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    secret_provider: Option<std::sync::Arc<dyn secret_files::SecretFileProvider>>,
     host: H,
+    installer_color: bool,
+    installer_progress: (bool, Option<u16>),
     context: RuntimeContext,
     presets: std::sync::Arc<PresetSnapshot>,
 }
@@ -258,12 +263,24 @@ impl<H> CoreRuntime<H> {
     pub fn new(host: H, context: RuntimeContext, presets: PresetSnapshot) -> Self {
         Self {
             operation_code_grants: Vec::new(),
+            secret_provider: None,
+            secret_changes: std::sync::Mutex::new(Default::default()),
             analysis: CodeAnalysisSession::default(),
             analysis_source: std::sync::OnceLock::new(),
             host,
+            installer_color: false,
+            installer_progress: (false, None),
             context,
             presets: std::sync::Arc::new(presets),
         }
+    }
+
+    pub fn with_secret_file_provider(
+        mut self,
+        provider: std::sync::Arc<dyn secret_files::SecretFileProvider>,
+    ) -> Self {
+        self.secret_provider = Some(provider);
+        self
     }
 
     pub fn context(&self) -> &RuntimeContext {
@@ -274,6 +291,19 @@ impl<H> CoreRuntime<H> {
     /// Approval validation still binds the resulting captured inputs.
     pub fn with_proxy_env(mut self, proxy_env: BTreeMap<String, String>) -> Self {
         self.context.proxy_env = proxy_env;
+        self
+    }
+
+    /// Cosmetic Cargo color preference for captured Sys installers; defaults to off.
+    /// Frontends must respect explicit user color settings before enabling this fallback.
+    pub fn with_installer_color(mut self, enabled: bool) -> Self {
+        self.installer_color = enabled;
+        self
+    }
+
+    /// Cosmetic Cargo single-line progress defaults, selected by the frontend.
+    pub fn with_installer_progress(mut self, enable: bool, width: Option<u16>) -> Self {
+        self.installer_progress = (enable, width);
         self
     }
 

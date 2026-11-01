@@ -303,3 +303,56 @@ remote requests cannot select its backend or identities. Local selection and unw
 occur only after release authorization, with no fallback on cancellation. Only approved
 values reach the remote side, never data keys or private keys. Resealing or changing
 recipients changes the reviewed snapshot and requires review under existing policy rules.
+
+## Authorize secret files locally {#file-secret-broker}
+
+File brokering uses the same local GPG/age authorization as environment secrets, with separate
+file policies. It supports POSIX remote machines. Both peers must support protocol v4; a version
+mismatch stops before file release. Existing environment policies do not authorize files.
+
+For an App with automatic secret installation, create an exact local policy from your trusted overlay:
+
+```bash
+shine env broker policy add --name service-install --ssh-target server \
+  --workspace ~/overlay/app/example/shine.workspace.toml \
+  --remote-workspace /srv/example-service/shine.workspace.toml \
+  --mode production --file-group credentials --app example --operation install \
+  --migrate-file-policy
+shine ssh --secret-broker server
+# On the server:
+shine app install example
+```
+
+Create a separate policy with `--operation upgrade` for upgrades. `--migrate-file-policy` explicitly
+allows upgrading the local policy store to version 2; old environment policies remain readable.
+File policies bind the host, operation, workspace, complete mappings, ciphertext versions, and remote
+targets. App policies also bind the effective category snapshot and requested permissions. A request
+may release only an explicit subset of the authorized files; new or changed sources require a
+reviewed policy update. Use the same file arguments with `policy update` or `policy diff`.
+
+Without a trusted local checkout, use the existing separate inspect/enroll sessions:
+
+```bash
+shine ssh --secret-broker-inspect server
+# On the server, inspect without decrypting:
+shine env broker describe --app example --operation install \
+  --mode production --file-group credentials
+```
+
+Use `shine ssh --secret-broker-enroll --trust-remote-metadata server` only when you trust the
+remote description. Run the same describe command and confirm locally; reconnect with
+`--secret-broker` afterward. `--update-policy NAME` selects an existing file policy to replace.
+Inspect and enrollment sessions never return plaintext.
+
+For manual file export, omit `--app`, authorize the installed workspace with a separate export
+policy, and run on the remote:
+
+```bash
+shine env workspace export --format files --workspace /srv/example-service/shine.workspace.toml \
+  --mode production --file-group credentials --secret-broker
+```
+
+Local confirmation is the default. `--trust-remote-session` may suppress it only for an exact
+policy match; the private key stays local, but authorized plaintext is transferred to the remote.
+File export writes only after the complete response is received and validated. It retains the
+normal refusal to overwrite existing targets and does not create App ownership.

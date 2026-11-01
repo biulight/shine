@@ -265,6 +265,7 @@ mod tests {
     fn app_file(category: &str, source: &str, dest: &str) -> AppInfoFile {
         AppInfoFile {
             category: crate::apps::AppCategory {
+                secret_files: Vec::new(),
                 name: category.to_string(),
                 description: None,
                 destination_root: Some("~/.config".to_string()),

@@ -4,6 +4,15 @@ End-to-end flows that span multiple modules and are not visible in any single fi
 ownership and the per-command routing table, see [`module-map.md`](module-map.md) — this file only
 records the cross-module sequences and their gotchas.
 
+## Managed App secret files
+
+Effective overlay snapshot → metadata v3/workspace v3 mappings → ordinary auxiliary file plan
+plus distinct secret-resource plan → approval → target/parent access preflight → explicit-needed-file decryption (local provider or
+policy-matched SSH broker) → fresh approval recheck → private per-file journal/rename/create/receipt
+commit → unchanged rollback cleanup. Ordinary lifecycle hooks receive only changed-category
+status. Read-only inspection passes no plaintext into presentation. File export shares release
+requests and crypto but retains exclusive creation and no App receipt. See [ADR 0158](../decisions/0158-managed-app-secret-files-and-file-broker.md).
+
 ## Workspace secret file groups
 
 Version 3 workspace + explicit groups + mode → root-constrained mappings → metadata/Git preflight
@@ -85,7 +94,12 @@ and never changes the execution request. Full permissions and purpose groups rem
 (ADR 0094). `lifecycle_plan/render.rs` is a display-only facade over compact, detailed and
 bootstrap layouts, permissions, code boundaries and labels. Bootstrap retains its ordered scopes
 and distinct permission formatting; incomplete attribution falls back to the full detailed review.
-No rendering module creates approval or changes the reviewed Plan (ADR 0126).
+Ordinary built-in Shell installation can project a task summary when all concrete effects have
+consistent typed attribution; overlapping maintenance attributions may describe the same cache
+write. Source, commands, user destinations and recovery backup paths stay visible. Plain environment
+requirements add a sorted, deduplicated names-only row; secret requirements and other exceptions
+retain expanded review (ADR 0160). No rendering module creates approval or changes the reviewed Plan
+(ADR 0126).
 
 Before ordinary upgrade dispatch can initialize configuration or run advisory/release checks, a
 read-only load and Core review test complete upgrade convergence. Positive convergence prints the
@@ -1227,8 +1241,21 @@ items retain their existing additive profile and receipt handling (ADR 0128).
 
 Every executable sys manifest declares `version = 2`. Each init item has both `[items.detect]` and
 `[items.install]`; Rust performs the read-only detection, invokes a fixed Homebrew/APT/Winget
-provider argv or one per-item script, limits runtime/output, detects again, and produces the
-canonical `sys/<item>` outcome. A v1 or unknown manifest version fails before detection, elevation,
+provider argv or one per-item script, limits runtime and retained logs, detects again, and produces the
+canonical `sys/<item>` outcome. Installers drain both streams to bounded 64 KiB tails, report
+truncation, and preserve their exit status even when logs overflow; detection retains strict output
+limits (ADR 0161). Optional version probes time out after 3 seconds and run without a Unix
+controlling terminal; errors retain command presence and fall back to its path. Installers keep
+their existing foreground terminal handoff. A bounded Host output channel also forwards installer chunks to Core line events
+while the process runs. Core distinguishes LF/CRLF completion, bare-CR progress and bounded partial
+fragments, flushes partial prompts and emits periodic presentation ticks;
+CLI tags child output by item and its own status with `[shine]`, without replaying the
+retained tail. Profile diagnostics still render once at completion (ADR 0162). CLI installer
+rendering keeps bounded per-stream SGR state, filters terminal commands and isolates styles from
+source labels. A frontend-supplied cosmetic preference enables Cargo colors through the existing
+installer env/sudo paths without overriding explicit color settings (ADR 0163). The CLI owns one
+bounded live row, interleaves normal logs without overwriting them and falls back to append-only
+logs outside a capable TTY. Cargo progress defaults use the same explicit cosmetic path (ADR 0164). A v1 or unknown manifest version fails before detection, elevation,
 installer execution, or profile writes.
 
 Inspection, preview, preflight, and profile composition read the immutable Sys snapshot without

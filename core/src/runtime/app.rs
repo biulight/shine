@@ -55,6 +55,7 @@ pub struct AppCategory {
     pub description: Option<String>,
     pub destination_root: Option<String>,
     pub files: Vec<AppFile>,
+    pub secret_files: Vec<super::secret_files::AppSecretFile>,
     pub list_mode: AppListMode,
     pub post_upgrade: Vec<AppHook>,
     pub post_install: Vec<AppHook>,
@@ -506,7 +507,7 @@ where
     }
 }
 
-fn validate_app_destinations<H>(
+pub(in crate::runtime) fn validate_app_destinations<H>(
     runtime: &CoreRuntime<H>,
     categories: &[AppCategory],
 ) -> Result<()> {
@@ -524,6 +525,24 @@ fn validate_app_destinations<H>(
                     ),
                 ));
             }
+        }
+    }
+    for category in categories {
+        for file in &category.secret_files {
+            let destination = runtime.secret_destination(category, &file.target)?;
+            let key = super::secret_files::path_key(&destination);
+            if destinations.keys().any(|p| {
+                let p = super::secret_files::path_key(p);
+                p.starts_with(&key) || key.starts_with(&p)
+            }) {
+                bail!("secret destination overlaps another App resource");
+            }
+            let rollback = super::secret_files::managed::rollback_path(&destination);
+            if destinations.contains_key(&rollback) {
+                bail!("secret rollback path overlaps an App resource");
+            }
+            destinations.insert(rollback, format!("app/{}/secret-rollback", category.name));
+            destinations.insert(destination, format!("app/{}/secret", category.name));
         }
     }
     Ok(())
@@ -1262,9 +1281,9 @@ mod manifest_reader_tests {
             let loaded = load_manifest(&host, root).await;
             assert_eq!(host.operations(), vec![HostOperation::Read(path.clone())]);
             match input {
-                Some("schema_version = 2\n") => assert_eq!(
+                Some("schema_version = 3\n") => assert_eq!(
                     loaded.unwrap_err().to_string(),
-                    "app manifest schema version 2 is newer than this Shine supports (1)"
+                    "app manifest schema version 3 is newer than this Shine supports (2)"
                 ),
                 Some("schema_version = -1\n" | "[") => {
                     let error = loaded.unwrap_err();
@@ -1274,7 +1293,10 @@ mod manifest_reader_tests {
                 }
                 _ => {
                     let manifest = loaded.unwrap();
-                    assert_eq!(manifest.schema_version, 1);
+                    assert_eq!(
+                        manifest.schema_version,
+                        crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION
+                    );
                     let parsed: AppManifest = toml::from_str(input.unwrap_or("")).unwrap();
                     assert_eq!(manifest.entries, parsed.entries);
                 }

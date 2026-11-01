@@ -5,6 +5,50 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [2.8.0] — 2026-11-01
+
+### Features
+
+- Add App metadata v3 secret-file declarations with optional automatic decryption, equal-content
+  adoption, protected ownership checks, explicit replacement and interrupted-operation recovery.
+- Add policy-bound SSH file release with local GPG/age authorization, bounded binary transport,
+  and `env workspace export --format files --secret-broker`.
+- Stream system installer output with item labels, terminal colors, and single-line progress;
+  retain bounded diagnostic tails without aborting verbose installers.
+
+### Bug Fixes
+
+- Run Ubuntu Atuin installation non-interactively and detect its default installation directory.
+- Repair Ubuntu Rust shell PATH integration and install pnpm without requiring Node.js or Corepack.
+- Bound optional version probes and detach their terminal so an installed tool cannot stall detection.
+- Preserve installer log alignment and progress replacement, and separate consecutive installations.
+- Provide copyable, idempotent Bash and Zsh PATH setup commands in the Unix binary installer.
+
+### Improvements
+
+- Simplify lifecycle review and summarize ordinary built-in Shell installs, including non-sensitive
+  environment requirements, while retaining detailed review for operations needing extra attention.
+
+### Compatibility
+
+- This minor release intentionally includes the compatibility changes below. Review the upgrade
+  guide before updating clients, presets, or automation.
+
+- SSH peers must both support protocol v4. File policies require explicit migration to policy
+  format v2; existing environment policies remain readable. App writes use manifest v2, which
+  older clients reject. Plan/approval/review schema v4 requires fresh review. Upgrade clients
+  before installing metadata v3 presets. Do not reuse old approvals or downgrade clients against
+  newly written App state. Rust integrations must adapt to the updated public types and recompile.
+
+### Internal
+
+- Move macOS release builds to supported runners and update CI dependencies.
+
+### Docs
+
+- Add English and Simplified Chinese 2.8 upgrade guidance and stable documentation snapshots,
+  replacing the 2.7 snapshot and retaining the 1.8 manual.
+
 ## [2.7.2] — 2026-10-29
 
 ### Bug Fixes

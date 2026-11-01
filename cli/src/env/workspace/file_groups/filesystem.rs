@@ -1,7 +1,7 @@
 use super::*;
 use std::{fs::File, io::Read, path::Component, process::Command};
 
-pub(super) fn resolve(root: &Path, pattern: &str, mode: &str) -> Result<PathBuf> {
+pub(crate) fn resolve(root: &Path, pattern: &str, mode: &str) -> Result<PathBuf> {
     let expanded = pattern.replace("{mode}", mode);
     ensure!(
         !expanded.is_empty() && !expanded.contains(['{', '}', '\\', ':']),
@@ -17,7 +17,7 @@ pub(super) fn resolve(root: &Path, pattern: &str, mode: &str) -> Result<PathBuf>
     Ok(path)
 }
 
-pub(super) fn check_path(root: &Path, path: &Path) -> Result<()> {
+pub(crate) fn check_path(root: &Path, path: &Path) -> Result<()> {
     let root_metadata = fs::symlink_metadata(root)?;
     ensure!(
         root_metadata.is_dir() && !platform::is_link(&root_metadata),
@@ -62,7 +62,7 @@ pub(super) fn check_path(root: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) struct CapturedFile {
+pub(crate) struct CapturedFile {
     pub path: PathBuf,
     pub bytes: Zeroizing<Vec<u8>>,
     file: File,
@@ -70,7 +70,7 @@ pub(super) struct CapturedFile {
     limit: usize,
 }
 
-pub(super) fn read_file(path: &Path, limit: usize) -> Result<(File, Zeroizing<Vec<u8>>)> {
+pub(crate) fn read_file(path: &Path, limit: usize) -> Result<(File, Zeroizing<Vec<u8>>)> {
     let mut file = platform::open_read(path)?;
     platform::identity(&file)?;
     ensure!(
@@ -124,7 +124,7 @@ impl CapturedFile {
     }
 }
 
-pub(super) fn verify_optional(
+pub(crate) fn verify_optional(
     root: &Path,
     path: &Path,
     original: Option<&CapturedFile>,
@@ -163,7 +163,7 @@ fn git_reports_no_repository(stderr: &[u8]) -> bool {
         && lines.next().is_none()
 }
 
-pub(super) fn check_git(root: &Path, target: &Path) -> Result<()> {
+pub(crate) fn check_git(root: &Path, target: &Path) -> Result<()> {
     // Targets may belong to a nested repository, and their parents may not exist yet.
     check_path(root, target)?;
     let mut directory = target.parent().context("plaintext target has no parent")?;
@@ -253,7 +253,7 @@ pub(super) fn check_git(root: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) struct PathLocks(Vec<File>);
+pub(crate) struct PathLocks(Vec<File>);
 impl PathLocks {
     pub fn acquire(root: &Path, workspace: &Path, mappings: &[(PathBuf, PathBuf)]) -> Result<Self> {
         let base = fs::canonicalize(std::env::temp_dir())?.join(platform::lock_directory()?);
@@ -292,7 +292,7 @@ struct OwnedFile {
     file: File,
     identity: platform::Identity,
 }
-pub(super) struct Materialized {
+pub(crate) struct Materialized {
     root: PathBuf,
     files: Vec<OwnedFile>,
     directories: Vec<(PathBuf, File, platform::Identity)>,
@@ -426,7 +426,7 @@ impl Drop for Materialized {
     }
 }
 
-pub(super) async fn write_cipher(
+pub(crate) async fn write_cipher(
     root: &Path,
     path: &Path,
     bytes: &[u8],

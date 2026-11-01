@@ -299,8 +299,15 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             SysInstall::Package {
                 provider, package, ..
             } => {
-                self.run_package(&request.os_id, *provider, package, requires_admin)
-                    .await?
+                self.run_package(
+                    &request.os_id,
+                    *provider,
+                    package,
+                    requires_admin,
+                    &item.id,
+                    observer,
+                )
+                .await?
             }
             SysInstall::Script { path, .. } => {
                 // Materialization is an execution effect: inspection, preview,
@@ -309,12 +316,12 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 let script = execution_root.join(path);
                 let result = self
                     .run_sys_script(
-                        &request.os_id,
+                        &request,
                         &script,
                         &execution_root,
-                        &request.sys_shell,
                         item,
                         requires_admin,
+                        observer,
                     )
                     .await;
                 let cleanup = self.host().remove_dir_all(&execution_root).await;

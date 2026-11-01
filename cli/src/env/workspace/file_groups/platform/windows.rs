@@ -15,8 +15,8 @@ use windows_sys::Win32::{
 };
 use windows_sys::core::BOOL;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(in super::super) struct Identity(u32, u32, u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Identity(u32, u32, u32);
 
 fn wide(path: &Path) -> Result<Vec<u16>> {
     let mut value: Vec<u16> = path.as_os_str().encode_wide().collect();
@@ -123,7 +123,7 @@ fn acl_volume(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn verify_acl(path: &Path) -> Result<()> {
+pub(crate) fn verify_acl(path: &Path) -> Result<()> {
     let expected = descriptor()?;
     let mut expected_owner = ptr::null_mut();
     let mut defaulted = 0;
@@ -179,10 +179,10 @@ fn verify_acl(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(in super::super) fn is_link(metadata: &Metadata) -> bool {
+pub(crate) fn is_link(metadata: &Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
-pub(in super::super) fn directory_identity(file: &File) -> Result<Identity> {
+pub(crate) fn directory_identity(file: &File) -> Result<Identity> {
     let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
     unsafe {
         checked(GetFileInformationByHandle(file.as_raw_handle(), &mut info))?;
@@ -197,7 +197,7 @@ pub(in super::super) fn directory_identity(file: &File) -> Result<Identity> {
         info.nFileIndexLow,
     ))
 }
-pub(in super::super) fn identity(file: &File) -> Result<Identity> {
+pub(crate) fn identity(file: &File) -> Result<Identity> {
     let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
     unsafe {
         checked(GetFileInformationByHandle(file.as_raw_handle(), &mut info))?;
@@ -208,14 +208,14 @@ pub(in super::super) fn identity(file: &File) -> Result<Identity> {
     );
     directory_identity(file)
 }
-pub(in super::super) fn open_read(path: &Path) -> Result<File> {
+pub(crate) fn open_read(path: &Path) -> Result<File> {
     Ok(OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?)
 }
-pub(in super::super) fn path_identity(path: &Path) -> Result<Identity> {
+pub(crate) fn path_identity(path: &Path) -> Result<Identity> {
     // A metadata-only handle avoids requesting plaintext read permission.
     let file = OpenOptions::new()
         .access_mode(0)
@@ -224,14 +224,14 @@ pub(in super::super) fn path_identity(path: &Path) -> Result<Identity> {
         .open(path)?;
     identity(&file)
 }
-pub(in super::super) fn open_directory(path: &Path) -> Result<File> {
+pub(crate) fn open_directory(path: &Path) -> Result<File> {
     Ok(OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)?)
 }
-pub(in super::super) fn create_private(path: &Path) -> Result<File> {
+pub(crate) fn create_private(path: &Path) -> Result<File> {
     acl_volume(path.parent().context("parent required")?)?;
     let descriptor = descriptor()?;
     let security = SECURITY_ATTRIBUTES {
@@ -264,7 +264,7 @@ pub(in super::super) fn create_private(path: &Path) -> Result<File> {
     }
     Ok(file)
 }
-pub(in super::super) fn private_directory(path: &Path) -> Result<bool> {
+pub(crate) fn private_directory(path: &Path) -> Result<bool> {
     acl_volume(path.parent().context("parent required")?)?;
     let descriptor = descriptor()?;
     let security = SECURITY_ATTRIBUTES {
@@ -288,11 +288,11 @@ pub(in super::super) fn private_directory(path: &Path) -> Result<bool> {
     verify_acl(path)?;
     Ok(created)
 }
-pub(in super::super) fn lock_directory() -> Result<String> {
+pub(crate) fn lock_directory() -> Result<String> {
     Ok(format!("shine-file-group-locks-{}", sid()?))
 }
 
-pub(in super::super) fn publish_new(temp: &Path, path: &Path) -> Result<()> {
+pub(crate) fn publish_new(temp: &Path, path: &Path) -> Result<()> {
     let temp = wide(temp)?;
     let path = wide(path)?;
     // No REPLACE_EXISTING: a concurrent creator is never overwritten. WRITE_THROUGH
@@ -306,11 +306,11 @@ pub(in super::super) fn publish_new(temp: &Path, path: &Path) -> Result<()> {
     }
 }
 
-pub(in super::super) fn sync_cipher_parents(_root: &Path, _path: &Path) -> Result<()> {
+pub(crate) fn sync_cipher_parents(_root: &Path, _path: &Path) -> Result<()> {
     // Both existing-file replacement and new publication use MOVEFILE_WRITE_THROUGH.
     Ok(())
 }
-pub(in super::super) fn lock_file(path: &Path) -> Result<File> {
+pub(crate) fn lock_file(path: &Path) -> Result<File> {
     let file = if path.try_exists()? {
         verify_acl(path)?;
         OpenOptions::new()
@@ -404,7 +404,7 @@ fn resume(pid: u32) -> Result<()> {
     bail!("suspended command thread not found")
 }
 
-pub(in super::super) async fn command_status(
+pub(crate) async fn command_status(
     command: &[OsString],
     values: &BTreeMap<String, String>,
     override_env: bool,

@@ -37,6 +37,7 @@ pub struct BrokerSession {
     enroll_update_policy: Option<String>,
     used_nonces: tokio::sync::Mutex<BTreeSet<String>>,
     operation_lock: tokio::sync::Mutex<()>,
+    file_transport_lock: tokio::sync::Mutex<()>,
     interaction: Arc<dyn BrokerInteraction>,
 }
 
@@ -128,8 +129,13 @@ impl BrokerSession {
             enroll_update_policy: enroll_update_policy.map(str::to_string),
             used_nonces: tokio::sync::Mutex::new(BTreeSet::new()),
             operation_lock: tokio::sync::Mutex::new(()),
+            file_transport_lock: tokio::sync::Mutex::new(()),
             interaction,
         })))
+    }
+
+    pub(super) async fn file_transport_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.file_transport_lock.lock().await
     }
 
     pub fn set_ssh_pid(&self, pid: Option<u32>) {
@@ -485,4 +491,113 @@ fn escape_multiline(value: &str) -> String {
         .map(|line| escaped_display_chars(line).collect::<String>())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub(super) enum FileResult {
+    Description(String),
+    Plain(Vec<zeroize::Zeroizing<Vec<u8>>>),
+}
+
+impl BrokerSession {
+    pub(super) async fn handle_files(
+        &self,
+        request: &super::file_broker::FileReleaseRequest,
+        describe: bool,
+        nonce: &str,
+    ) -> Result<FileResult> {
+        use super::file_broker::{FilePolicy, descriptor};
+        self.claim_nonce(nonce).await?;
+        let _operation = self.operation_lock.lock().await;
+        let descriptor = descriptor(request)?;
+        let matches = self
+            .policies
+            .file_policies
+            .iter()
+            .filter(|p| {
+                p.ssh_target == self.ssh_target
+                    && super::file_broker::policy_matches(&p.descriptor, &descriptor)
+            })
+            .collect::<Vec<_>>();
+        let details = format!(
+            "SSH target: {}\nFile release:\n{}",
+            escape_display(&self.ssh_target),
+            escape_multiline(&serde_json::to_string_pretty(&request.descriptor()?)?)
+        );
+        if describe {
+            match self.mode {
+                BrokerMode::Serve => bail!("file descriptions require an inspect/enroll session"),
+                BrokerMode::Inspect => {
+                    self.display_local(format!(
+                        "{details}\nExact policy matches: {}",
+                        matches.len()
+                    ))
+                    .await?;
+                    return Ok(FileResult::Description(
+                        "file release inspected; no plaintext released".into(),
+                    ));
+                }
+                BrokerMode::EnrollTrusted => {
+                    let name = self.enroll_update_policy.clone().unwrap_or_else(|| {
+                        format!("files-{}", &sha256_hex(descriptor.as_bytes())[..16])
+                    });
+                    let candidate = FilePolicy {
+                        name: name.clone(),
+                        ssh_target: self.ssh_target.clone(),
+                        descriptor,
+                    };
+                    let previous = self
+                        .policies
+                        .file_policies
+                        .iter()
+                        .find(|p| p.name == name)
+                        .cloned();
+                    if self.enroll_update_policy.is_some() && previous.is_none() {
+                        bail!("file policy to update does not exist");
+                    }
+                    let old = previous
+                        .as_ref()
+                        .map(|p| p.descriptor.as_str())
+                        .unwrap_or("(new policy)");
+                    let _confirmation = self.confirm_prompt(format!("{details}\nPrevious binding: {}\nMigrate file policies to version 2 and save this exact request? [y/N] ", escape_multiline(old))).await?;
+                    let path = self.config.shine_dir().join("ssh-secret-broker.lock");
+                    use shine_core::runtime::FileSystemHost;
+                    let _guard = shine_core::runtime::RealHost
+                        .acquire_operation_lock(&path)
+                        .await?;
+                    let mut store = broker::load_store(&self.config).await?;
+                    if store.file_policies.iter().find(|p| p.name == name) != previous.as_ref() {
+                        bail!("file policy changed after review");
+                    }
+                    store.version = 2;
+                    store.file_policies.retain(|p| p.name != name);
+                    store.file_policies.push(candidate);
+                    broker::store::save_store(&self.config, &store).await?;
+                    return Ok(FileResult::Description(format!(
+                        "saved file policy {name}; reconnect to release files"
+                    )));
+                }
+            }
+        }
+        if self.mode != BrokerMode::Serve {
+            bail!("inspect/enroll sessions cannot release files");
+        }
+        if matches.len() != 1 {
+            bail!(
+                "file request requires exactly one matching local file policy; inspect/enroll the request first"
+            );
+        }
+        let _confirmation = if self.trust_remote_session {
+            None
+        } else {
+            Some(
+                self.confirm_prompt(format!(
+                    "{details}\nRelease these files to the remote machine? [y/N] "
+                ))
+                .await?,
+            )
+        };
+        Ok(FileResult::Plain(
+            super::file_broker::decrypt(&self.config, request).await?,
+        ))
+    }
 }

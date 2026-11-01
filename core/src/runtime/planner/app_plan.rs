@@ -17,6 +17,21 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         request: AppPlanRequest,
     ) -> Result<PlanV1> {
         validate_app_request(&request)?;
+        if self.secret_provider.is_none() {
+            for name in ["app-secret-manifest.json", "app-secret-operation.json"] {
+                match self
+                    .host()
+                    .metadata(&self.context().shine_dir.join(name))
+                    .await
+                {
+                    Ok(_) => bail!(
+                        "App secret file provider is required to inspect existing secret ownership"
+                    ),
+                    Err(e) if e.is_not_found() => (),
+                    Err(e) => return Err(e.into_anyhow("checking App secret state")),
+                }
+            }
+        }
         let selected_categories = if request.operation == LifecycleOperation::Uninstall {
             None
         } else {
@@ -27,6 +42,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     request.target.as_deref().unwrap_or_default()
                 );
             }
+            crate::runtime::app::validate_app_destinations(self, &categories)?;
             Some(categories)
         };
         let mut state = StateCapture::new("app", request.operation)?;
@@ -66,7 +82,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let mut permissions = PermissionAccumulator::default();
         let mut steps = Vec::new();
 
-        if interrupted_operation {
+        self.plan_app_secrets(
+            &request,
+            &manifest,
+            &mut state,
+            &mut permissions,
+            &mut steps,
+        )?;
+
+        if interrupted_operation || self.secret_journal()?.is_some() {
             steps.push(
                 PlanStepV1::new(
                     request

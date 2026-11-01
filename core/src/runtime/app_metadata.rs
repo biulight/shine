@@ -22,10 +22,12 @@ struct CategoryToml {
     post_install: Option<HookSpecToml>,
     artifact: Option<ArtifactToml>,
     files: Option<Vec<FileToml>>,
+    #[serde(default)]
+    secret_files: Vec<super::secret_files::SecretFileDeclaration>,
     permissions: Option<PermissionDeclarationV1>,
 }
 
-const CURRENT_METADATA_SCHEMA_VERSION: u32 = 2;
+const CURRENT_METADATA_SCHEMA_VERSION: u32 = 3;
 
 fn legacy_metadata_schema_version() -> u32 {
     1
@@ -216,6 +218,7 @@ impl<H> CoreRuntime<H> {
                 post_install: Vec::new(),
                 uses_metadata: false,
                 has_explicit_files: false,
+                secret_files: Vec::new(),
                 artifact: None,
                 permissions: None,
                 metadata_schema_version: legacy_metadata_schema_version(),
@@ -242,7 +245,7 @@ impl<H> CoreRuntime<H> {
             return Ok(None);
         };
         let explicit = parsed.files.is_some();
-        let files = if let Some(files) = parsed.files {
+        let mut files = if let Some(files) = parsed.files {
             let mut resolved = Vec::new();
             for file in files {
                 if !platform_matches(
@@ -305,6 +308,8 @@ impl<H> CoreRuntime<H> {
                 });
             }
             resolved
+        } else if !parsed.secret_files.is_empty() {
+            Vec::new()
         } else {
             collect_category_files(self.presets().files().keys(), &prefix)
                 .into_iter()
@@ -323,7 +328,16 @@ impl<H> CoreRuntime<H> {
                 })
                 .collect()
         };
-        if files.is_empty() {
+        let secret_files = super::secret_files::resolve_declarations(
+            self.presets(),
+            name,
+            parsed.metadata_schema_version,
+            self.context().platform,
+            &parsed.secret_files,
+            &mut files,
+            permissions.as_ref().is_some_and(|p| p.administrator),
+        )?;
+        if files.is_empty() && secret_files.is_empty() {
             return Ok(None);
         }
         Ok(Some(AppCategory {
@@ -331,6 +345,7 @@ impl<H> CoreRuntime<H> {
             description: parsed.description,
             destination_root: Some(destination_root),
             files,
+            secret_files,
             list_mode: parsed.list_mode.map_or_else(
                 || {
                     if explicit {
@@ -1137,7 +1152,7 @@ target = 'same.toml'
         let future = PresetSnapshot::builder(PresetSourceKind::External)
             .file(
                 "app/future/shine.toml",
-                b"metadata_schema_version = 3\ndest = '~/.config/future'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+                b"metadata_schema_version = 4\ndest = '~/.config/future'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
             )
             .file("app/future/config.toml", b"future".to_vec())
             .build();
@@ -1157,7 +1172,7 @@ target = 'same.toml'
                 .app_categories(Some("future"))
                 .unwrap_err()
                 .to_string()
-                .contains("unsupported metadata_schema_version 3")
+                .contains("unsupported metadata_schema_version 4")
         );
     }
 

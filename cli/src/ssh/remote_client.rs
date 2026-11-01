@@ -316,3 +316,78 @@ pub async fn handle_status() -> Result<()> {
         }
     }
 }
+
+pub async fn file_broker_enabled() -> Result<bool> {
+    let session = session_from_env()?;
+    let mut stream = connect_and_handshake(&session.remote_sock).await?;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::FileBrokerStatus {
+            token: session.token,
+        },
+    )
+    .await?;
+    match read_broker_message(&mut stream).await? {
+        ServerMessage::FileBrokerStatus { enabled } => Ok(enabled),
+        ServerMessage::Error { message } => bail!("{message}"),
+        _ => bail!("unexpected file broker status response"),
+    }
+}
+
+pub async fn request_files(
+    request: super::file_broker::FileReleaseRequest,
+    describe: bool,
+) -> Result<Vec<zeroize::Zeroizing<Vec<u8>>>> {
+    use shine_core::runtime::secret_files::{MAX_FILE, MAX_TOTAL};
+    let count = request.released_mappings()?.len();
+    let session = session_from_env()?;
+    let mut stream = connect_and_handshake(&session.remote_sock).await?;
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let bytes = serde_json::to_vec(&request)?;
+    anyhow::ensure!(
+        bytes.len() <= super::file_broker::MAX_REQUEST,
+        "file release request too large"
+    );
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::FileRelease {
+            token: session.token,
+            nonce: nonce.clone(),
+            describe,
+            length: bytes.len(),
+        },
+    )
+    .await?;
+    match read_broker_message(&mut stream).await? {
+        ServerMessage::FileReady => (),
+        ServerMessage::Error { message } => bail!("{message}"),
+        _ => bail!("unexpected file broker response"),
+    }
+    super::file_broker::send_blob(&mut stream, &nonce, 0, &bytes).await?;
+    match read_broker_message(&mut stream).await? {
+        ServerMessage::DescriptionResponse { summary } if describe => {
+            println!("{summary}");
+            return Ok(Vec::new());
+        }
+        ServerMessage::FileReady if !describe => (),
+        ServerMessage::Error { message } => bail!("{message}"),
+        _ => bail!("unexpected file broker response"),
+    }
+    let mut total = 0;
+    let mut result = Vec::new();
+    for index in 0..count {
+        let bytes = super::file_broker::receive_blob(
+            &mut stream,
+            &nonce,
+            index,
+            MAX_FILE.min(MAX_TOTAL - total),
+        )
+        .await?;
+        total += bytes.len();
+        result.push(bytes);
+    }
+    match read_broker_message(&mut stream).await? {
+        ServerMessage::FileComplete { count: received } if received == count => Ok(result),
+        _ => bail!("incomplete file broker response"),
+    }
+}

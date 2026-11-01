@@ -12,6 +12,9 @@ App supported-code admission is partially superseded by
 now block execution. Unisolated-code classification, scoped trust and the absence of runtime
 confinement remain unchanged.
 
+Default CLI presentation is updated by
+[ADR 0159](0159-concise-default-code-review.md); classification and approval remain unchanged.
+
 ## Context
 
 Shine can derive its own structured file, launcher, environment-injection and elevation operations,
@@ -62,8 +65,9 @@ siblings are not enrolled or installed.
 
 ## Consequences
 
-- Review text states that arbitrary code is unisolated and that author statements are not runtime
-  file, network, or command restrictions.
+- Detailed review and documentation explain that arbitrary code is unisolated and author statements
+  are not runtime file, network, or command restrictions. Default review focuses on concrete effects,
+  source, execution timing and trust (ADR 0159).
 - Static data copies remain structured operations even when a filename resembles a script.
 - Empty permission tables and structurally duplicated command/path statements can be removed from
   built-ins and scaffolding while env/admin contracts remain explicit.

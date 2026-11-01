@@ -137,10 +137,10 @@ waiting for or holding the lock. Missing/newly triggered evidence keeps the lock
 the caller must prepare and review again outside the lock. Static operations retain their original
 lock timing. The existing lock-wait regression caught and prevented an extra pre-lock observation.
 
-Plan/approval/review schema 3 binds a compact analysis identity plus safe scope reports. Author Plan
+Plan/approval/review schema 4 binds a compact analysis identity plus safe scope reports. Author Plan
 schema 3 omits that binding identity, lint report schema 2 reports analyzed entry labels, fixture
 report schema 2 adds analysis diagnostic assertions and explicit unfinished cases. Fixture input
-schema 1 remains readable. Generated schema reference version 4 names the new report schemas.
+schema 1 remains readable. Generated schema reference version 5 names the new report schemas.
 Author Plan exit success still describes valid hypothetical planning; `ready` expresses admission.
 Lint differences/failures are errors, gaps are warnings, and fixture negative assertions may pass
 only for completed cases. A terminal analysis failure cannot be absorbed as an expected blocker.

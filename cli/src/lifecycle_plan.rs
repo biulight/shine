@@ -92,7 +92,17 @@ impl LifecyclePlanRequest {
 
     fn configure_runtime(&self, runtime: CoreRuntime<RealHost>) -> CoreRuntime<RealHost> {
         match self {
-            Self::SysBootstrap { proxy_env, .. } => runtime.with_proxy_env(proxy_env.clone()),
+            Self::SysBootstrap { request, proxy_env } => {
+                let (progress, width) =
+                    crate::sys::execution::installer_progress_settings(&request.item_ids);
+                runtime
+                    .with_proxy_env(proxy_env.clone())
+                    .with_installer_color(
+                        crate::sys::execution::installer_color_enabled()
+                            && std::env::var_os("CARGO_TERM_COLOR").is_none(),
+                    )
+                    .with_installer_progress(progress, width)
+            }
             _ => runtime,
         }
     }
@@ -680,6 +690,9 @@ pub(crate) async fn execute_reviewed(
 }
 
 fn confirmation_prompt(planned: &[(LifecyclePlanRequest, PlanV1)]) -> &'static str {
+    if render_install_summary(planned).is_some() {
+        return "Apply?";
+    }
     if planned.iter().any(|(_, plan)| {
         plan.code_boundaries
             .iter()
@@ -726,6 +739,208 @@ mod tests {
         let mut builder = SnapshotDigestV1::builder("test");
         builder.add_observation(label, b"value").unwrap();
         builder.finish()
+    }
+
+    #[tokio::test]
+    async fn built_in_utils_review_is_concise_without_changing_approval() {
+        use shine_core::runtime::{
+            InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
+        };
+        let home = std::env::temp_dir().join("shine-utils-review");
+        let mut context = RuntimeContext::isolated(
+            home.clone(),
+            home.join(".shine"),
+            home.join(".shine/presets"),
+            home.join(".shine/bin"),
+            RuntimePlatform::Linux,
+        );
+        context.shell = shine_core::runtime::ShellType::Bash;
+        context.shell_config_paths = vec![home.join(".bashrc")];
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            context,
+            capture_embedded_preset_snapshot(crate::core_runtime::embedded_preset_files()),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("utils".into()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert_eq!(plan.code_boundaries.len(), 3);
+        assert!(plan.code_boundaries.iter().all(|entry| {
+            entry.source == CodeSourceV2::ShineDistribution
+                && entry.trust == CodeTrustStateV2::Distribution
+                && entry.timing == CodeTimingV2::DeliverForLater
+        }));
+        assert!(plan.author_capabilities.contains(&PermissionV1::Command {
+            program: "shine".into(),
+        }));
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let planned = vec![(LifecyclePlanRequest::Shell(request), plan)];
+        let compact = render_compact_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert_eq!(
+            format!("{compact}\n{} [y/N]", confirmation_prompt(&planned)),
+            "Install · utils\n  Source       built-in · Shine distribution\n  Commands     copyfile, shine-env-export, shine-theme-sync\n  Changes      install 3 commands; update shell integration and ~/.bashrc\n  Backup       ~/.bashrc\n\nApply? [y/N]"
+        );
+        let verbose = render_plan_lines(&planned[0].1, "config")
+            .unwrap()
+            .join("\n");
+        for expected in [
+            "Author capability statement",
+            "command shine",
+            "unrestricted effects",
+            "shell_cache_replace_transaction",
+            "Fingerprint",
+        ] {
+            assert!(verbose.contains(expected), "missing {expected}: {verbose}");
+        }
+        assert_eq!(serde_json::to_value(&planned[0].1).unwrap(), before);
+        assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
+
+        for exception in [
+            "external",
+            "execute",
+            "shared",
+            "privilege",
+            "unknown",
+            "missing-provenance",
+            "conflicting-provenance",
+            "blocked",
+            "force",
+        ] {
+            let mut exceptional = planned.clone();
+            let plan = &mut exceptional[0].1;
+            match exception {
+                "external" => {
+                    plan.code_boundaries[0].source = CodeSourceV2::ExternalOrOverlay;
+                    plan.code_boundaries[0].trust = CodeTrustStateV2::OperationConfirmation;
+                }
+                "execute" => plan.code_boundaries[0].timing = CodeTimingV2::ExecuteNow,
+                "shared" => {
+                    plan.code_boundaries[0].target_role = CodeTargetRoleV2::SharedResourceAffected
+                }
+                "privilege" => {
+                    plan.permissions
+                        .required
+                        .insert(PermissionV1::Administrator);
+                }
+                "unknown" => plan.steps[0].diagnostic_codes.push("future_warning".into()),
+                "missing-provenance" => plan.filesystem_review.clear(),
+                "conflicting-provenance" => {
+                    let mut conflicting = plan.filesystem_review[0].clone();
+                    conflicting.purpose = if conflicting.purpose
+                        == shine_core::plan::FilesystemPurposeV1::UserTarget
+                    {
+                        shine_core::plan::FilesystemPurposeV1::Maintenance
+                    } else {
+                        shine_core::plan::FilesystemPurposeV1::UserTarget
+                    };
+                    plan.filesystem_review.push(conflicting);
+                }
+                "blocked" => plan.steps[0].action = PlanActionV1::Blocked,
+                "force" => {
+                    let LifecyclePlanRequest::Shell(request) = &mut exceptional[0].0 else {
+                        unreachable!()
+                    };
+                    request.force = true;
+                }
+                _ => unreachable!(),
+            }
+            let before = serde_json::to_value(&exceptional[0].1).unwrap();
+            assert!(
+                render_install_summary(&exceptional).is_none(),
+                "{exception}"
+            );
+            assert!(
+                render_compact_plan_lines(&exceptional, "config").unwrap()[0]
+                    .contains("Security Plan")
+            );
+            assert_eq!(serde_json::to_value(&exceptional[0].1).unwrap(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn built_in_image_tools_review_summarizes_plain_environment_without_changing_approval() {
+        use shine_core::plan::EnvironmentSensitivityV1;
+        use shine_core::runtime::{
+            InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
+        };
+        let home = std::env::temp_dir().join("shine-image-tools-review");
+        let mut context = RuntimeContext::isolated(
+            home.clone(),
+            home.join(".shine"),
+            home.join(".shine/presets"),
+            home.join(".shine/bin"),
+            RuntimePlatform::Linux,
+        );
+        context.shell = shine_core::runtime::ShellType::Bash;
+        context.shell_config_paths = vec![home.join(".bashrc")];
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            context,
+            capture_embedded_preset_snapshot(crate::core_runtime::embedded_preset_files()),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("image-tools".into()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let planned = vec![(LifecyclePlanRequest::Shell(request), plan)];
+        let compact = render_compact_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert_eq!(
+            format!("{compact}\n{} [y/N]", confirmation_prompt(&planned)),
+            "Install · image-tools\n  Source       built-in · Shine distribution\n  Commands     img-compress, img-convert, img-resize\n  Changes      install 3 commands; update shell integration and ~/.bashrc\n  Environment  IMAGE_MAX_HEIGHT, IMAGE_MAX_WIDTH, IMAGE_QUALITY\n  Backup       ~/.bashrc\n\nApply? [y/N]"
+        );
+        let verbose = render_plan_lines(&planned[0].1, "config")
+            .unwrap()
+            .join("\n");
+        for name in ["IMAGE_MAX_HEIGHT", "IMAGE_MAX_WIDTH", "IMAGE_QUALITY"] {
+            assert!(verbose.contains(name), "{verbose}");
+        }
+        assert!(verbose.contains("plain"), "{verbose}");
+        assert_eq!(serde_json::to_value(&planned[0].1).unwrap(), before);
+        assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
+
+        // A plain variable must not hide a secret requirement with the same name,
+        // or allow unrelated capabilities into the summary.
+        for permission in [
+            PermissionV1::Environment {
+                name: "IMAGE_QUALITY".into(),
+                sensitivity: EnvironmentSensitivityV1::Secret,
+            },
+            PermissionV1::Network {
+                scope: NetworkScopeV1::Any,
+            },
+            PermissionV1::Command {
+                program: "bun".into(),
+            },
+        ] {
+            let mut exceptional = planned.clone();
+            exceptional[0].1.permissions.required.insert(permission);
+            let before = serde_json::to_value(&exceptional[0].1).unwrap();
+            assert!(render_install_summary(&exceptional).is_none());
+            assert!(
+                render_compact_plan_lines(&exceptional, "config").unwrap()[0]
+                    .contains("Security Plan")
+            );
+            assert_eq!(confirmation_prompt(&exceptional), "Apply this Plan?");
+            assert_eq!(serde_json::to_value(&exceptional[0].1).unwrap(), before);
+        }
     }
 
     #[test]
@@ -955,6 +1170,9 @@ mod tests {
         let rendered = render_bootstrap_plan_lines(&plan, "missing", false)
             .unwrap()
             .join("\n");
+        assert!(!rendered.contains("Author capability statement"));
+        assert!(!rendered.contains("unisolated code"));
+        assert!(!rendered.contains("unrestricted effects"));
         assert!(rendered.contains("Shared changes"));
         assert!(rendered.contains("Installation state and recovery files"));
         assert!(!rendered.contains("shine:sys-manifest.toml"));
@@ -1885,7 +2103,8 @@ mod tests {
         author[0].1.author_capabilities = PermissionSetV1::new([PermissionV1::Network {
             scope: NetworkScopeV1::Any,
         }]);
-        assert!(render(&author).contains("Author capability statement (unverified)"));
+        assert!(render(&author).contains("App Configs"));
+        assert!(!render(&author).contains("Author capability statement (unverified)"));
         let mut unknown = planned.clone();
         unknown[0].1.steps[1]
             .diagnostic_codes
@@ -2412,7 +2631,6 @@ mod tests {
                 "future_permission_diagnostic",
                 "Code execution and trust",
                 "trust missing or stale",
-                "unisolated code",
             ] {
                 assert!(text.contains(required), "missing {required}: {text}");
             }

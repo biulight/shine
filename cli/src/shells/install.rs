@@ -120,8 +120,13 @@ async fn handle_install_with_reporter(
     yes: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
-    for line in crate::config::presets_note_lines(config) {
-        reporter.emit(PresentationEvent::stdout(line));
+    if config.is_external_presets
+        || config.active_presets_overlay_dir().is_some()
+        || crate::presentation::security_plan_verbose()
+    {
+        for line in crate::config::presets_note_lines(config) {
+            reporter.emit(PresentationEvent::stdout(line));
+        }
     }
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
     let category_filter = selection.map(|target| target.category);
@@ -653,6 +658,111 @@ mod tests {
     use crate::config::Config;
     use std::path::PathBuf;
     use tokio::fs;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn built_in_install_summary_complete_stdout() {
+        const CHILD_ROOT: &str = "SHINE_TEST_INSTALL_SUMMARY_ROOT";
+        const CHILD_TARGET: &str = "SHINE_TEST_INSTALL_SUMMARY_TARGET";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            let target = std::env::var(CHILD_TARGET).unwrap();
+            let mut config = Config::new_for_test(&root.join(".shine"));
+            config.home_dir = root.clone();
+            config.shell_type = ShellType::Bash;
+            struct Reporter(Vec<PresentationEvent>);
+            impl LifecycleReporter for Reporter {
+                fn emit(&mut self, event: PresentationEvent) {
+                    self.0.push(event);
+                }
+            }
+            let mut reporter = Reporter(Vec::new());
+            println!("BEGIN REVIEW");
+            handle_install_with_reporter(&config, Some(&target), false, true, &mut reporter)
+                .await
+                .unwrap();
+            println!("END REVIEW");
+            assert!(!format!("{:?}", reporter.0).contains("Preset Source"));
+            let commands = if target == "utils" {
+                ["copyfile", "shine-env-export", "shine-theme-sync"]
+            } else {
+                ["img-compress", "img-convert", "img-resize"]
+            };
+            for command in commands {
+                assert!(config.bin_dir().join(command).exists(), "{command}");
+            }
+            assert!(
+                fs::read_to_string(root.join(".bashrc"))
+                    .await
+                    .unwrap()
+                    .contains("# original profile")
+            );
+            return;
+        }
+        for (target, expected) in [
+            (
+                "utils",
+                "Install · utils\n  Source       built-in · Shine distribution\n  Commands     copyfile, shine-env-export, shine-theme-sync\n  Changes      install 3 commands; update shell integration and ~/.bashrc\n  Backup       ~/.bashrc\n\n",
+            ),
+            (
+                "image-tools",
+                "Install · image-tools\n  Source       built-in · Shine distribution\n  Commands     img-compress, img-convert, img-resize\n  Changes      install 3 commands; update shell integration and ~/.bashrc\n  Environment  IMAGE_MAX_HEIGHT, IMAGE_MAX_WIDTH, IMAGE_QUALITY\n  Backup       ~/.bashrc\n\n",
+            ),
+        ] {
+            for color_mode in ["redirected", "color", "no-color"] {
+                let root = make_temp_dir().await;
+                fs::write(root.join(".bashrc"), "# original profile\n")
+                    .await
+                    .unwrap();
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                command
+                    .args([
+                        "--exact",
+                        "shells::install::tests::built_in_install_summary_complete_stdout",
+                        "--nocapture",
+                    ])
+                    .env(CHILD_ROOT, &root)
+                    .env(CHILD_TARGET, target)
+                    .env("HOME", &root)
+                    .env("SHINE_CONFIG_DIR", root.join(".shine"))
+                    .env("TERM", "xterm-256color")
+                    .env_remove("NO_COLOR")
+                    .env_remove("FORCE_COLOR")
+                    .env_remove("CLICOLOR")
+                    .env_remove("CLICOLOR_FORCE")
+                    .env_remove("IGNORE_IS_TERMINAL")
+                    .env_remove("SHINE_PRESETS");
+                if color_mode == "color" {
+                    command.env("FORCE_COLOR", "1");
+                } else if color_mode == "no-color" {
+                    command.env("NO_COLOR", "1");
+                }
+                let result = command.output().unwrap();
+                let stdout = String::from_utf8(result.stdout).unwrap();
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                assert!(result.status.success(), "{stdout}\n{stderr}");
+                let actual = stdout
+                    .split_once("BEGIN REVIEW\n")
+                    .unwrap()
+                    .1
+                    .split_once("END REVIEW")
+                    .unwrap()
+                    .0;
+                assert_eq!(
+                    console::strip_ansi_codes(actual),
+                    expected,
+                    "{target}: {color_mode}"
+                );
+                if color_mode == "color" && target == "image-tools" {
+                    assert!(actual.contains("  Environment  \x1b[34mIMAGE_MAX_HEIGHT, IMAGE_MAX_WIDTH, IMAGE_QUALITY\x1b[39m\n"), "{actual:?}");
+                } else if color_mode != "color" {
+                    assert!(!actual.contains('\x1b'), "{actual:?}");
+                }
+                println!("Verified install review:\n{actual}");
+                fs::remove_dir_all(root).await.unwrap();
+            }
+        }
+    }
 
     #[tokio::test]
     async fn shell_update_outcomes_keep_core_identity_conflicts_and_missing_receipts_read_only() {

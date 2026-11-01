@@ -4,6 +4,7 @@ mod bootstrap;
 mod code_boundaries;
 mod compact;
 mod detailed;
+mod install_summary;
 mod labels;
 mod permissions;
 
@@ -11,6 +12,7 @@ pub(super) use bootstrap::*;
 pub(super) use code_boundaries::*;
 pub(super) use compact::*;
 pub(super) use detailed::*;
+pub(super) use install_summary::render_install_summary;
 #[cfg(test)]
 pub(super) use labels::{PlanActionTone, plan_action_tone};
 pub(crate) use labels::{permission_name, styled_action_name};

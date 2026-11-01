@@ -1,6 +1,7 @@
 mod commands;
 mod detect;
-mod execution;
+pub(crate) mod execution;
+mod log_output;
 mod managed;
 mod model;
 mod profile_commands;

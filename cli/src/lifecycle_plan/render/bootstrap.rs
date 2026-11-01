@@ -78,8 +78,8 @@ pub(in crate::lifecycle_plan) fn render_bootstrap_plan_lines(
             lines.push(format!("    {} {message}", crate::colors::yellow("!")));
         }
     }
-    lines.extend(render_code_boundaries(plan, "  "));
-    if !plan.author_capabilities.is_empty() {
+    lines.extend(render_code_boundaries(plan, "  ", verbose));
+    if verbose && !plan.author_capabilities.is_empty() {
         lines.push(format!(
             "  {}",
             crate::colors::bold("Author capability statement (unverified)")

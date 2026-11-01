@@ -58,7 +58,8 @@ pub(super) fn is_manual_refresh_notice(code: &str) -> bool {
 pub(super) fn is_routine_transaction_notice(code: &str) -> bool {
     matches!(
         code,
-        "shell_snapshot_replace_transaction"
+        "shell_cache_replace_transaction"
+            | "shell_snapshot_replace_transaction"
             | "shell_managed_launcher_update_transaction"
             | "shell_profile_reconcile_transaction"
             | "app_hook_execution"

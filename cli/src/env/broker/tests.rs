@@ -65,6 +65,7 @@ async fn reviewed_policy_updates_recheck_revocation_and_preserve_unrelated_chang
     save_store(
         &config,
         &PolicyStore {
+            file_policies: Vec::new(),
             version: POLICY_VERSION,
             policies: vec![initial.candidate.clone(), unrelated.clone()],
         },
@@ -90,6 +91,7 @@ async fn reviewed_policy_updates_recheck_revocation_and_preserve_unrelated_chang
     save_store(
         &config,
         &PolicyStore {
+            file_policies: Vec::new(),
             version: POLICY_VERSION,
             policies: vec![unrelated.clone()],
         },
@@ -195,6 +197,7 @@ fn trusted_remote_update_replaces_one_allow_and_preserves_policy_identity() {
     )
     .unwrap();
     let store = PolicyStore {
+        file_policies: Vec::new(),
         version: POLICY_VERSION,
         policies: vec![BrokerPolicy {
             name: "dev-api".into(),
@@ -260,6 +263,7 @@ async fn trusted_remote_update_applies_once_and_rejects_a_stale_preview() {
     )
     .unwrap();
     let store = PolicyStore {
+        file_policies: Vec::new(),
         version: POLICY_VERSION,
         policies: vec![BrokerPolicy {
             name: "dev-api".into(),
@@ -304,6 +308,7 @@ fn exact_policy_match_rejects_changed_argv_or_source() {
     )
     .unwrap();
     let store = PolicyStore {
+        file_policies: Vec::new(),
         version: POLICY_VERSION,
         policies: vec![BrokerPolicy {
             name: "dev-api".into(),
@@ -355,6 +360,7 @@ async fn policy_store_is_written_with_private_permissions() {
     )
     .unwrap();
     let store = PolicyStore {
+        file_policies: Vec::new(),
         version: POLICY_VERSION,
         policies: vec![BrokerPolicy {
             name: "dev-api".into(),
@@ -427,6 +433,7 @@ async fn additional_local_policy_files_are_merged_and_validated() {
     )
     .unwrap();
     let extra = PolicyStore {
+        file_policies: Vec::new(),
         version: POLICY_VERSION,
         policies: vec![BrokerPolicy {
             name: "extra-api".into(),

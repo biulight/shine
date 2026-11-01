@@ -93,6 +93,8 @@ pub(crate) fn command_candidates(context: &RuntimeContext, command: &str) -> Vec
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
         PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+        context.home_dir.join(".atuin/bin"),
+        context.home_dir.join(".local/share/pnpm/bin"),
     ]);
     directories
         .into_iter()

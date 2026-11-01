@@ -375,7 +375,13 @@ bugs. Check this list before changing the modules named in each entry.
   installed or sourced Shell commands; Sys scripts; and executable profile integrations are marked
   unisolated from typed entry semantics regardless of permission-table presence. Plans separate
   derived operation capabilities, author statements, and code-boundary/trust records. Built-in code
-  uses distribution provenance but carries the same unisolated warning. External Shell live
+  uses distribution provenance. Default CLI review shows source, timing and trust without generic
+  execution disclaimers or the opaque unrestricted marker; detailed review retains the complete
+  permission and author statements (ADR 0159). Ordinary built-in Shell installation may use the
+  task summary in ADR 0160 only when typed effects are fully accounted for. Plain environment
+  requirements remain visible by name; secret requirements and other exceptions retain
+  expanded review. Rendering never changes the Plan or approval.
+  External Shell live
   deployment requires development trust; snapshot trust permits only snapshot delivery. A shared
   category snapshot replacement includes every installed dependent command as a selected or
   shared-resource-affected code boundary, and each affected external target needs one-time human consent or matching trust before
@@ -407,13 +413,27 @@ bugs. Check this list before changing the modules named in each entry.
   execution copies. Never re-read source modes at execution time or copy ownership/setuid/setgid
   bits; executable intent also enters approval and snapshot-trust digests (ADR 0093).
 - **Process limits apply while draining pipes.** Bounded reads retain at most the configured stdout
-  and stderr limits, concurrently with stdin writes and child wait. Overflow, timeout, or I/O failure
-  kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
+  and stderr limits, concurrently with stdin writes and child wait. Default capture treats overflow
+  as failure; only Sys installers opt into tail capture, which discards oldest bytes and reports
+  truncation without failing the process. Installer live output uses a bounded channel and bounded
+  partial-line buffers; presentation never interprets child text as installation status, and child
+  controls cannot overwrite CLI source tags. Installer rendering accepts only bounded, validated
+  SGR color/intensity sequences, tracks stdout/stderr independently and resets styles before the
+  next row. Live progress may redraw only its current row using CLI-authored controls, reserving
+  the terminal's final column and keeping the complete source label visible. Normal logs, outcomes
+  and error/cancellation cleanup commit pending rows. Terminal log rows explicitly return to
+  column zero even when a child disables output processing; invisible partial fragments preserve
+  a pending progress replacement. Redirected output is append-only; NO_COLOR
+  suppresses styles without disabling single-line progress on a capable TTY. Detection and generators retain strict overflow failure.
+  Timeout, I/O failure, or strict overflow kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
   terminated too, including when the run Future is cancelled. A drop guard retains the group ID
   after the direct child exits; a failed or signalled child terminates the group before waiting for
   inherited output pipes to close. When inherited stdin is the foreground controlling terminal, execution
   lends it to the child group and restores the original group on success, error, timeout, or cancellation.
   Signal masks used for terminal handoff are thread-local and immediately restored.
+  Optional Sys command-version probes have a 3-second timeout and explicitly detach from the
+  controlling terminal on Unix via a new session, retaining process-group cleanup. Probe failure
+  falls back to the executable path, never changes presence or triggers reinstallation.
   A post-capture length check is never a memory bound. Drop piped stdin immediately
   after writing to deliver EOF; Tokio's Unix `ChildStdin::shutdown` alone does not close the pipe.
 - **Runtime file types and paths must remain valid across execution.** RealHost rejects FIFOs,
@@ -1245,6 +1265,21 @@ bugs. Check this list before changing the modules named in each entry.
   Shine-owned state or embedded extraction.
 
 ## Secrets
+
+- **App secret plaintext is a distinct managed resource.** Metadata v3 references workspace
+  file groups; ordinary generators, transforms, caches, diffs and persistent backups must never
+  receive decrypted bytes. Require exact approved selection, equal-content-only adoption of
+  unowned targets, private initial creation and HMAC-backed ownership. A missing fingerprint key,
+  occupied rollback path, changed receipt or replacement must preserve evidence. Secret recovery
+  is explicit through `app recover`; source/permission changes invalidate review. See ADR 0158.
+  A missing durable applied identity blocks recovery that would delete a present created target.
+  Different non-root owners require pre-existing searchable parents before decryption; do not
+  automatically change parent ownership or permissions.
+- **File broker authorization is separate from environment release.** Bind complete mappings,
+  ciphertext versions, remote targets, operation and App snapshot/permissions in a local v2
+  policy. Only a subset of its explicit release list may be requested. Preserve v4 frame/chunk
+  limits, nonce checks, whole-response-before-write, cancellation and sensitive-buffer wiping.
+  Neither session discovery nor fallback may authorize release after a broker rejection.
 
 - **Owned workspace plaintext follows scope lifetime.** Compiled and explicit environment maps
   wipe values on replacement and drop; consuming iteration retains the guard for unconsumed

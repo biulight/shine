@@ -56,6 +56,13 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   schema 1 stays supported. Source builds require Rust 1.90. Disclose these changes and the manual
   migration path in CHANGELOG and both manual locales; preserve existing runtime state, trust
   requirements and non-blocking coverage gaps. This exception does not change the general rule above.
+- **2.8.0 release exception (2026-11-01):** the maintainer chose a minor release for managed
+  App secret files, local SSH file authorization, and installer UX improvements despite incompatible
+  SSH protocol v4, file-policy format v2, App manifest v2, Plan/approval/review schema v4, and public
+  Rust type changes. Upgrade both SSH peers, explicitly migrate file policies, renew approvals,
+  and adapt Rust consumers. Older clients cannot read newly written App state; downgrading the
+  binary does not reverse migrations. Disclose these boundaries in CHANGELOG and both manual
+  locales. This exception does not change the general versioning rule above.
 - A versioned release candidate uses `X.Y.Z-rc.N`. It is a reproducible prerelease, does not
   replace the latest stable release, and does not trigger the stable `release` → `main` sync.
 - Generated RC notes cover the immediately preceding versioned tag; generated stable notes cover

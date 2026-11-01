@@ -17,16 +17,16 @@ jobs:
     outputs:
       has_new_commits: ${{ steps.compare.outputs.result }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: compare
         run: |
           PREV=$(git rev-parse refs/tags/preview^{} 2>/dev/null || echo "none")
           if [ "$PREV" = "$GITHUB_SHA" ]; then
-            echo "result=false" >> $GITHUB_OUTPUT
+            echo "result=false" >> "$GITHUB_OUTPUT"
           else
-            echo "result=true" >> $GITHUB_OUTPUT
+            echo "result=true" >> "$GITHUB_OUTPUT"
           fi
 
   test:
@@ -44,7 +44,7 @@ jobs:
       - build-preview-assets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Update preview tag

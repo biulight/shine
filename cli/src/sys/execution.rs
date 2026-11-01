@@ -63,13 +63,69 @@ pub(super) fn item_install_start_line(item_id: &str, label: &str, requires_admin
         ""
     };
     format!(
-        "  {} {}",
-        colors::symbol("•"),
-        colors::dim(&format!(
+        "{} [shine] {}",
+        colors::bold_cyan("==>"),
+        colors::bold(&format!(
             "sys/{item_id} ({}) installing{admin}",
             escape_controls(label)
         ))
     )
+}
+
+pub(crate) fn installer_color_enabled() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+        && console::colors_enabled()
+}
+
+pub(crate) fn installer_progress_settings(item_ids: &[String]) -> (bool, Option<u16>) {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() || std::env::var("TERM").as_deref() == Ok("dumb") {
+        return (false, None);
+    }
+    let columns = console::Term::stdout().size().1;
+    let label = item_ids
+        .iter()
+        .map(|id| console::measure_text_width(id))
+        .max()
+        .unwrap_or(0)
+        + 7;
+    let width = columns
+        .saturating_sub(label.min(u16::MAX as usize) as u16)
+        .saturating_sub(1)
+        .max(1);
+    (
+        std::env::var_os("CARGO_TERM_PROGRESS_WHEN").is_none(),
+        std::env::var_os("CARGO_TERM_PROGRESS_WIDTH")
+            .is_none()
+            .then_some(width),
+    )
+}
+
+pub(super) fn installer_log_line(item_id: &str, text: &str) -> String {
+    // Output channels do not imply severity: Cargo writes normal progress to stderr.
+    let source = format!("[{}]", escape_controls(item_id));
+    // Child terminal controls must not erase the source label or imitate Shine status rows.
+    format!("    {} {}", colors::dim(&source), escape_controls(text))
+}
+
+pub(super) fn bootstrap_outcome_lines(outcome: &SysItemOutcome, label_width: usize) -> Vec<String> {
+    let mut lines = item_outcome_lines(outcome, label_width);
+    // The bounded diagnostic tail remains in the report; it has already been streamed.
+    lines.truncate(1);
+    if outcome.item_id == "profile" {
+        // Profile diagnostics are produced after installers and have no live pipe events.
+        lines.extend(
+            outcome
+                .logs
+                .iter()
+                .map(|text| installer_log_line("profile", text)),
+        );
+    }
+    let symbol = colors::symbol(status_symbol(outcome.status));
+    lines[0] = lines[0].replacen(&format!("  {symbol} "), &format!("  {symbol} [shine] "), 1);
+    lines
 }
 
 pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
@@ -184,14 +240,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bootstrap_logs_are_tagged_safe_and_not_replayed_in_outcomes() {
+        assert_eq!(
+            installer_log_line("rust", "download"),
+            "    [rust] download"
+        );
+        assert_eq!(installer_log_line("rust", "warning"), "    [rust] warning");
+        assert_eq!(
+            installer_log_line("rust", "\x1b[2K\rfake\nrow"),
+            "    [rust] \\u{1b}[2K\\rfake\\nrow"
+        );
+        for status in [SysItemStatus::Installed, SysItemStatus::Failed] {
+            let outcome = SysItemOutcome {
+                item_id: "rust".into(),
+                label: "Rust".into(),
+                status,
+                detail: "result".into(),
+                logs: vec!["already streamed".into()],
+            };
+            let lines = bootstrap_outcome_lines(&outcome, 14);
+            assert_eq!(lines.len(), 1);
+            for row in [
+                item_install_start_line("rust", "Rust", false),
+                installer_log_line("rust", "download"),
+                installer_log_line("rust", "warning"),
+                lines[0].clone(),
+            ] {
+                let plain = console::strip_ansi_codes(&row);
+                let (prefix, _) = plain.split_once('[').unwrap();
+                assert_eq!(console::measure_text_width(prefix), 4, "{plain}");
+            }
+            assert!(lines[0].contains(status_text(status)));
+            assert!(!lines[0].contains("already streamed"));
+        }
+    }
+
+    #[test]
+    fn bootstrap_profile_diagnostics_are_not_lost() {
+        let outcome = SysItemOutcome {
+            item_id: "profile".into(),
+            label: "profile".into(),
+            status: SysItemStatus::Updated,
+            detail: String::new(),
+            logs: vec!["profile note".into()],
+        };
+        let lines = bootstrap_outcome_lines(&outcome, 14);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1], "    [profile] profile note");
+    }
+
+    #[test]
     fn item_install_start_names_item_and_admin_requirement() {
         assert_eq!(
             item_install_start_line("zerotier", "ZeroTier", true),
-            "  • sys/zerotier (ZeroTier) installing (administrator access required)"
+            "==> [shine] sys/zerotier (ZeroTier) installing (administrator access required)"
         );
         assert_eq!(
             item_install_start_line("zerotier", "ZeroTier", false),
-            "  • sys/zerotier (ZeroTier) installing"
+            "==> [shine] sys/zerotier (ZeroTier) installing"
         );
     }
 

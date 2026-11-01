@@ -268,3 +268,50 @@ shine local status
 配置设置 `hybrid_decrypt_backend`；远端请求不能选择其后端或 identity。只有通过释放
 授权后才在本机选择并解封，取消后不回退。远端只收到获批准的值，不接触数据密钥或私钥。
 重新封存或改变收件人会改变已审查快照，需按现有策略规则重新审核。
+
+## 在本机授权秘密文件 {#file-secret-broker}
+
+文件 broker 复用环境秘密的本机 GPG/age 授权，但使用独立文件策略，支持 POSIX 远端。
+两端都必须支持协议 v4；版本不兼容时，在释放文件前停止。已有环境变量策略不会自动获得文件权限。
+
+对于开启自动解密的 App，可从可信的本地 overlay 创建精确策略：
+
+```bash
+shine env broker policy add --name service-install --ssh-target server \
+  --workspace ~/overlay/app/example/shine.workspace.toml \
+  --remote-workspace /srv/example-service/shine.workspace.toml \
+  --mode production --file-group credentials --app example --operation install \
+  --migrate-file-policy
+shine ssh --secret-broker server
+# 服务器上执行：
+shine app install example
+```
+
+升级需要另建 `--operation upgrade` 策略。`--migrate-file-policy` 显式允许将本地策略存储升级到 v2，
+已有环境策略仍可读取。文件策略绑定主机、操作、workspace、完整映射、密文版本及远端目标；
+App 策略还绑定有效类别快照和文件权限。请求只能释放明确获准文件的子集；新增或修改来源后，
+需要重新审阅并更新策略。`policy update`、`policy diff` 接受相同的文件参数。
+
+没有可信本地检出时，可使用已有的独立检查／录入会话：
+
+```bash
+shine ssh --secret-broker-inspect server
+# 服务器上检查，不解密：
+shine env broker describe --app example --operation install \
+  --mode production --file-group credentials
+```
+
+只有信任远端描述时才使用 `shine ssh --secret-broker-enroll --trust-remote-metadata server`。
+在远端运行相同的 describe 命令并在本机确认，然后重新以 `--secret-broker` 连接。
+`--update-policy NAME` 用于指定要替换的已有文件策略。检查和录入会话从不返回明文。
+
+手动文件导出应省略 `--app`，为安装后的 workspace 单独授权 export 操作，然后在远端执行：
+
+```bash
+shine env workspace export --format files --workspace /srv/example-service/shine.workspace.toml \
+  --mode production --file-group credentials --secret-broker
+```
+
+默认仍需本机确认。`--trust-remote-session` 只能在精确策略匹配后跳过确认；
+私钥留在本机，但获准的明文会传到远端。文件导出只有在完整响应接收并校验后才写入，
+仍拒绝覆盖已有目标，也不会创建 App 所有权。

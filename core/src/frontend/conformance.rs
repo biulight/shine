@@ -94,6 +94,7 @@ source = 'config.toml'
             });
             runtime.host().queue_process_output(Ok(ProcessOutput {
                 interrupted: false,
+                output_truncated: false,
                 exit_code: Some(0),
                 stdout: Vec::new(),
                 stderr: Vec::new(),
@@ -257,6 +258,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', se
         .unwrap();
         runtime.host().queue_process_output(Ok(ProcessOutput {
             interrupted: false,
+            output_truncated: false,
             exit_code: Some(0),
             stdout: b"generated".to_vec(),
             stderr: Vec::new(),

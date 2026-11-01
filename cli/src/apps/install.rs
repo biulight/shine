@@ -83,7 +83,10 @@ async fn handle_install_with_reporter(
         crate::core_runtime::from_config(config).await?
     };
     let categories = runtime.app_categories(category)?;
-    let total_available = categories.iter().map(|value| value.files.len()).sum();
+    let total_available = categories
+        .iter()
+        .map(|value| value.files.len() + value.secret_files.len())
+        .sum();
     reporter.emit(PresentationEvent::stdout(report::app_configs_summary_text(
         total_available,
     )));
@@ -574,7 +577,7 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
         fs::write(
             config.shine_dir().join("app-manifest.toml"),
-            "schema_version = 2\n",
+            "schema_version = 3\n",
         )
         .await
         .unwrap();
@@ -615,7 +618,7 @@ mod tests {
         let config = Config::new_for_test(&dir);
         fs::write(
             config.shine_dir().join("app-manifest.toml"),
-            "schema_version = 2\n",
+            "schema_version = 3\n",
         )
         .await
         .unwrap();

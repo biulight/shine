@@ -15,7 +15,12 @@ curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh
 ```
 
 The default destination is `~/.local/bin/shine`. The installer does not modify shell configuration.
-Make sure `~/.local/bin` is in `PATH`, then verify the installation:
+If the installation directory is missing from `PATH`, copy and run the command printed for your
+shell, then open a new shell. The installer uses `$SHELL` (your default login shell): Bash appends
+to `~/.bashrc`, and Zsh to `${ZDOTDIR:-$HOME}/.zshrc`.
+The Bash/Zsh command does not append the same line twice. If you use a different shell from the
+one shown, or use Fish or another shell, add the directory to your shell configuration manually.
+Then verify the installation:
 
 ```bash
 shine --version
@@ -25,7 +30,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.7.2 sh install.sh
+SHINE_VERSION=2.8.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,7 +44,7 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.7.2"; .\install.ps1
+$env:SHINE_VERSION = "2.8.0"; .\install.ps1
 ```
 
 ## Install with cargo-binstall
@@ -116,6 +121,33 @@ On Unix, installing or syncing to a protected location requests `sudo` authoriza
 Shine cannot elevate itself to upgrade when running from a protected directory. To use self-upgrade,
 install and run Shine from a user-writable directory. On Windows, installing or upgrading in a
 protected location requires a terminal with the necessary permissions.
+
+## Upgrade to Shine 2.8
+
+Shine 2.8 adds [managed App secret files](./guides/app-presets.md#managed-secret-files),
+[local SSH file authorization](./guides/ssh-transfer.md#file-secret-broker), and clearer Shell
+installation reviews and system installer progress. This minor release includes incompatible
+protocol and state changes. Before upgrading from 2.7 or earlier:
+
+1. **Upgrade both SSH peers.** Protocol v4 requires matching clients, including for existing SSH
+   workflows. Upgrade the local and remote Shine binaries before reconnecting.
+2. **Review file policies explicitly.** Existing environment policies remain readable but do not
+   authorize files. Use `--migrate-file-policy` when adding a file policy to permit the policy
+   store upgrade to version 2. Review the exact host, operation, files, and permissions; see the
+   [file authorization guide](./guides/ssh-transfer.md#file-secret-broker).
+3. **Keep App state with a compatible client.** App writes use manifest version 2; older clients
+   reject it. Metadata version 3 is required for `secret_files`. Keep private backups before
+   upgrading, and do not downgrade a client against newly written state. Downgrading the binary
+   does not reverse state or policy migrations. Never delete private secret state to bypass an
+   error; it is needed for ownership checks and recovery.
+4. **Renew approvals and update integrations.** Plan, approval, and review schema versions are now
+   4. Generate fresh reports and approvals instead of reusing saved ones. Rust consumers of
+   `shine-core` must adapt to the changed public types and recompile.
+
+Existing encrypted workspace sources do not need to be resealed just to upgrade Shine. Read-only
+App inspection does not decrypt files. Review [secret-file permissions and recovery](./guides/app-presets.md#managed-secret-files)
+before enabling automatic decryption, and follow the earlier migration steps below if upgrading
+from before 2.7.
 
 ## Upgrade to Shine 2.7.2
 

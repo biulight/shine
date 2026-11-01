@@ -887,7 +887,7 @@ managed child processes are terminated.
 
 `--dry-run` inspects configuration and metadata only: it does not read plaintext, decrypt, write
 files, or execute the command. It cannot verify ciphertext integrity or private-key availability.
-`--file-group` conflicts with `seal <FILE>`, `--no-workspace`, and `--secret-broker` as applicable.
+`--file-group` conflicts with `seal <FILE>`. For `env run`, it also conflicts with `--no-workspace` and `--secret-broker`; persistent file export supports `--secret-broker`.
 Plain `seal` and `env run` do not implicitly select file groups.
 
 Paths must stay inside the workspace; absolute paths, traversal, symbolic links/reparse points,
@@ -901,3 +901,12 @@ The child and other processes with sufficient local permissions can read the tem
 Force-killing Shine or losing power can leave files behind: inspect existing targets manually before
 retrying. Removing files is not secure erasure. Builds never automatically encrypt modified targets
 back into the repository. Removing a recipient does not revoke access to ciphertext in Git history.
+
+### Export through the SSH broker
+
+Add `--secret-broker` to `env workspace export --format files` to request local authorization
+and decryption from an enabled `shine ssh --secret-broker` session. This option requires explicit
+file groups and a matching file policy; it is unavailable for dotenv export. Without the flag,
+manual export continues to use the executing machine's backend. See
+[SSH file authorization](ssh-transfer.md#file-secret-broker) and
+[automatic App secret installation](app-presets.md#managed-secret-files).

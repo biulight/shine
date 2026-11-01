@@ -2,7 +2,7 @@
 
 Use an app preset for files installed into application configuration locations.
 Follow the skill's isolated scaffolding workflow; use the installed template and validator
-for the supported metadata version (current App metadata declares `metadata_schema_version = 2`).
+for the supported metadata version (ordinary App metadata uses version 2; managed secret files require version 3).
 
 ## Essential shape
 
@@ -67,3 +67,15 @@ gaps; neither trust nor unrestricted metadata removes them. Missing corroboratio
 For structured `env`, declare `source`, optional `target`, and `sensitivity` together; permissions use the source identity. Fixed-variable
 exemptions use exact documented keys, not a general `SHINE_` prefix. Do not use real values to make
 analysis or synthetic planning succeed. Positions use one-based lines and UTF-8 byte columns.
+
+## Managed secret files
+
+Use metadata version 3 and `[[secret_files]]` with a category-relative `workspace`,
+explicit `file_group`, and `mode`. Workspace v3 owns the source/target mappings.
+`auto_decrypt` defaults to false. Workspace and ciphertext are managed auxiliary files;
+do not also list them in `[[files]]`. Keep mapped plaintext targets out of the source
+checkout, including ignored files: effective snapshots containing them are rejected.
+Secret resources cannot use transforms, generators or JSON merge. Unix ownership and
+private mode (`0400` or `0600`) are reviewed; Windows rejects Unix permission overrides.
+Static validation and dry-runs never decrypt. Actual local/broker authorization and
+service activation remain deployment steps.
