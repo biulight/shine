@@ -12,6 +12,21 @@ clipboard-paste-bracketed-safe = true
 
 scrollback-limit = 25000000
 
+# Avoid accidental split navigation with Cmd + [ / ] on macOS.
+keybind = super+[=unbind
+keybind = super+]=unbind
+
+# Navigate splits with Ctrl + H/J/K/L.
+# Only consume these keys when Ghostty can perform the split navigation.
+keybind = performable:ctrl+h=goto_split:left
+keybind = performable:ctrl+j=goto_split:down
+keybind = performable:ctrl+k=goto_split:up
+keybind = performable:ctrl+l=goto_split:right
+
+# Create side-by-side or stacked splits.
+keybind = ctrl+\=new_split:right
+keybind = ctrl+-=new_split:down
+
 keybind = global:ctrl+grave_accent=toggle_quick_terminal
 quick-terminal-position = top
 quick-terminal-autohide = true

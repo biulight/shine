@@ -108,10 +108,10 @@ nnoremap ;q :action Unsplit<CR>
 nnoremap ;a :action UnsplitAll<CR>
 
 " 窗口之间光标移动
-nnoremap <A-h> <c-w>h
-nnoremap <A-l> <c-w>l
-nnoremap <A-j> <c-w>j
-nnoremap <A-k> <c-w>k
+nnoremap <c-h> <c-w>h
+nnoremap <c-l> <c-w>l
+nnoremap <c-j> <c-w>j
+nnoremap <c-k> <c-w>k
 
 " multiple-cursors  多光标
 map mc <A-n>
