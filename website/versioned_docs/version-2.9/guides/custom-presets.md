@@ -129,6 +129,8 @@ For structured `env` mappings, declare `source`, optional `target`, and `plain`/
 arbitrary names beginning with `SHINE_`. Never put environment values or URL credentials in a
 capability declaration. Source locations use one-based lines and UTF-8 byte columns.
 
+## Tool compatibility {#tool-compatibility}
+
 Tool consumers should read `preset schema` again after upgrading: lint reports use schema 2,
 author Plan reports schema 3, and fixture reports schema 2. Fixture input schema 1 is unchanged;
 `expect.analysis_diagnostic_codes` can assert diagnostic codes alongside `ready`. A correctly
@@ -136,6 +138,9 @@ expected blocked case can pass, but cancellation or command-wide budget exhausti
 a successful negative test. `complete = false` identifies incomplete author reports, and fixture
 reports list `unfinished_cases`. Lifecycle Plan/approval/review contracts use schema 4; obtain a
 new review instead of reusing an older approval.
+
+When upgrading to Shine 2.8, Rust integrations using `shine-core` must adapt to the changed public
+types and recompile. Regenerate lifecycle reports and approvals with the upgraded integration.
 
 ## Migrate a 1.x source
 

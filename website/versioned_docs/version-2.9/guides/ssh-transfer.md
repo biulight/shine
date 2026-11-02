@@ -325,6 +325,8 @@ shine app install example
 
 Create a separate policy with `--operation upgrade` for upgrades. `--migrate-file-policy` explicitly
 allows upgrading the local policy store to version 2; old environment policies remain readable.
+Downgrading the Shine binary does not undo this policy migration; keep a private backup of the
+policy store before migrating.
 File policies bind the host, operation, workspace, complete mappings, ciphertext versions, and remote
 targets. App policies also bind the effective category snapshot and requested permissions. A request
 may release only an explicit subset of the authorized files; new or changed sources require a

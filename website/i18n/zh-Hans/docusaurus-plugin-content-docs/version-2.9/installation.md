@@ -142,22 +142,21 @@ Unix 上，安装或同步到受保护位置时会请求 `sudo` 授权。但从�
 
 Shine 2.8 新增 [App 托管机密文件](./guides/app-presets.md#managed-secret-files)、
 [SSH 本地文件授权](./guides/ssh-transfer.md#file-secret-broker)，并改进 Shell 安装确认与系统安装进度显示。
-本次次版本更新包含不兼容的协议与状态变更。从 2.7 或更早版本升级前，请完成以下检查：
+从 2.7 或更早版本升级时，请按你使用的功能查看以下注意事项：
 
-1. **同时升级 SSH 两端。** 协议 v4 要求两端客户端匹配，已有 SSH 工作流也受影响。
-   请先升级本地和远端 Shine，再重新连接。
-2. **显式审核文件策略。** 原有环境变量策略仍可读取，但不授权文件。添加文件策略时使用
-   `--migrate-file-policy`，明确允许策略存储升级到版本 2。审核准确的主机、操作、文件与权限，
-   详见[文件授权指南](./guides/ssh-transfer.md#file-secret-broker)。
-3. **使用兼容客户端管理 App 状态。** App 写入使用 manifest 版本 2，旧客户端会拒绝读取。
-   `secret_files` 需要元数据版本 3。升级前保留私密备份，不要让降级后的客户端读取新写入的状态。
-   仅降级二进制不会撤销状态或策略迁移。不要通过删除私密机密状态绕过错误；所有权检查和恢复仍需要它。
-4. **重新审批并更新集成。** Plan、审批和审阅 schema 版本现为 4，请重新生成报告并审批，
-   不要复用已保存的旧审批。使用 `shine-core` 的 Rust 集成需要适配公开类型变更并重新编译。
+- **使用 Shine SSH：** 先升级本地和远端 Shine，再重新连接。已有 `shine ssh` 工作流也受影响，
+  即使没有使用文件授权也需要升级两端。
+- **使用 App 管理：** 升级前[备份配置和安装状态](./guides/app-presets.md#upgrade-and-downgrade)。
+  新版写入 App 状态后，旧客户端无法读取；仅安装旧版二进制不能恢复兼容性。
+- **保存了安装计划或审批：** 升级后重新生成报告、审阅并审批，不要复用旧审批。
+  集成开发者还需查看[工具兼容性说明](./guides/custom-presets.md#tool-compatibility)。
 
-仅升级 Shine 不需要重新加密已有工作区源文件。只读 App 检查不会解密文件。启用自动解密前，
-请阅读[机密文件权限与恢复说明](./guides/app-presets.md#managed-secret-files)；从 2.7 之前的版本升级时，
-还需完成下方对应的迁移步骤。
+仅升级 Shine 不需要重新加密已有工作区源文件。如果准备启用新的机密文件功能，请先阅读
+[权限与恢复说明](./guides/app-presets.md#managed-secret-files)；通过 SSH 使用时，还需配置
+[本地文件授权](./guides/ssh-transfer.md#file-secret-broker)。已有环境变量策略不会获得文件访问权限，
+只有启用文件访问时才需要添加文件策略。
+
+从 2.7 之前的版本升级时，还需完成下方对应的迁移步骤。
 
 ## 升级到 Shine 2.7.2
 

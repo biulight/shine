@@ -103,6 +103,21 @@ During upgrade,
 obsolete managed entries are removed only when `--prune-stale` is part of the approved command;
 modified entries remain preserved.
 
+## Upgrade and downgrade {#upgrade-and-downgrade}
+
+Before upgrading from Shine 2.7 or earlier, keep a private backup of your Shine configuration and
+state directory (by default `~/.shine/`; use the selected directory if you set `--config-dir` or
+`SHINE_CONFIG_DIR`), external preset sources, and installed App configuration files. Backups may
+contain secrets; restrict access to them. A backup of Shine's directory alone does not include
+App files installed elsewhere.
+
+New App writes use a state format that older clients reject. Reinstalling an older binary does
+not undo those writes or SSH policy migrations. Do not point an older client at the updated state
+or delete state to bypass compatibility errors. Keep private secret state and its fingerprint key
+with the installation records: ownership checks and recovery need them. A pre-upgrade backup is
+not a safe replacement for current state if installed files have since changed; review both before
+attempting a rollback.
+
 ## Recover an interrupted App operation
 
 If an App operation is interrupted, Shine may block later changes to protect the unfinished state.
@@ -473,5 +488,7 @@ Containers still need runtime plaintext. Configuration installation does not sta
 explicitly recreate containers whose file bind mounts must pick up a replaced password file, and
 stop dependent services before uninstalling their required configuration.
 
-Upgrade both SSH peers before using these presets. Older clients reject App metadata v3 and the
-new App manifest format rather than treating ciphertext as an ordinary password file.
+Preset authors must use `metadata_schema_version = 3` for `secret_files`. App writes use manifest
+version 2, including writes for ordinary App files; older clients reject the new format. When using
+these presets over SSH, upgrade both peers first. See [upgrade and downgrade](#upgrade-and-downgrade)
+for backup and rollback precautions.
