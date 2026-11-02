@@ -6,8 +6,8 @@ sidebar_position: 1
 # Upgrade from Shine 1.x
 
 This guide covers upgrading an existing 1.x installation to Shine 2.9. Review the lifecycle security
-and recovery changes below, plus the [2.8](../installation.md#upgrade-to-shine-28) and
-[2.7 migration steps](../installation.md#upgrade-to-shine-27).
+and recovery changes below, plus the applicable configuration and script changes in
+[Upgrades and migration](./upgrading.md).
 
 Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
 without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
@@ -36,7 +36,7 @@ cargo install shine-cli
 An existing Shine installation can switch explicitly to the stable channel:
 
 ```bash
-shine self upgrade --channel stable
+shine self upgrade --channel stable  # Reinstall latest stable; also return from preview
 ```
 
 `shine self upgrade --channel preview` follows the continuously replaced preview build instead of
@@ -97,8 +97,8 @@ shine sys profile disable <ITEM>
 Inspect legacy runtime and environment state before applying its migration:
 
 ```bash
-shine state migrate --dry-run
-shine state migrate
+shine state migrate --dry-run  # Preview legacy-state migration
+shine state migrate            # Apply after reviewing the preview
 ```
 
 Legacy App, Shell, and Sys installations remain readable and can be upgraded or removed without
@@ -124,7 +124,7 @@ backups, or recovery files remain untouched for manual review.
 Review active 1.x external sources and overlays before the first configuration upgrade:
 
 ```bash
-shine preset migrate --dry-run
+shine preset migrate --dry-run  # Preview active external sources
 shine preset migrate
 # For automation after reviewing the same source:
 shine preset migrate --yes

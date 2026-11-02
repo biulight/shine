@@ -15,12 +15,14 @@ Shine 可以保存预设模板变量，也可以使用 GPG 或 age 封存项目�
 
 ## 查看和设置变量
 
+按需选择查看、设置或删除操作，不要将以下示例作为设置后立即删除的流程执行：
+
 ```bash
-shine env list
-shine env get HTTP_PROXY_PORT
-shine env explain HTTP_PROXY_PORT
-shine env set HTTP_PROXY_PORT 6152
-shine env delete HTTP_PROXY_PORT
+shine env list                      # 查看变量及其来源
+shine env get HTTP_PROXY_PORT       # 读取生效值
+shine env explain HTTP_PROXY_PORT   # 检查优先级和来源
+shine env set HTTP_PROXY_PORT 6152  # 保存变量值
+shine env delete HTTP_PROXY_PORT    # 删除所选位置保存的值
 ```
 
 `PROXY_NO_PROXY` 控制 `setproxy` 设置的 `NO_PROXY` 和 `no_proxy`，默认为
@@ -67,12 +69,14 @@ MY_API_TOKEN = { value = "<令牌>", description = "内部 API 的访问令牌" 
 避免依赖执行目录。未传任何目标参数时，同键被更高层定义就拒绝写入，即使值相同；显式选择
 目标允许维护被遮蔽项，只修改指定文件并分别报告保存位置、当前有效来源和值是否改变。
 
+按需选择操作和写入位置：
+
 ```bash
-shine env set HTTP_PROXY_PORT 7890 --global
-shine env set HTTP_PROXY_PORT 8080 --project
-shine env set HTTP_PROXY_PORT 8081 --project --env-file
-shine env set HTTP_PROXY_PORT 6152 --overlay
-shine env delete HTTP_PROXY_PORT --global --env-file
+shine env set HTTP_PROXY_PORT 7890 --global              # 写入全局配置
+shine env set HTTP_PROXY_PORT 8080 --project             # 写入项目配置
+shine env set HTTP_PROXY_PORT 8081 --project --env-file  # 写入项目 env 文件
+shine env set HTTP_PROXY_PORT 6152 --overlay             # 写入手动 overlay
+shine env delete HTTP_PROXY_PORT --global --env-file     # 从全局 env 文件删除
 shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --project --env-file
 ```
 
@@ -100,7 +104,7 @@ PROXY_HOST = { value = "127.0.0.1", description = "本地代理主机" }
 修改用于模板渲染的值后，运行：
 
 ```bash
-shine upgrade
+shine upgrade  # 更新已安装配置
 ```
 
 ## Env 分层变更的人工升级与回退
@@ -151,6 +155,8 @@ shine env secret decrypt MY_TOKEN_SECRET
 `[env.encryption].recipient` 也会在 `env run` 或 `env secret seal` 需要使用时提示迁移。
 
 需要导出到当前 shell 时：
+
+按需选择保留原变量名或重命名：
 
 ```bash
 export_code="$(shine env secret export MY_TOKEN)" && eval "$export_code"
@@ -244,8 +250,8 @@ shine env secret seal --backend age -r age1tag1qexample... -r age1qteammate...
 安装 `age-plugin-se`。在 workspace 所在项目中预览并应用公开 recipient 转换：
 
 ```bash
-shine state migrate --dry-run
-shine state migrate
+shine state migrate --dry-run  # 预览旧状态迁移
+shine state migrate            # 审阅预览后应用迁移
 ```
 
 迁移将配置中的 `age1se...` 转为等价的 `age1tag...`，不会解密密钥。
@@ -335,6 +341,8 @@ Developer USB 的顺序相反：先启动桌面命令；plugin 选择 ADB 并开
 显式标签不能为空白，且最多为 64 个 UTF-8 字节。也可以显式指定标签、固定使用 Developer USB 或 QR，
 以及在存在多台 ADB 设备时指定序列号：
 
+为此设备选择一种配对方式：
+
 ```powershell
 shine env secret identity init --phone --label "Work laptop"
 shine env secret identity init --phone --transport adb
@@ -407,11 +415,13 @@ recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一
 
 不修改当前终端、也不创建 workspace 文件时，使用可重复的 `--with`：
 
+按需选择一种注入方式：
+
 ```bash
-shine env run --with MY_TOKEN -- bun run build
-shine env run --with MY_TOKEN=API_TOKEN -- bun run build
-shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
-shine env run --no-workspace --with MY_TOKEN -- bun run build
+shine env run --with MY_TOKEN -- bun run build                            # 按原名称注入变量
+shine env run --with MY_TOKEN=API_TOKEN -- bun run build                  # 为子进程重命名变量
+shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build  # 注入多个变量
+shine env run --no-workspace --with MY_TOKEN -- bun run build             # 跳过工作区加载
 ```
 
 每个 `KEY` 都优先解密 `<KEY>_SECRET`，不存在时才读取明文 `<KEY>`。等号右侧是子进程中
@@ -499,10 +509,12 @@ shine env proxy list
 
 需要临时保留 shim、但禁止任何解密或注入时，可禁用规则。禁用后命令会直接转发给真实程序：
 
+按需选择需要的状态和范围：
+
 ```bash
-shine env proxy disable gh
-shine env proxy enable gh
-shine env proxy disable gh --project
+shine env proxy disable gh            # 禁用代理
+shine env proxy enable gh             # 启用代理
+shine env proxy disable gh --project  # 禁用项目代理
 ```
 
 不加 `--project` 时，启用/禁用只修改全局规则，项目规则仍可覆盖它。
@@ -538,8 +550,8 @@ shine env proxy uninstall gh
 已有 Vite 风格的 `.env` 文件时，可在项目根目录生成 Shine workspace 和对应的 TOML 环境源：
 
 ```bash
-shine env workspace init --from-dotenv --dry-run
-shine env workspace init --from-dotenv
+shine env workspace init --from-dotenv --dry-run  # 预览导入 dotenv 文件
+shine env workspace init --from-dotenv            # 执行已审阅的导入
 ```
 
 它读取 `.env`、`.env.local`、`.env.<mode>` 与 `.env.<mode>.local`，自动发现 mode，并保持该覆盖顺序。原 dotenv 文件不会被修改；生成目标已存在时命令会拒绝覆盖，包括悬空符号链接和并发导入创建的文件，确认后才添加 `--force`。只导入指定 mode 时可重复使用 `--mode`：
@@ -714,6 +726,8 @@ hybrid_decrypt_backend = "age"
 `.shine-seal.lock`。
 
 ## 临时机密文件 {#workspace-secret-files}
+
+启用临时机密文件前，请将所有读取同一工作区的客户端升级到 Shine 2.5 或更高版本。
 
 使用 workspace version 3，可将签名 keystore、密码文件和服务凭据加密后保存在 Git 中。
 文件组是命名的映射集合，不是目录。每条映射包含密文 `source` 和明文 `target`；一个组可覆盖

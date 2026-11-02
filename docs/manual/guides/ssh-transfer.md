@@ -10,13 +10,22 @@ secret decryption for remote commands, and a file-transfer channel between local
 See [Manage environment variables and secrets](./environment.md#provide-variables-and-secrets-to-remote-commands)
 for local value management.
 
+## Version compatibility {#version-compatibility}
+
+When a Shine channel reports a protocol version mismatch, upgrade the older local or remote
+Shine and reconnect. The handshake rejects incompatible peers and identifies the mismatch.
+If automation must remain available during
+an upgrade, coordinate both peers before running it.
+
 ## Open a session
 
+Choose one connection example:
+
 ```bash
-shine ssh user@example.com
-shine ssh -p 2222 user@example.com
-shine ssh user@2001:db8::1
-shine ssh user@example.com uname -a
+shine ssh user@example.com           # Open an interactive remote shell
+shine ssh -p 2222 user@example.com   # Use a custom SSH port
+shine ssh user@2001:db8::1           # Connect to an IPv6 address
+shine ssh user@example.com uname -a  # Run one remote command
 ```
 
 Shine forwards the supplied SSH arguments to the system `ssh`. In a remote shell it sets variables
@@ -34,10 +43,12 @@ and Linux, it also stops that process's descendants. Files already copied are no
 
 Place forwarding options before the SSH target:
 
+Choose one forwarding method:
+
 ```bash
-shine ssh --with API_URL dev
-shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'
-shine ssh --with-secret API_TOKEN dev
+shine ssh --with API_URL dev                                        # Forward a plain variable
+shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'  # Rename the forwarded variable
+shine ssh --with-secret API_TOKEN dev                               # Forward a decrypted secret
 ```
 
 `--with` reads only the exact plaintext `[env]` key and never decrypts `KEY_SECRET` automatically.
@@ -241,12 +252,14 @@ unavailable. Use system `scp`, `sftp`, or another transfer tool.
 
 Inside a remote shell opened by `shine ssh`:
 
+Choose one download example. Preview the destination before allowing replacement; SCP may overwrite existing files even without `--force`.
+
 ```bash
-shine local download ./logs/app.log
-shine local download ./logs/app.log ./downloaded/app.log --dry-run
-shine local download ./logs/app.log ./downloaded/app.log --force
-shine local download ./logs/app.log --scp
-shine local download ./dist ./dist-copy
+shine local download ./logs/app.log                                 # Download to the local starting directory
+shine local download ./logs/app.log ./downloaded/app.log --dry-run  # Preview destination
+shine local download ./logs/app.log ./downloaded/app.log --force    # Allow replacement at the destination
+shine local download ./logs/app.log --scp                           # Use SCP directly
+shine local download ./dist ./dist-copy                             # Download a directory
 ```
 
 The remote side resolves the source; the local side resolves the destination. Without a destination,
@@ -271,10 +284,12 @@ select matching remote files.
 
 Still inside the remote shell:
 
+Preview first; choose a file or directory transfer as needed. Use `--force` only when replacement is intended.
+
 ```bash
-shine local upload ./release.tar.gz /tmp/release.tar.gz --dry-run
-shine local upload ./release.tar.gz /tmp/release.tar.gz --force
-shine local upload ./site /tmp/site
+shine local upload ./release.tar.gz /tmp/release.tar.gz --dry-run  # Preview upload
+shine local upload ./release.tar.gz /tmp/release.tar.gz --force    # Allow replacement at the destination
+shine local upload ./site /tmp/site                                # Upload a directory
 ```
 
 The local side resolves the source and the remote side resolves the destination. Without a

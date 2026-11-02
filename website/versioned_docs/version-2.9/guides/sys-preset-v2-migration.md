@@ -140,7 +140,7 @@ For a Git-managed overlay, first publish the upstream changes to its configured 
 On the target operating system, inspect the item Shine actually reads:
 
 ```bash
-shine sys list
+shine sys list  # List items for this platform
 shine sys info neovim
 shine sys bootstrap neovim --dry-run
 ```

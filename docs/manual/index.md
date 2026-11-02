@@ -15,7 +15,7 @@ you manage them in one place. It can also store passwords, access keys, and othe
 information encrypted, then provide it on demand when a selected program runs.
 
 This manual applies to **Shine 2.9.0**. Use the version selector to find the 1.8.x manual.
-Before upgrading from 2.7 or earlier, read the [2.8 migration steps](./installation.md#upgrade-to-shine-28).
+For an existing installation, see [Upgrades and migration](./guides/upgrading.md) for your starting version.
 Before upgrading from 1.x, read the [upgrade guide](./guides/upgrade-to-2.md).
 
 [![Shine overview: choose, preview, and install everyday script tools and app settings; store sensitive information encrypted, decrypt it at runtime, and provide it to a program; reduce plaintext secrets in projects when using AI coding tools. Temporary-file cleanup is attempted after use, and programs can read secrets they receive.](/img/shine-overview-en.webp)](/img/shine-overview-en.webp)
