@@ -22,10 +22,10 @@ sidebar_position: 1
 完全由空白组成的目标会被拒绝。
 
 ```bash
-shine list --available
+shine list --available  # 查看所有类型的可用资源
 shine info app/starship
 shine install app/starship
-shine update
+shine update            # 检查更新，不应用改动
 shine upgrade app/starship
 ```
 
@@ -326,7 +326,7 @@ shine clear serve
 `clear` 必须指定目标；单独运行不会清理所有内容。`clear serve` 会停止并移除旧版用户服务，
 无需加载 Shine 配置，也不会删除已发布的文件。成功后重复清理也是安全的；系统服务管理器
 报错时会报告失败。整个 `shine serve` 命令已移除。参见
-[安装与升级](../installation.md#清理旧版本的本地-http-服务)。
+[系统管理](../guides/system-init.md#retire-legacy-http-service)。
 
 版本化运行时状态迁移仍使用 `shine state migrate`。
 

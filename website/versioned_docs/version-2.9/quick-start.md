@@ -11,14 +11,13 @@ uninstall-preview cycle.
 ## 1. Browse available presets
 
 ```bash
-shine shell list
-shine app list
-shine sys list
-shine list --available
+shine shell list        # List Shell presets
+shine app list          # List App presets
+shine sys list          # List items for this platform
+shine list --available  # List all available resource types
 ```
 
-The first three commands list shell commands, application configuration, and initialization items
-for the current operating system. `list --available` shows all three resource types; append `app`, `shell`, or `sys` to filter it.
+`list --available` also accepts `app`, `shell`, or `sys` to filter it.
 
 ## 2. Install the proxy commands
 
@@ -47,12 +46,11 @@ PowerShell users can reopen the terminal to load the updated profile.
 
 ```bash
 setproxy
-shine list
-shine info shell/proxy
+shine list              # List installed resources
+shine info shell/proxy  # Inspect commands, links, and sources
 ```
 
-`shine list` shows the installed `proxy` category; `shine info shell/proxy` expands it into
-the managed commands, links, and source details. Use the full target `shell/proxy` in scripts. A bare
+Use the full target `shell/proxy` in scripts. A bare
 name is accepted only when it is unique across application and shell categories.
 
 Disable the proxy in the current terminal session:
@@ -64,7 +62,7 @@ usetproxy
 ## 4. Preview a safe uninstall
 
 ```bash
-shine shell uninstall proxy --dry-run
+shine shell uninstall proxy --dry-run  # Preview category removal
 ```
 
 After reviewing the output, remove `--dry-run` to apply the uninstall. Shine removes only the

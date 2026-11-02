@@ -71,14 +71,17 @@ phone recipient 不由 `state migrate` 自动转换。升级并验证插件和�
 command 都使用 target-scoped grant，并保存在仅所有者可读写的
 `~/.shine/trust.toml`。不要手改该文件，也不能从项目配置授予信任。
 
+先检查目标，再按需选择一种授权或撤销操作。
+开发信任也会授权未来的代码变更，仅在你明确接受此范围时使用。
+
 ```bash
-shine trust inspect app/example
-shine trust grant app/example
-shine trust list
-shine trust revoke app/example
-shine trust inspect shell/tools/my-command
-shine trust grant preset
-shine trust grant app/example --development
+shine trust inspect app/example              # 仅检查，不授予信任
+shine trust grant app/example                # 授予快照信任
+shine trust list                             # 查看授权
+shine trust revoke app/example               # 撤销信任
+shine trust inspect shell/tools/my-command   # 仅检查，不授予信任
+shine trust grant preset                     # 授予快照信任
+shine trust grant app/example --development  # 信任未来的代码变更
 ```
 
 快照 Grant 只适用于已经审阅的 target、capability、来源层与完整有效类别快照。显式使用

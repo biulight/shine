@@ -10,13 +10,13 @@ sidebar_position: 3
 ## 1. 查看可用预设
 
 ```bash
-shine shell list
-shine app list
-shine sys list
-shine list --available
+shine shell list        # 查看 Shell 预设
+shine app list          # 查看 App 预设
+shine sys list          # 查看当前平台的系统项目
+shine list --available  # 查看所有类型的可用资源
 ```
 
-前三个入口分别列出 shell 命令、应用配置和当前操作系统的初始化项目；`list --available` 展示三类资源，也可追加 `app`、`shell` 或 `sys` 过滤。
+`list --available` 也可追加 `app`、`shell` 或 `sys` 过滤。
 
 ## 2. 安装代理命令
 
@@ -43,12 +43,11 @@ PowerShell 用户可重新打开终端，确保更新后的 profile 生效。
 
 ```bash
 setproxy
-shine list
-shine info shell/proxy
+shine list              # 查看已安装资源
+shine info shell/proxy  # 查看命令、入口和来源
 ```
 
-`shine list` 显示已安装的 `proxy` 类别；`shine info shell/proxy` 再展开它管理的命令、
-入口与来源详情。脚本中使用完整 target `shell/proxy`，裸名称只在 app 与 shell 类别之间唯一时才可使用。
+脚本中使用完整 target `shell/proxy`，裸名称只在 app 与 shell 类别之间唯一时才可使用。
 
 取消当前终端会话中的代理：
 
@@ -59,7 +58,7 @@ usetproxy
 ## 4. 安全预览卸载
 
 ```bash
-shine shell uninstall proxy --dry-run
+shine shell uninstall proxy --dry-run  # 预览卸载类别
 ```
 
 确认输出后去掉 `--dry-run` 即可执行。Shine 只移除自身管理的脚本、命令入口和相关 profile 片段。

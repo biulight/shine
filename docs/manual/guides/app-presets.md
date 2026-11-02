@@ -15,7 +15,7 @@ permissions, and restart requirements.
 ## Browse and preview
 
 ```bash
-shine app list
+shine app list  # List App presets
 shine app info starship
 shine app install starship --dry-run
 ```
@@ -25,11 +25,13 @@ confirm destinations and scope without writing application files.
 
 ## Install and update
 
+Install once, then check and apply updates when needed:
+
 ```bash
 shine app install starship
-shine install app/starship
-shine update
-shine upgrade
+# Equivalent: shine install app/starship
+shine update   # Check for updates without applying them
+shine upgrade  # Apply updates to installed configuration
 ```
 
 `shine update` compares installed results with presets and reports status without applying it.
@@ -73,8 +75,8 @@ for the complete author workflow.
 ## Uninstall and restore
 
 ```bash
-shine app uninstall starship --dry-run
-shine app uninstall starship
+shine app uninstall starship --dry-run  # Preview removal
+shine app uninstall starship            # Apply only after reviewing the preview
 ```
 
 Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a Plan before making
@@ -105,18 +107,12 @@ modified entries remain preserved.
 
 ## Upgrade and downgrade {#upgrade-and-downgrade}
 
-Before upgrading from Shine 2.7 or earlier, keep a private backup of your Shine configuration and
-state directory (by default `~/.shine/`; use the selected directory if you set `--config-dir` or
-`SHINE_CONFIG_DIR`), external preset sources, and installed App configuration files. Backups may
-contain secrets; restrict access to them. A backup of Shine's directory alone does not include
-App files installed elsewhere.
-
-New App writes use a state format that older clients reject. Reinstalling an older binary does
-not undo those writes or SSH policy migrations. Do not point an older client at the updated state
-or delete state to bypass compatibility errors. Keep private secret state and its fingerprint key
-with the installation records: ownership checks and recovery need them. A pre-upgrade backup is
-not a safe replacement for current state if installed files have since changed; review both before
-attempting a rollback.
+Shine 2.8 and later write App installation state that Shine 2.7.x and earlier cannot read.
+If you intend to downgrade, reinstalling the old binary or resealing encrypted sources does not convert App installation
+records. An older client rejects incompatible records; `app install --replace-managed` also needs to read
+them and cannot bypass this limit. Do not delete records or edit their version number to bypass
+that check. Undoing managed file changes and making state readable by an older client are
+separate operations.
 
 ## Recover an interrupted App operation
 
@@ -160,11 +156,13 @@ Generators can be automatic or manual. Neither kind runs during ordinary `list`,
 a prominent `generator not evaluated` warning and does not claim that the installed file is
 current. Use `--run-generators` to execute the selected generators explicitly and inspect the resulting status or diff without installing the files:
 
+Choose one inspection scope; these commands execute generators:
+
 ```bash
-shine app info surge --run-generators
-shine info app/surge --run-generators --diff
-shine update app/surge --run-generators --diff
-shine update --run-generators
+shine app info surge --run-generators           # Evaluate generators and inspect status
+shine info app/surge --run-generators --diff    # Evaluate and inspect differences
+shine update app/surge --run-generators --diff  # Check this App with generator evaluation
+shine update --run-generators                   # Evaluate all installed App categories
 ```
 
 The global form evaluates generators for every installed App category; the targeted forms evaluate
@@ -187,9 +185,11 @@ generated `[[files]]` entry, run `shine install app/<CATEGORY>` once before refr
 Automatic generators may also run during an approved install or upgrade. A manual generator with
 `auto = false` runs during installation, explicit evaluation, or explicit refresh:
 
+Choose a category-wide or single-file refresh:
+
 ```bash
-shine app refresh <CATEGORY>
-shine app refresh <CATEGORY> <SOURCE_FILE>
+shine app refresh <CATEGORY>                # Refresh manual outputs in the category
+shine app refresh <CATEGORY> <SOURCE_FILE>  # Refresh only the selected source
 ```
 
 `SOURCE_FILE` is the relative `[[files]].source` path. A failed refresh preserves the last successful
@@ -402,10 +402,13 @@ network = [{ scope = "any" }]
 For persistent authorization of external hooks and generators, use target-scoped trust.
 Interactive lifecycle confirmation can instead authorize only the current operation:
 
+Inspect the target first, then choose snapshot or development trust.
+Development trust also authorizes future code changes; use it only when you intend that scope.
+
 ```bash
-shine trust inspect app/<CATEGORY>
-shine trust grant app/<CATEGORY>
-shine trust grant app/<CATEGORY> --development
+shine trust inspect app/<CATEGORY>              # Inspect without granting trust
+shine trust grant app/<CATEGORY>                # Grant snapshot trust
+shine trust grant app/<CATEGORY> --development  # Trust future changes
 ```
 
 `trust inspect` shows what needs authorization without granting trust. Snapshot trust binds the complete
@@ -491,4 +494,4 @@ stop dependent services before uninstalling their required configuration.
 Preset authors must use `metadata_schema_version = 3` for `secret_files`. App writes use manifest
 version 2, including writes for ordinary App files; older clients reject the new format. When using
 these presets over SSH, upgrade both peers first. See [upgrade and downgrade](#upgrade-and-downgrade)
-for backup and rollback precautions.
+for compatibility limits.

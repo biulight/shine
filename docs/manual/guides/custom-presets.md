@@ -34,7 +34,7 @@ You can use the same flow without an AI client:
 ```bash
 mkdir -p my-presets/app/my-editor
 cd my-presets/app/my-editor
-shine preset new app
+shine preset new app  # Create an App template
 # Add config files and edit shine.toml.
 shine preset validate . --format json
 shine preset lint . --format json
@@ -45,10 +45,12 @@ shine preset test . --format json
 The default scaffold does not add an empty permission table. Use the option below to add the
 unrestricted author statement:
 
+Choose the category type; run only its command:
+
 ```bash
-shine preset new app --unrestricted
-shine preset new shell --unrestricted
-shine preset new sys --unrestricted
+shine preset new app --unrestricted    # Create an App template with the author statement
+shine preset new shell --unrestricted  # Create a Shell template with the author statement
+shine preset new sys --unrestricted    # Create a Sys template with the author statement
 ```
 
 All arbitrary code is unisolated whether this option is present or absent. The option does not skip
@@ -131,6 +133,12 @@ capability declaration. Source locations use one-based lines and UTF-8 byte colu
 
 ## Tool compatibility {#tool-compatibility}
 
+If an integration saves reports or approvals, regenerate them with the upgraded tool and review
+again. Shine rejects approvals with an incompatible schema or a changed Plan; an old approval
+does not silently authorize a new operation. Ordinary interactive use does not require preparing
+approvals before upgrading. For unattended integrations, validate report consumers and external
+App declarations before deployment to avoid interrupted jobs.
+
 Tool consumers should read `preset schema` again after upgrading: lint reports use schema 2,
 author Plan reports schema 3, and fixture reports schema 2. Fixture input schema 1 is unchanged;
 `expect.analysis_diagnostic_codes` can assert diagnostic codes alongside `ready`. A correctly
@@ -147,9 +155,9 @@ types and recompile. Regenerate lifecycle reports and approvals with the upgrade
 Preview the active external source and overlay, or name a repository, category, or manifest:
 
 ```bash
-shine preset migrate --dry-run
-shine preset migrate ./my-presets --dry-run
-shine preset migrate ./my-presets
+shine preset migrate --dry-run               # Preview active external sources
+shine preset migrate ./my-presets --dry-run  # Preview this source's migration
+shine preset migrate ./my-presets            # Apply after reviewing the preview
 ```
 
 Review the metadata diff before confirming; the default answer is No. Migration changes only
@@ -238,10 +246,13 @@ Explicit `info`/`update --run-generators` evaluation also requires a grant; use 
 
 For persistent authorization, inspect and grant the target:
 
+Inspect the target first, then choose snapshot or development trust.
+Development trust also authorizes future code changes; use it only when you intend that scope.
+
 ```bash
-shine trust inspect <TARGET>
-shine trust grant <TARGET>
-shine trust grant <TARGET> --development
+shine trust inspect <TARGET>              # Inspect without granting trust
+shine trust grant <TARGET>                # Grant snapshot trust
+shine trust grant <TARGET> --development  # Trust future changes
 ```
 
 Snapshot trust covers the reviewed target and effective category content. Changes to files,
@@ -264,11 +275,14 @@ Every external Shell command uses the canonical `shell/<CATEGORY>/<COMMAND>` tru
 `preset` to inspect or trust every executable target
 in the current active Preset. Revoking `preset` clears every stored Preset trust grant:
 
+Inspect the target first, then choose only the required grant or revoke operation.
+Development trust also authorizes future code changes; use it only when you intend that scope.
+
 ```bash
-shine trust inspect preset
-shine trust grant preset
-shine trust grant preset --development
-shine trust revoke preset
+shine trust inspect preset              # Inspect without granting trust
+shine trust grant preset                # Grant snapshot trust
+shine trust grant preset --development  # Trust future changes
+shine trust revoke preset               # Revoke trust
 ```
 
 Older grants marked as needing review cannot authorize new operations. Review and grant them again.
@@ -357,7 +371,8 @@ An overlay replaces base-preset files at the same relative path and can add new 
 ```bash
 shine preset overlay link ~/dotfiles/shine-overlay --create
 shine preset overlay info
-shine preset overlay unlink
+# When you want to stop using this overlay:
+shine preset overlay unlink  # Unlink the overlay
 ```
 
 Local `preset link` and `preset overlay link` paths, including resolved symlink targets, must be
@@ -383,7 +398,7 @@ and use `shine preset overlay link <PATH>` from the project instead.
 
 ```bash
 shine preset overlay link --git https://example.com/team/shine-overlay.git --branch main
-shine preset pull
+shine preset pull  # Pull preset sources only
 shine preset overlay info
 ```
 
@@ -523,10 +538,12 @@ subdirectories. Use `shine init --yes` in non-interactive scripts.
 When the external preset directory or a manually linked overlay is a Git worktree, pull sources alone
 or pull before inspecting or applying configuration:
 
+Choose one pull/update operation:
+
 ```bash
-shine preset pull
-shine update --pull
-shine upgrade --pull
+shine preset pull     # Pull preset sources only
+shine update --pull   # Pull, then check for updates
+shine upgrade --pull  # Pull, then apply configuration updates
 ```
 
 Shine locates the repositories containing the base presets and active overlay. If both sources are in
@@ -547,10 +564,12 @@ managed with `--git`, which is intentionally disposable. Git must be available i
 
 Generate a `shine.toml` template in an application, shell, or sys category directory:
 
+Choose the category type; run only its command:
+
 ```bash
-shine preset new app
-shine preset new shell
-shine preset new sys
+shine preset new app    # Create an App template
+shine preset new shell  # Create a Shell template
+shine preset new sys    # Create a Sys template
 ```
 
 Existing files require `--force`. Without it, existing entries, including dangling symbolic links,
@@ -618,8 +637,8 @@ Relevant commands report a migration hint; unrelated commands do not automatical
 Review and apply the conversion explicitly:
 
 ```bash
-shine preset migrate ./my-presets --dry-run
-shine preset migrate ./my-presets
+shine preset migrate ./my-presets --dry-run  # Preview this source's migration
+shine preset migrate ./my-presets            # Apply after reviewing the preview
 ```
 
 Migration reads the old explicit sensitivity declarations, preserves aliases and conditions, and

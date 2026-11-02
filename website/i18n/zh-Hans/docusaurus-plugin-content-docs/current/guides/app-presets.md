@@ -12,7 +12,7 @@ sidebar_position: 2
 ## 查看与预览
 
 ```bash
-shine app list
+shine app list  # 查看 App 预设
 shine app info starship
 shine app install starship --dry-run
 ```
@@ -22,11 +22,13 @@ shine app install starship --dry-run
 
 ## 安装与更新
 
+安装一次，之后按需检查并应用更新：
+
 ```bash
 shine app install starship
-shine install app/starship
-shine update
-shine upgrade
+# 等价写法：shine install app/starship
+shine update   # 检查更新，不应用改动
+shine upgrade  # 更新已安装配置
 ```
 
 `shine update` 比较当前安装结果与预设，只报告状态；`shine upgrade` 将受管 shell 和应用配置更新到当前预设内容。
@@ -66,8 +68,8 @@ metadata_schema_version = 2
 ## 卸载与恢复
 
 ```bash
-shine app uninstall starship --dry-run
-shine app uninstall starship
+shine app uninstall starship --dry-run  # 预览卸载
+shine app uninstall starship            # 审阅预览后再执行卸载
 ```
 
 install、upgrade、uninstall、generator refresh 和 artifact apply/remove 都会在改动前显示 Plan，
@@ -93,15 +95,11 @@ upgrade 仅在获批命令包含 `--prune-stale` 时移除已从
 
 ## 升级与降级 {#upgrade-and-downgrade}
 
-从 Shine 2.7 或更早版本升级前，请私下备份 Shine 配置与状态目录（默认为 `~/.shine/`；
-若设置了 `--config-dir` 或 `SHINE_CONFIG_DIR`，请备份实际选用的目录）、外部预设来源以及
-已安装的 App 配置文件。备份可能包含秘密，应限制访问权限。仅备份 Shine 目录不会包含安装在
-其它位置的 App 文件。
-
-新版写入的 App 状态格式会被旧客户端拒绝。仅安装旧版二进制不会撤销状态写入或 SSH 策略迁移。
-不要让旧客户端读取更新后的状态，也不要通过删除状态绕过兼容性错误。私有秘密文件状态及其指纹
-密钥必须与安装记录一起保留，所有权检查和恢复都需要它们。如果已安装文件在升级后发生变化，
-不能直接用升级前的状态备份替换当前状态；尝试回退前应核对两者。
+Shine 2.8 及更高版本写入的 App 安装状态无法由 2.7.x 及更早版本读取。
+若计划降级，仅安装旧二进制或重新封存加密源文件，
+都不会转换 App 安装记录。旧客户端会拒绝不兼容的记录；`app install --replace-managed` 也需要读取记录，不能绕过此限制。
+不要通过删除记录或修改版本号绕过检查。
+撤销受管文件的改动，与让旧客户端重新读取安装状态，是两件不同的事。
 
 ## 恢复中断的 App 操作
 
@@ -139,11 +137,13 @@ shine app recover --yes
 情况下计算动态预期内容时，info/update 会醒目显示 `generator not evaluated`，不会声称已安装文件
 是最新状态。使用 `--run-generators` 可以显式执行所选 generator，检查生成结果的状态或差异，而不安装文件：
 
+按需选择一种检查范围；这些命令会执行生成器：
+
 ```bash
-shine app info surge --run-generators
-shine info app/surge --run-generators --diff
-shine update app/surge --run-generators --diff
-shine update --run-generators
+shine app info surge --run-generators           # 执行生成器并查看状态
+shine info app/surge --run-generators --diff    # 执行生成器并查看差异
+shine update app/surge --run-generators --diff  # 执行生成器并检查此 App 的更新
+shine update --run-generators                   # 执行所有已安装 App 类别的生成器
 ```
 
 全局形式会评估所有已安装 App 类别；定向形式只评估选中的 App。由于该参数已经表达明确意图，自动
@@ -161,9 +161,11 @@ refresh 只处理已由 App manifest 记录的生成文件。新增带 generator
 自动 generator 也可以在获批的安装或升级中运行；`auto = false` 的手动 generator 可在安装、显式
 评估或显式 refresh 中运行：
 
+按需选择刷新整个类别或单个文件：
+
 ```bash
-shine app refresh <CATEGORY>
-shine app refresh <CATEGORY> <SOURCE_FILE>
+shine app refresh <CATEGORY>                # 刷新类别中的手动生成输出
+shine app refresh <CATEGORY> <SOURCE_FILE>  # 仅刷新指定源文件
 ```
 
 指定文件时，`SOURCE_FILE` 是预设 `[[files]].source` 的相对路径。刷新失败会保留上次成功内容；
@@ -311,10 +313,13 @@ network = [{ scope = "any" }]
 
 外部钩子和 generator 可通过交互式生命周期确认获得本次授权。需要持久授权时使用 target-scoped trust：
 
+先检查目标，再选择快照信任或开发信任。
+开发信任也会授权未来的代码变更，仅在你明确接受此范围时使用。
+
 ```bash
-shine trust inspect app/<CATEGORY>
-shine trust grant app/<CATEGORY>
-shine trust grant app/<CATEGORY> --development
+shine trust inspect app/<CATEGORY>              # 仅检查，不授予信任
+shine trust grant app/<CATEGORY>                # 授予快照信任
+shine trust grant app/<CATEGORY> --development  # 信任未来的代码变更
 ```
 
 `trust inspect` 显示需要授权的内容，不会授予信任。Snapshot trust 会绑定完整有效 App 类别，包括辅助文件和数据文件。
@@ -387,4 +392,4 @@ Windows 使用当前用户私有 ACL，拒绝 Unix 权限字段。
 
 预设作者使用 `secret_files` 时，必须声明 `metadata_schema_version = 3`。App 写入使用 manifest
 版本 2，包括普通 App 文件的状态写入；旧客户端会拒绝新格式。通过 SSH 使用这些预设前，请先升级
-两端。备份和回退注意事项见[升级与降级](#upgrade-and-downgrade)。
+两端。兼容性限制见[升级与降级](#upgrade-and-downgrade)。

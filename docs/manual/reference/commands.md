@@ -23,10 +23,10 @@ Target names are matched literally. Quote names containing leading or trailing w
 Shine does not strip that whitespace. An entirely blank target is rejected.
 
 ```bash
-shine list --available
+shine list --available  # List all available resource types
 shine info app/starship
 shine install app/starship
-shine update
+shine update            # Check for updates without applying them
 shine upgrade app/starship
 ```
 
@@ -351,7 +351,7 @@ shine clear serve
 stops and removes an older version's user service without loading Shine configuration or deleting
 published files. Repeating successful cleanup is safe; service-manager errors are reported.
 The `shine serve` namespace is removed. See
-[Installation and upgrades](../installation.md#retire-an-older-local-http-service).
+[System management](../guides/system-init.md#retire-legacy-http-service).
 
 `shine state migrate` remains the command for versioned runtime-state migrations.
 
