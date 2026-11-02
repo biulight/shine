@@ -288,7 +288,7 @@ shine app install example
 ```
 
 升级需要另建 `--operation upgrade` 策略。`--migrate-file-policy` 显式允许将本地策略存储升级到 v2，
-已有环境策略仍可读取。文件策略绑定主机、操作、workspace、完整映射、密文版本及远端目标；
+已有环境策略仍可读取。仅降级 Shine 二进制不会撤销策略迁移；迁移前请私下备份策略存储。文件策略绑定主机、操作、workspace、完整映射、密文版本及远端目标；
 App 策略还绑定有效类别快照和文件权限。请求只能释放明确获准文件的子集；新增或修改来源后，
 需要重新审阅并更新策略。`policy update`、`policy diff` 接受相同的文件参数。
 

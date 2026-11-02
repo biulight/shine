@@ -112,11 +112,16 @@ JavaScript/TypeScript 依赖。源码行为与声明存在确定差异，或受�
 只有文档列出的固定变量可以免于重复声明，任意 `SHINE_` 前缀名称不能获得豁免。不要把环境值或
 URL 凭据写入能力声明。源码位置采用从 1 开始的行号和 UTF-8 字节列号。
 
+## 工具兼容性 {#tool-compatibility}
+
 工具集成在升级后应重新读取 `preset schema`：lint 报告使用 schema 2，作者 Plan 报告使用 schema 3，
 fixture 报告使用 schema 2。Fixture 输入仍为 schema 1；可用 `expect.analysis_diagnostic_codes`
 配合 `ready` 断言诊断。正确预期阻断的用例可以通过，但取消或命令累计预算耗尽不能成为成功的负向
 测试。`complete = false` 表示作者报告未完成，fixture 报告还会列出 `unfinished_cases`。
 生命周期 Plan／批准／审阅契约使用 schema 4；应重新审阅，不能复用旧批准。
+
+升级到 Shine 2.8 时，使用 `shine-core` 的 Rust 集成需要适配公开类型变更并重新编译。
+请通过升级后的集成重新生成生命周期报告和审批。
 
 ## 迁移 1.x 来源
 

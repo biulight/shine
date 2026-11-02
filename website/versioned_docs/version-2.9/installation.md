@@ -149,28 +149,25 @@ protected location requires a terminal with the necessary permissions.
 
 Shine 2.8 adds [managed App secret files](./guides/app-presets.md#managed-secret-files),
 [local SSH file authorization](./guides/ssh-transfer.md#file-secret-broker), and clearer Shell
-installation reviews and system installer progress. This minor release includes incompatible
-protocol and state changes. Before upgrading from 2.7 or earlier:
+installation reviews and system installer progress. When upgrading from 2.7 or earlier, check the features
+you use:
 
-1. **Upgrade both SSH peers.** Protocol v4 requires matching clients, including for existing SSH
-   workflows. Upgrade the local and remote Shine binaries before reconnecting.
-2. **Review file policies explicitly.** Existing environment policies remain readable but do not
-   authorize files. Use `--migrate-file-policy` when adding a file policy to permit the policy
-   store upgrade to version 2. Review the exact host, operation, files, and permissions; see the
-   [file authorization guide](./guides/ssh-transfer.md#file-secret-broker).
-3. **Keep App state with a compatible client.** App writes use manifest version 2; older clients
-   reject it. Metadata version 3 is required for `secret_files`. Keep private backups before
-   upgrading, and do not downgrade a client against newly written state. Downgrading the binary
-   does not reverse state or policy migrations. Never delete private secret state to bypass an
-   error; it is needed for ownership checks and recovery.
-4. **Renew approvals and update integrations.** Plan, approval, and review schema versions are now
-   4. Generate fresh reports and approvals instead of reusing saved ones. Rust consumers of
-   `shine-core` must adapt to the changed public types and recompile.
+- **Shine SSH:** upgrade both local and remote Shine before reconnecting. This also applies to
+  existing `shine ssh` workflows, even if you do not use file authorization.
+- **App management:** [back up your configuration and installation state](./guides/app-presets.md#upgrade-and-downgrade)
+  before upgrading. Once the new version writes App state, older clients cannot read it;
+  reinstalling an older binary alone does not restore compatibility.
+- **Saved plans or approvals:** regenerate reports and review and approve them again after upgrading.
+  Do not reuse old approvals. Integration authors should also check the
+  [tool compatibility notes](./guides/custom-presets.md#tool-compatibility).
 
-Existing encrypted workspace sources do not need to be resealed just to upgrade Shine. Read-only
-App inspection does not decrypt files. Review [secret-file permissions and recovery](./guides/app-presets.md#managed-secret-files)
-before enabling automatic decryption, and follow the earlier migration steps below if upgrading
-from before 2.7.
+Existing encrypted workspace sources do not need to be resealed just to upgrade Shine. If you
+want to enable the new secret-file features, first review
+[permissions and recovery](./guides/app-presets.md#managed-secret-files) and, for SSH use,
+[local file authorization](./guides/ssh-transfer.md#file-secret-broker). Existing environment
+policies do not grant file access; you only need to add file policies when enabling that access.
+
+If upgrading from before 2.7, also follow the applicable migration steps below.
 
 ## Upgrade to Shine 2.7.2
 
