@@ -150,6 +150,7 @@ shine update --run-generators                   # 执行所有已安装 App 类�
 generator 和 `auto = false` 的手动 generator 都会参与。外部或 overlay generator 仍需要匹配的
 scoped trust。单项失败不会阻止其余 generator 继续评估，但命令会在报告不完整结果后返回非零状态。
 用户取消、命令累计分析预算耗尽，或无法安全继续的分析器故障会停止剩余工作。
+分析预算包含声明的作用域查找；即使源文件很小，深层嵌套也可能耗尽预算。
 
 受支持的 App Bun 代码会在执行前与声明核对；确定差异或解析失败会阻止该脚本启动，已有 trust
 不能绕过检查。其余独立选中文件仍可继续评估。修复方法、覆盖限制和作者工具见

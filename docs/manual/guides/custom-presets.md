@@ -121,6 +121,37 @@ languages, are advisory. Declarations not corroborated by the analyzed source ar
 and appear in detailed review. Neither means the code is safe or fully analyzed. Reports without
 diagnostics add no ordinary output; existing trust and approval checks still apply.
 
+For `globalThis.fetch('https://example.org/data')`, declare the network host `example.org`,
+just as for `fetch`. The same host declaration covers `https.get('https://example.org/data')`
+from `node:https`, with or without an inline callback. Dynamic URLs and `https.get` calls with
+an options object produce a coverage gap because the target host cannot be confirmed.
+
+Equivalent spellings use the same permission checks: supported identifier/URL escapes, quoted
+import names, parentheses, TypeScript type assertions and generic instantiations preserve recognized
+calls. For example, `(fetch)(('https://example.org'))` is checked like `fetch('https://example.org')`.
+Unsupported escapes (including legacy numeric escapes), unpaired surrogates, URLs containing
+control characters and dynamic values retain coverage gaps.
+
+Pure TypeScript types and `declare` bodies do not execute. Runtime initializers, enum/namespace
+bodies and expressions such as `typeof process.env.NAME` still contribute effects. Local value
+declarations, including namespaces and import aliases, keep their scope; calls through unknown
+values remain gaps. An unsupported module path retains its dependency gap and local import names.
+
+Environment-read checks distinguish reads from plain assignment, destructuring assignment and
+deletion. Reads in computed keys and default values, and compound assignments or updates, are
+still checked. This does not change the contract for declared environment inputs.
+
+For `const f = Bun.file('in'); await f.text()`, declare `read` on `in`. Saving the handle alone
+requires no read permission. Shine checks the path when the script calls the method.
+
+For Node `copyFile`, declare `read` on the source and `write` on the destination. For `rename`,
+declare `remove` on the source and `write` on the destination. These rules also cover the sync
+and promise forms. When one path is dynamic, Shine still checks the other path if it is a literal.
+
+If a script replaces a built-in method with `Object.assign`, calls through the replaced member
+produce a coverage gap. Calls through a function saved before replacement can still require its
+original permission.
+
 Use `--verbose` for detailed review or `shine preset lint <PATH> --format json` for all diagnostics.
 `--deny-warnings` makes lint warnings fail CI. More detailed output does not execute generators;
 that still requires `--run-generators` and trust. Lint checks all supported entries, so it can

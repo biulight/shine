@@ -4,7 +4,7 @@ Implemented for App Bun JS/TS and local dependencies. Expansion to other languag
 package is deliberately deferred; see the scope decision below.
 Contract: [ADR 0150](../decisions/0150-preset-code-analysis-admission.md).
 
-## Source rules, version 6
+## Source rules, version 7
 
 `core/src/analysis/` accepts captured category-relative source bytes, parsed declarations and an
 environment identity contract. It has no filesystem/process Host, ambient environment lookup,
@@ -20,9 +20,9 @@ paths, behavior classes, codes and optional opaque target hashes; no source exce
 | Rule | Supported syntax and comparison | Explicit limitation |
 | --- | --- | --- |
 | Environment | `process.env.NAME`, `Bun.env.NAME`, literal string subscripts; entry source/target/sensitivity mapping; exact fixed-variable names | Dynamic keys, unknown source identity and whole-env-object access are gaps; plain assignment/delete is not a read, compound assignment/update is |
-| Network | Unshadowed `fetch` and supported immutable aliases, literal HTTP(S) URL; URL-normalized host compared with exact host or `any` | Dynamic/escaped URL literals are gaps; credentials, URL path/query/fragment never appear in reports |
-| Node files | `readFile[Sync]`, `createReadStream`, `writeFile[Sync]`, `appendFile[Sync]`, `createWriteStream`, `unlink[Sync]`, `rm[Sync]`, `rmdir[Sync]`; supported `fs.promises` forms | Literal paths only; exact existing logical permission identities, no invented globs/inheritance; ambiguous native path spellings are gaps |
-| Bun files | `Bun.write`; direct `Bun.file(literal).text/json/arrayBuffer/bytes/stream/exists/delete/writer` | Constructing a BunFile alone is not a read; indirect BunFile aliases and dynamic paths are gaps |
+| Network | Unshadowed `fetch`, `globalThis.fetch` (including literal subscript), and supported immutable aliases, literal HTTP(S) URL; URL-normalized host compared with exact host or `any`. Node `https.get` uses the same comparison for a literal HTTPS URL alone or with an inline function callback | Dynamic URLs, unsupported string escapes and ambiguous callbacks/options for `https.get` are gaps; credentials, URL path/query/fragment never appear in reports |
+| Node files | `readFile[Sync]`, `createReadStream`, `writeFile[Sync]`, `appendFile[Sync]`, `createWriteStream`, `unlink[Sync]`, `rm[Sync]`, `rmdir[Sync]`, `copyFile[Sync]`, `rename[Sync]`; supported `fs.promises` forms | Literal paths only; exact existing logical permission identities, no invented globs/inheritance; ambiguous native path spellings are gaps |
+| Bun files | `Bun.write`; `text/json/arrayBuffer/bytes/stream/exists/delete/writer` on a direct `Bun.file` result or a tracked `const` handle | Constructor sites distinguish handles even for the same path. Saving a handle retains the object coverage gap. Only recognized method calls produce access facts, and dynamic paths remain gaps |
 | Commands | `Bun.spawn[Sync]`, Node `spawn[Sync]`, `execFile[Sync]`, `fork`; literal executable or first literal array element | `fork` module paths and Node options are not treated as definite executable identities; every subprocess retains an independent effects gap; dynamic executable adds an identity gap; shell `exec[Sync]` is dynamic code |
 | Dynamic code | Unshadowed `eval`, dynamic `require`, `import`, recognized Bun shell invocation | No execution, remote module download or recursive subprocess analysis |
 | Bindings | Builtin namespace/default/named imports and named import aliases; immutable `const` aliases including forward references in closures; parameter/block/function/generator/catch/loop shadowing | Ambiguous/reassigned bindings and unsupported calls are gaps; member mutations propagate across supported object aliases without invalidating unrelated members or previously captured function values; no general control-flow analysis or interpretation of arbitrary values |
@@ -57,6 +57,65 @@ declarations retain their scopes. Method parameters exclude computed keys, and c
 vars stay inside that block. Loader calls captured before replacement retain dependency analysis;
 immutable loader aliases retain builtin return identity. Replaced/shadowed loaders and uncertain
 cross-function mutation order still produce gaps rather than definite builtin effects.
+
+Rule version 7 tracks `Object.assign` writes to supported builtin objects and their immutable
+aliases. Literal source keys invalidate individual members. Dynamic keys, spreads and opaque
+sources can replace any member of the target. Previously captured function values retain the
+existing same-scope ordering rule. The assign call itself retains its coverage gap.
+
+Version 7 also compares both paths in Node copies and renames. A copy reads its source, a rename
+removes the source name, and both write the destination. Each literal is compared independently.
+A spread can make the following argument positions unknown. The promise module shares member
+identity with `fs.promises`, including replacements, and only exposes promise forms of these APIs.
+
+Identifiers use decoded Unicode spellings for declarations, references, member keys and writes.
+URL literals and string member keys decode standard JavaScript escapes, including UTF-16 pairs
+and line continuations. Legacy numeric escapes, unpaired surrogates and decoded controls remain
+unknown string targets. Other path, command and module literals retain their existing escape
+limitations. Decoding leaves source bytes and diagnostic locations intact.
+
+### Shared semantic boundaries
+
+The v7 review groups corrections by semantic role rather than adding a rule for each source
+spelling. Keep the pinned parser and existing API whitelist. No new production module, semantic
+IR or external compiler is needed for these local decisions.
+
+| Boundary | Owner | Required behavior |
+| --- | --- | --- |
+| Type syntax versus runtime | Syntax traversal and `is_type_syntax` | Validate and budget every node. Pure types create neither value bindings nor effects. Ambient declarations retain unknown value bindings but have no runtime effects. Initializers, enum/namespace bodies and runtime computed keys remain analyzed. |
+| Equivalent operands | `wrapped_operand` | Parentheses, `as`, `satisfies`, non-null/angle assertions and generic instantiations select the same runtime operand for calls, aliases, literals, receivers and write targets. Exclude their type operands from all runtime passes. |
+| Names and lexical identity | Binding collection and `Bindings::visible/member` | Decode identifier and quoted import names; normalize named default imports without treating literal dotted names as paths. Unknown imports, import aliases, enums, namespaces and ambient value declarations still shadow globals in their own scope. Namespace bodies contain their own `var` bindings. Type-only names do not. |
+| Read/write roles and mutation | `pattern_targets` and the mutation pass | Collect write-only targets and mutations from the same pattern traversal. Plain/destructuring assignment, loop targets and deletion are not environment reads. Computed keys, default RHS values, compound assignment and update still read their operands. |
+
+The additional state separates binding collection from runtime passes; it does not add another
+analysis pipeline. Keeping the former per-call checks would duplicate type erasure across effect
+handlers and write-role logic across mutation and environment analysis. The shared owners remove
+that drift. Existing source-location, privacy, cache, budget and lifecycle tests remain independent.
+
+The maintained [semantic matrix](../../../core/src/analysis/tests/semantic_matrix.rs) compares
+admission and diagnostic identities across spelling/wrapper/alias variants, known and dynamic
+member writes, capture timing, read/write patterns, type erasure and lexical shadowing. Repeated
+advisories and source positions can differ between equivalent layouts; separate tests retain
+count/location assertions. Core lifecycle cases verify both approval acceptance and rejection.
+
+Keep these limits explicit:
+
+- Unknown module spellings and `import = require(...)` retain dependency gaps; registering their
+  local names does not resolve their values or expand the dependency graph. Namespace export
+  values and internal import aliases are not interpreted.
+- Arbitrary expression evaluation, destructured value propagation, function returns and general
+  control-flow analysis remain outside the resolver. Same-function capture ordering retains the
+  existing syntactic rule, not a proof about loops, reachability or all executions.
+- Mutation coverage remains direct/pattern writes and supported `Object.assign` calls. Reflective
+  writes and arbitrary call side effects are not made complete by this audit.
+- Dynamic URLs/options, unsupported escapes and paths, detached BunFile methods, unknown packages
+  and other existing gaps remain advisory. Bounds and parse failures still block; this is not a
+  TypeScript type checker or a proof that arbitrary JS/TS code is safe.
+
+For future syntax changes, first add an equivalent transformation and a shadowed/rewritten or
+unknown-value control to the relevant matrix axis. Fix a shared owner when an invariant fails;
+record an explicit gap when the value cannot be established. Expand the API or module-resolution
+scope only as a separate decision. These unreleased corrections keep rule version 7.
 
 Regression coverage includes literal/comment and dynamic/spread pairs, local versus outer mutation,
 JS/TS default parameter scopes, replaced versus captured loaders, and author fixtures for all three
@@ -106,11 +165,18 @@ raw JSON targets while encoding control-bearing category names in grouped text.
 ## Resource limits
 
 Defaults are 1 MiB per source; 256 files and depth 32 per dependency graph; 16 MiB and 2,048 unique
-source files per command; 50,000 accumulated facts/comparison diagnostics, 2,000,000 syntax nodes
+source files per command; 50,000 accumulated facts/comparison diagnostics, 2,000,000 syntax/binding work units
 and 100,000 parser progress callbacks. Byte, file and parser work are charged on cache misses;
 per-entry diagnostic work is still charged on cache hits. These are conservative work limits,
 not a time/memory guarantee or a claim of exhaustive analysis. Binding lookup is indexed by name;
 more than 128 candidates for a name is unresolved rather than allowing unbounded scope matching.
+
+Function/namespace binding-scope walks charge the same node-work budget and check cancellation.
+Ancestor results are cached only within one parsed tree, so sibling declarations do not repeat a
+deep parent walk. Function capture boundaries remain separate from namespace binding boundaries.
+The `binding_scope_*` regressions cover budget exhaustion/terminal reuse and bounded sibling
+lookup without leaking namespace variables. Counting only the initial tree walk missed this work;
+the extra namespace pass in the initial v7 implementation made the existing deep-block cost worse.
 
 Local file/graph limits and syntax errors produce blocking reports that other independent entries
 can continue past. Cancellation and cumulative limits latch a terminal failure on the session,
@@ -126,6 +192,14 @@ Built-in Surge and Clash Verge samples exercise production source parsing and de
 source-cache reuse. Their dynamic targets and user-defined calls retain explicit gaps.
 Comparisons require each entry's actual environment contract; sample diagnostic counts are not
 a security/coverage percentage or proof that declarations match.
+
+The v6-to-v7 acceptance comparison used identical built-in source bytes and Core-derived contracts
+for all seven Bun entries. Admission was unchanged. The only diagnostic change was Surge's dynamic
+`rename` call, replacing one unknown-call gap with separate source/destination path gaps in both
+artifact entries. Literal-path controls verify that definite source/destination differences still
+block. This supports retaining the current API/parser scope; the small corpus does not establish
+coverage of arbitrary presets. Further changes need a reproducible supported-scope regression or
+a separately justified scope expansion.
 
 Do not describe the bounded analysis as exhaustive enforcement of script behavior. Pure analyzer
 tests do not replace consumer-boundary tests or native-platform checks.

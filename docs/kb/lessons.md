@@ -1,5 +1,95 @@
 # Lessons Learned
 
+## 2026-11-05 — Budget binding lookup, not only the syntax walk
+
+Deep blocks with many `var` declarations repeatedly searched the same ancestors. Namespace-aware
+binding collection added a second parent walk, worsening the existing cost and delaying cancellation.
+Resolve the nearest function/namespace binding boundary in one budgeted, cancellable walk and cache
+ancestor results within that tree. Keep namespace binding scope separate from function capture
+scope. Regression coverage checks terminal budget exhaustion and bounded sibling lookup while
+retaining namespace shadowing; see [resource limits](architecture/code-analysis.md#resource-limits).
+
+## 2026-11-05 — Audit semantic roles across syntax families
+
+Per-example fixes left independent checks disagreeing about the same program: type operands
+entered effect collection, unknown TypeScript declarations lost their local scope, and destructuring
+write targets became environment reads. Compare equivalent spellings and negative controls across
+the shared boundaries. Separate syntax validation, value bindings and runtime effects; use the same
+pattern traversal for mutation and read/write roles. Keep unsupported value evaluation explicit
+instead of growing a partial interpreter. The maintained matrix and limits live in
+[code analysis](architecture/code-analysis.md#shared-semantic-boundaries).
+
+## 2026-11-05 — Quoted export names need value decoding
+
+`import { "get" as request } from 'node:https'` was treated as an unknown function because its
+canonical name included quote characters. Decode string export names before resolving builtin
+members. Reuse exact member-name checks so a literal `promises.readFile` export cannot become
+the nested `fs.promises.readFile` API. Local aliases still use ordinary lexical binding rules.
+
+## 2026-11-05 — An unresolved module still declares local bindings
+
+An early return for escaped import paths discarded their local names. This misclassified an
+imported `fetch` as a global call, and an imported `Object.assign` as a builtin mutation that hid
+later real effects. Keep dependency resolution separate from runtime binding collection: retain
+unknown local values and the dependency gap, without decoding unsupported module spellings.
+
+## 2026-11-05 — Type queries do not execute their operands
+
+TypeScript `typeof` queries were traversed as runtime environment accesses and import calls,
+creating false permission differences or coverage gaps. Exclude their subtrees from behavior
+collection while retaining syntax validation and node-budget accounting. Runtime `typeof`
+expressions, default values and initializers beside annotations must still contribute effects.
+
+## 2026-11-05 — Transparent wrappers must preserve both reads and writes
+
+`(fetch)(url)` and `(Bun.file('in')).text()` lost definite effects, while a write through
+`(fs).readFileSync` left later calls falsely classified as builtin reads. Resolve parentheses and
+erased TypeScript assertions through their runtime operand, sharing that selection with mutation
+tracking. Preserve the enclosing reference when deciding whether an environment access is a read
+or an assignment/delete; otherwise resolving its receiver introduces false read requirements.
+Apply the same unwrapping before classifying literal arguments, callbacks and `Object.assign`
+sources. Treating `({other: replacement})` as an opaque source erased evidence from untouched
+builtin members; `fetch(('https://example.org'))` also lost its definite host.
+
+## 2026-11-05 — Escape decoding must preserve lexical identity
+
+A parameter spelled `f\u0065tch` did not shadow a bare `fetch` call, while an escaped global
+call went unrecognized. Decode names at every binding, lookup and write site, including
+destructuring and import aliases. Decode URL contents without rewriting source bytes so reported
+locations still identify the original call.
+
+## 2026-11-05 — HTTPS request options can override a literal URL
+
+Check the literal host in Node `https.get(url)` and `https.get(url, inlineCallback)`. A second
+argument with unknown identity may be options, and an explicit options object can change the
+hostname or select a socket. Keep the target unknown in those cases.
+
+## 2026-11-05 — Qualified fetch reads and writes share a global property
+
+`globalThis.fetch(url)` was reported as an unknown call, while overwriting `fetch` through
+a `const` alias of the global object left bare calls classified as network requests. Resolve
+the receiver lexically and use the same mutation identity for both spellings. A local parameter
+named `fetch` shadows only the bare name.
+
+## 2026-11-05 — BunFile access occurs at the method call
+
+Matching only the direct `Bun.file('in').text()` chain missed the same read through a saved
+`const` handle. Track the constructor site through immutable aliases and check the receiver's
+method before comparing permissions. Two handles for the same path can have different methods.
+
+## 2026-11-05 — Literal keys must stay distinct from nested filesystem methods
+
+`fs['promises.rename']` addresses one property. Flattening it to `fs.promises.rename` can
+invent a file operation on a call or hide the real operation after a write. Keep literal keys
+containing the index separator or wildcard out of builtin member matching and mutation tracking.
+
+## 2026-11-05 — Builtin methods can be replaced through an object alias
+
+`Object.assign(alias, {readFileSync: replacement})` caused a false filesystem declaration
+difference when called through the original object. Record these writes against the same member
+identity as direct assignments. Check the location of both the replaced call and a call through
+a previously captured function so removing one false blocker cannot hide the other real read.
+
 ## 2026-10-31 — Secret creation needs durable identity and usable parent directories
 
 - **Failure**: after creation but before the applied journal write, recovery accepted equal-content

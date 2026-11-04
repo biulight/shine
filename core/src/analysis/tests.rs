@@ -1,5 +1,7 @@
 use super::*;
 
+mod semantic_matrix;
+
 fn sources(code: &str) -> BTreeMap<String, Vec<u8>> {
     BTreeMap::from([("main.ts".into(), code.as_bytes().to_vec())])
 }
@@ -46,6 +48,838 @@ fn literal_network_matching_is_silent_and_difference_is_located() {
         (2, 7)
     );
     assert!(report("const unused = `fetch('https://fake.invalid')`;", None).allowed);
+}
+
+#[test]
+fn transparent_wrappers_preserve_network_identity() {
+    let declared = declaration("network=[{scope='host',host='example.org'}]");
+    for code in [
+        "(/* callee */ fetch)('https://example.org');",
+        "(fetch as typeof fetch)('https://example.org');",
+        "(fetch satisfies typeof fetch)('https://example.org');",
+        "(<typeof fetch>fetch)('https://example.org');",
+        "fetch!('https://example.org');",
+        "const request=(fetch as typeof fetch); request('https://example.org');",
+        "(globalThis as typeof globalThis).fetch('https://example.org');",
+        "((require)('node:https')!).get('https://example.org');",
+        "import https from 'node:https'; (https.get)('https://example.org');",
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+        assert!(
+            report(code, Some(&declared)).diagnostics.is_empty(),
+            "{code}"
+        );
+    }
+}
+
+#[test]
+fn transparent_wrappers_preserve_mutations_and_captured_functions() {
+    for mutation in [
+        "(alias).readFileSync=other;",
+        "(alias as typeof fs).readFileSync=other;",
+        "(<typeof fs>alias).readFileSync=other;",
+        "alias!.readFileSync=other;",
+        "(Object.assign)((alias), {readFileSync:other});",
+        "const assign=(Object.assign); assign((alias), {readFileSync:other});",
+    ] {
+        let code = format!(
+            "import fs from 'node:fs'; const alias=(fs); const before=(alias.readFileSync);\n\
+             {mutation}\n\
+             (fs.readFileSync)('in');\n\
+             (fs.writeFileSync)('out','data');\n\
+             (before)('in');"
+        );
+        let r = report(&code, None);
+        assert_eq!(differences(&r), 2, "{code}: {r:?}");
+        assert!(
+            r.diagnostics
+                .iter()
+                .any(|d| d.line == 3 && d.code == "code_analysis_call_unknown"),
+            "{r:?}"
+        );
+        assert!(
+            r.diagnostics
+                .iter()
+                .filter(|d| d.blocking())
+                .all(|d| matches!(d.line, 4 | 5)),
+            "{r:?}"
+        );
+    }
+    for code in [
+        "function f(fetch){(fetch as typeof fetch)('https://example.org')}",
+        "const fetch=other; (fetch)('https://example.org');",
+        "const request=(other as typeof fetch); request('https://example.org');",
+        "const request=(<typeof fetch>other); request('https://example.org');",
+        "(fetch, other)('https://example.org');",
+        "(globalThis).fetch=other; (fetch)('https://example.org');",
+        "const request=(fetch); request=other; (request)('https://example.org');",
+        "(Object.assign)((globalThis), {[key]:other}); (fetch)('https://example.org');",
+        "import fs from 'node:fs'; (fs).readFileSync=other; fs.readFileSync('in');",
+    ] {
+        let r = report(code, None);
+        assert!(
+            r.allowed && has(&r, "code_analysis_call_unknown"),
+            "{code}: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn transparent_wrappers_do_not_hide_member_replacements() {
+    for code in [
+        "import fs from 'node:fs'; (fs).readFileSync=other; fs.readFileSync('in');",
+        "import fs from 'node:fs'; (Object.assign)(fs, {readFileSync:other}); fs.readFileSync('in');",
+    ] {
+        let r = report(code, None);
+        assert!(
+            r.allowed && has(&r, "code_analysis_call_unknown"),
+            "{code}: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn transparent_wrappers_preserve_bun_file_receivers() {
+    for code in [
+        "(Bun.file('in')).text();",
+        "(Bun.file('in').text)();",
+        "const f=(Bun.file('in') as ReturnType<typeof Bun.file>); (f.text)();",
+        "const f=Bun.file('in'); (f as typeof f).text();",
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+    }
+    let r = report(
+        "const f=(Bun.file('in')); (f).text=other; (f.text)();",
+        None,
+    );
+    assert!(r.allowed && has(&r, "code_analysis_call_unknown"), "{r:?}");
+    let r = report("const read=(Bun.file('in').text); read();", None);
+    assert!(r.allowed && has(&r, "code_analysis_call_unknown"), "{r:?}");
+}
+
+#[test]
+fn transparent_wrappers_preserve_environment_read_write_roles() {
+    let env = EnvironmentContract {
+        fixed: BTreeSet::new(),
+        mappings: BTreeMap::from([(
+            "NAME".into(),
+            ("NAME".into(), Some(EnvironmentSensitivityV1::Plain)),
+        )]),
+    };
+    let report = |code: &str, declaration: Option<&PermissionDeclarationV1>| {
+        Session::default()
+            .analyze(&sources(code), "main.ts", declaration, &env)
+            .unwrap()
+    };
+    for code in [
+        "((process as typeof process).env.NAME)=value;",
+        "delete ((Bun as typeof Bun).env.NAME);",
+        "for (((process).env.NAME) of values) {}",
+    ] {
+        let r = report(code, None);
+        assert!(r.allowed, "{code}: {r:?}");
+    }
+    let declared = declaration("environment=[{name='NAME',sensitivity='plain'}]");
+    for code in [
+        "(process.env).NAME;",
+        "(Bun.env as Record<string,string>).NAME;",
+        "((process).env.NAME)+=value;",
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+        let matching = report(code, Some(&declared));
+        assert!(matching.diagnostics.is_empty(), "{code}: {matching:?}");
+    }
+}
+
+#[test]
+fn transparent_wrappers_have_matching_javascript_and_typescript_behavior() {
+    for (code, expected) in [
+        ("/* 中文 */ (fetch)('https://example.org/private');", 1),
+        (
+            "import fs from 'node:fs'; (fs).readFileSync=other; fs.readFileSync('in');",
+            0,
+        ),
+        (
+            "const fs=(require)('node:fs'); require=other; (fs.readFileSync)('in');",
+            1,
+        ),
+        ("(Bun.file('in')).text();", 1),
+    ] {
+        for file in ["main.js", "main.ts"] {
+            let r = Session::default()
+                .analyze(
+                    &BTreeMap::from([(file.into(), code.as_bytes())]),
+                    file,
+                    None,
+                    &EnvironmentContract::default(),
+                )
+                .unwrap();
+            assert_eq!(differences(&r), expected, "{file}: {code}: {r:?}");
+            assert!(!has(&r, "code_analysis_parse_failure"), "{r:?}");
+            if code.starts_with("/*") {
+                assert_eq!((r.diagnostics[0].line, r.diagnostics[0].column), (1, 14));
+                assert!(!format!("{r:?}").contains("example.org"));
+            }
+        }
+    }
+    let deep = format!(
+        "{}fetch{}('https://example.org');",
+        "(".repeat(128),
+        ")".repeat(128)
+    );
+    let r = report(&deep, None);
+    assert!(r.allowed && has(&r, "code_analysis_call_unknown"), "{r:?}");
+}
+
+#[test]
+fn wrapped_literal_arguments_preserve_effects_and_permission_matching() {
+    let permissions = declaration(
+        "network=[{scope='host',host='example.org'}]\n\
+         filesystem=[{base='preset',path='in',access=['read']}, {base='preset',path='out',access=['write']}]\n\
+         commands=['echo']",
+    );
+    for (code, expected) in [
+        ("fetch((/* URL */ 'https://example.org'));", 1),
+        ("fetch('https://example.org' as const);", 1),
+        ("fetch((<string>'https://example.org'));", 1),
+        ("fetch(('https://example.org' satisfies string)!);", 1),
+        ("import fs from 'node:fs'; fs.readFileSync(('in'));", 1),
+        ("require(('node:fs')).copyFileSync(('in'), ('out'));", 2),
+        ("Bun.file(('in' as const)).text();", 1),
+        ("const f=Bun.file(('in')); f.text();", 1),
+        ("Bun.spawn((['echo']));", 1),
+        (
+            "import {spawn} from 'node:child_process'; spawn(('echo'), ([]));",
+            1,
+        ),
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), expected, "{code}: {r:?}");
+        let matching = report(code, Some(&permissions));
+        assert!(matching.allowed, "{code}: {matching:?}");
+        assert!(
+            !has(&matching, "code_analysis_dynamic_target"),
+            "{matching:?}"
+        );
+    }
+}
+
+#[test]
+fn wrapped_assign_sources_preserve_known_keys_and_captures() {
+    for (source, expected_read) in [
+        ("({other: replacement})", true),
+        ("({other: replacement} as object)", true),
+        ("(null)", true),
+        ("('readFileSync')", true),
+        ("({[('other')]: replacement})", true),
+        ("({[('readFileSync')]: replacement})", false),
+        ("({[key]: replacement})", false),
+        ("(patch as object)", false),
+        ("({...patch})", false),
+    ] {
+        let code = format!(
+            "import fs from 'node:fs'; const alias=fs; const before=alias.readFileSync;\n\
+             Object.assign(alias, {source});\n\
+             fs.readFileSync('in');\n\
+             before('in');"
+        );
+        let r = report(&code, None);
+        assert_eq!(
+            differences(&r),
+            1 + usize::from(expected_read),
+            "{code}: {r:?}"
+        );
+        assert_eq!(
+            r.diagnostics.iter().any(|d| d.line == 3 && d.blocking()),
+            expected_read,
+            "{r:?}"
+        );
+        assert!(
+            r.diagnostics.iter().any(|d| d.line == 4 && d.blocking()),
+            "{r:?}"
+        );
+    }
+}
+
+#[test]
+fn wrapped_https_callbacks_and_member_keys_remain_precise() {
+    for code in [
+        "import https from 'node:https'; https.get('https://example.org', (()=>{}));",
+        "import https from 'node:https'; https.get(('https://example.org'), ((function(){}) as Function));",
+        "globalThis[('fetch')]('https://example.org');",
+        "import fs from 'node:fs'; fs[('readFileSync' as const)]('in');",
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+    }
+    for code in [
+        "fetch((url as string));",
+        "fetch((condition ? 'https://example.org' : url));",
+        "fetch((url, 'https://example.org'));",
+        "import https from 'node:https'; https.get('https://example.org', (options));",
+        "import https from 'node:https'; https.get('https://example.org', (callback));",
+        "import https from 'node:https'; https.get('https://example.org', ({hostname:'other.invalid'} as object));",
+        "import {spawn} from 'node:child_process'; spawn(('echo'), ({shell:true}));",
+        r"Bun.file(('i\u006e')).text();",
+        "import fs from 'node:fs'; fs[(key)]('in');",
+    ] {
+        let r = report(code, None);
+        assert!(r.allowed, "{code}: {r:?}");
+        assert!(
+            has(&r, "code_analysis_dynamic_target") || has(&r, "code_analysis_call_unknown"),
+            "{r:?}"
+        );
+    }
+}
+
+#[test]
+fn wrapped_literals_preserve_dependencies_locations_and_depth_limits() {
+    let code = "const fs=require(('node:fs'));\nfs.copyFileSync(\n  ('in'),\n  ('out')\n);\nrequire(('./dep.js'));";
+    for file in ["main.js", "main.ts"] {
+        let input = BTreeMap::from([
+            (file.into(), code.as_bytes()),
+            (
+                "dep.js".into(),
+                b"fetch(('https://example.org/private'));".as_slice(),
+            ),
+        ]);
+        let r = Session::default()
+            .analyze(&input, file, None, &EnvironmentContract::default())
+            .unwrap();
+        assert_eq!(differences(&r), 3, "{file}: {r:?}");
+        for (source, line, column) in [(file, 3, 3), (file, 4, 3), ("dep.js", 1, 1)] {
+            assert!(
+                r.diagnostics.iter().any(|d| d.blocking()
+                    && d.file == source
+                    && d.line == line
+                    && d.column == column),
+                "{r:?}"
+            );
+        }
+        assert!(!format!("{r:?}").contains("example.org"));
+    }
+    let deep = format!(
+        "fetch({}'https://example.org'{});",
+        "(".repeat(128),
+        ")".repeat(128)
+    );
+    let r = report(&deep, None);
+    assert!(
+        r.allowed && has(&r, "code_analysis_dynamic_target"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn type_queries_do_not_read_environment_or_load_runtime_dependencies() {
+    let env = EnvironmentContract {
+        fixed: BTreeSet::new(),
+        mappings: BTreeMap::from([
+            (
+                "NAME".into(),
+                ("NAME".into(), Some(EnvironmentSensitivityV1::Plain)),
+            ),
+            (
+                "env".into(),
+                ("SOURCE".into(), Some(EnvironmentSensitivityV1::Plain)),
+            ),
+        ]),
+    };
+    for code in [
+        "type Value = typeof process.env.env;",
+        "type Value = typeof process.env['NAME'];",
+        "type Value = typeof process.env.NAME;",
+        "let value: typeof Bun.env.NAME;",
+        "interface Options { value: typeof process.env.NAME }",
+        "class Options { value!: typeof Bun.env.NAME }",
+        "type Generic<T extends typeof process.env.NAME> = T;",
+        "type Module = typeof import('./missing.js');",
+        "type Module = typeof import('unknown-package');",
+    ] {
+        for file in ["main.ts", "main.tsx"] {
+            let input = BTreeMap::from([(file.into(), code.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, file, None, &env)
+                .unwrap();
+            assert!(
+                r.allowed && r.diagnostics.is_empty(),
+                "{file}: {code}: {r:?}"
+            );
+            assert_eq!(r.files, vec![file]);
+        }
+    }
+    let runtime = Session::default()
+        .analyze(&sources("typeof process.env.NAME;"), "main.ts", None, &env)
+        .unwrap();
+    assert_eq!(differences(&runtime), 1, "{runtime:?}");
+}
+
+#[test]
+fn erased_type_queries_preserve_adjacent_runtime_effects_and_shadowing() {
+    for code in [
+        "const value = fetch('https://example.org') as typeof Bun.env.NAME;",
+        "const value = fetch('https://example.org') satisfies typeof Bun.env.NAME;",
+        "class C { value: typeof Bun.env.NAME = fetch('https://example.org') }",
+        "function f(value: typeof Bun.env.NAME = fetch('https://example.org')) {}",
+        "const request: typeof fetch = fetch; request('https://example.org');",
+        "typeof fetch('https://example.org');",
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+        assert_eq!(r.diagnostics.len(), 1, "{code}: {r:?}");
+    }
+    let r = report(
+        "function f(fetch: typeof globalThis.fetch){fetch('https://example.org')}",
+        None,
+    );
+    assert!(r.allowed && has(&r, "code_analysis_call_unknown"), "{r:?}");
+    let r = report("import('./missing.js');", None);
+    assert!(has(&r, "code_analysis_dynamic_code"), "{r:?}");
+}
+
+#[test]
+fn erased_type_queries_still_validate_syntax_and_charge_node_budget() {
+    for code in [
+        "type Value = typeof process.env.;",
+        r"type Value = typeof \uD800;",
+    ] {
+        let r = report(code, None);
+        assert!(
+            !r.allowed && has(&r, "code_analysis_parse_failure"),
+            "{code}: {r:?}"
+        );
+    }
+    let source = format!("type Value = typeof root{};", ".member".repeat(100));
+    let mut session = Session::new(
+        Limits {
+            nodes: 20,
+            ..Limits::default()
+        },
+        Arc::new(AtomicBool::new(false)),
+    );
+    assert_eq!(
+        session.analyze(
+            &sources(&source),
+            "main.ts",
+            None,
+            &EnvironmentContract::default()
+        ),
+        Err(TerminalFailure::Budget)
+    );
+}
+
+#[test]
+fn unsupported_import_spellings_still_shadow_builtin_globals() {
+    for code in [
+        r"import fetch from './lo\u0063al.js'; fetch('https://example.org');",
+        r"import {request as fetch} from './lo\u0063al.js'; fetch('https://example.org');",
+        r"import {fetch} from './lo\u0063al.js'; fetch('https://example.org');",
+        r"import * as Bun from './lo\u0063al.js'; Bun.write('out','data');",
+        r"import globalThis from './lo\u0063al.js'; globalThis.fetch('https://example.org');",
+        r"import require from './lo\u0063al.js'; require('node:fs').readFileSync('in');",
+        r"import f\u0065tch from './lo\u0063al.js'; fetch('https://example.org');",
+        "import fetch from './lo\\\ncal.js'; fetch('https://example.org');",
+    ] {
+        for file in ["main.js", "main.ts"] {
+            let input = BTreeMap::from([
+                (file.into(), code.as_bytes()),
+                (
+                    "local.js".into(),
+                    b"fetch('https://dependency.invalid');".as_slice(),
+                ),
+            ]);
+            let r = Session::default()
+                .analyze(&input, file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert!(
+                r.allowed && has(&r, "code_analysis_call_unknown"),
+                "{file}: {code}: {r:?}"
+            );
+            assert!(has(&r, "code_analysis_dependency_unsupported"), "{r:?}");
+            assert_eq!(r.files, vec![file]);
+        }
+    }
+}
+
+#[test]
+fn unsupported_imports_do_not_hide_independent_builtin_effects() {
+    for code in [
+        r"import './lo\u0063al.js'; fetch('https://example.org');",
+        r"import fetch from './lo\u0063al.js'; globalThis.fetch('https://example.org');",
+        r"import Object from './lo\u0063al.js'; Object.assign(globalThis,{fetch:other}); fetch('https://example.org');",
+        r"import * as Object from './lo\u0063al.js'; const assign=Object.assign; assign(globalThis,{fetch:other}); fetch('https://example.org');",
+        r"import globalThis from './lo\u0063al.js'; globalThis.fetch=other; fetch('https://example.org');",
+        r"import Object from './lo\u0063al.js'; import fs from 'node:fs'; Object.assign(fs,{readFileSync:other}); fs.readFileSync('in');",
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+        assert!(has(&r, "code_analysis_dependency_unsupported"), "{r:?}");
+    }
+}
+
+#[test]
+fn unsupported_imports_keep_type_only_and_runtime_names_separate() {
+    let r = report(
+        r"import {type Other, request as fetch} from './lo\u0063al.js'; fetch('https://example.org');",
+        None,
+    );
+    assert!(r.allowed && has(&r, "code_analysis_call_unknown"), "{r:?}");
+    assert!(has(&r, "code_analysis_dependency_unsupported"), "{r:?}");
+    for code in [
+        r"import type {fetch} from './lo\u0063al.js'; fetch('https://example.org');",
+        r"import {type fetch} from './lo\u0063al.js'; fetch('https://example.org');",
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+        assert!(!has(&r, "code_analysis_dependency_unsupported"), "{r:?}");
+    }
+}
+
+#[test]
+fn quoted_builtin_import_names_match_identifier_spelling() {
+    let permissions = declaration(
+        "network=[{scope='host',host='example.org'}]\n\
+         filesystem=[{base='preset',path='in',access=['read','remove']}, {base='preset',path='out',access=['write']}]\n\
+         commands=['echo']",
+    );
+    for (code, expected) in [
+        (
+            r#"import {"get" as request} from 'node:https'; request('https://example.org');"#,
+            1,
+        ),
+        (
+            r#"import {"g\u0065t" as request} from 'node:https'; request('https://example.org');"#,
+            1,
+        ),
+        (
+            r#"import {'readFileSync' as read} from 'node:fs'; read('in');"#,
+            1,
+        ),
+        (
+            r#"import {'read\x46ile' as read} from 'node:fs/promises'; read('in');"#,
+            1,
+        ),
+        (
+            r#"import {'renameSync' as move} from 'node:fs'; move('in','out');"#,
+            2,
+        ),
+        (
+            r#"import {'spawn' as run} from 'node:child_process'; run('echo');"#,
+            1,
+        ),
+    ] {
+        for file in ["main.js", "main.ts"] {
+            let input = BTreeMap::from([(file.into(), code.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert_eq!(differences(&r), expected, "{file}: {code}: {r:?}");
+            let matching = Session::default()
+                .analyze(
+                    &input,
+                    file,
+                    Some(&permissions),
+                    &EnvironmentContract::default(),
+                )
+                .unwrap();
+            assert!(matching.allowed, "{file}: {code}: {matching:?}");
+            assert!(
+                !has(&matching, "code_analysis_call_unknown"),
+                "{matching:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn quoted_import_names_preserve_lexical_and_member_identity_boundaries() {
+    for code in [
+        r#"import {'get' as request} from 'node:https'; function f(request){request('https://local.invalid')} request('https://example.org');"#,
+        r#"import {'get' as request} from 'node:https'; const alias=request; {const alias=local; alias('https://local.invalid')} alias('https://example.org');"#,
+        r#"import fs, {'readFileSync' as read} from 'node:fs'; Object.assign(fs,{readFileSync:other}); read('in');"#,
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+    }
+    for code in [
+        r#"import {'get' as fetch} from 'unknown-package'; fetch('https://example.org');"#,
+        r#"import {'get' as fetch} from './lo\u0063al.js'; fetch('https://example.org');"#,
+        r#"import {'promises.readFile' as read} from 'node:fs'; read('in');"#,
+        r#"import {'promises\u002ereadFile' as read} from 'node:fs'; read('in');"#,
+        r#"import {'*' as read} from 'node:fs'; read('in');"#,
+        r#"import {'get\0' as request} from 'node:https'; request('https://example.org');"#,
+    ] {
+        let r = report(code, None);
+        assert!(
+            r.allowed && has(&r, "code_analysis_call_unknown"),
+            "{code}: {r:?}"
+        );
+    }
+    let r = report(
+        r#"import {type Other, 'get' as request} from 'node:https'; request('https://example.org');"#,
+        None,
+    );
+    assert_eq!(differences(&r), 1, "{r:?}");
+    let r = report(
+        r#"import type {'get' as fetch} from 'node:https'; fetch('https://example.org');"#,
+        None,
+    );
+    assert_eq!(differences(&r), 1, "{r:?}");
+}
+
+#[test]
+fn escaped_network_names_and_urls_match_plain_spelling() {
+    let declared = declaration("network=[{scope='host',host='example.org'}]");
+    let wrong = declaration("network=[{scope='host',host='other.invalid'}]");
+    for code in [
+        r"f\u0065tch('https://example.org');",
+        r"\u{66}etch('https://ex\u0061mple.org/path');",
+        r"gl\u006fbalThis.fetch('https://ex\u{61}mple.org');",
+        r"globalThis.f\u0065tch('https:\/\/example.org');",
+        r"globalThis['f\u0065tch']('https://example.org/\uD83D\uDE00');",
+        r"fetch('https://example.org/\u{1F600}');",
+        r#"fetch('https://userinfo\@example.org/\'quoted\"');"#,
+        r"const r\u0065quest=fetch; request('https://\x65xample.org');",
+        r"import { g\u0065t as r\u0065quest } from 'node:https'; request('https://example.org');",
+        r"import h\u0074tps from 'node:https'; https.get('https://\x65xample.org');",
+        r"re\u0071uire('node:https').get('https://ex\u0061mple.org');",
+        r"fetch('https://exam\ple.org');",
+        "fetch('https://exam\\\nple.org');",
+        "fetch('https://exam\\\r\nple.org');",
+    ] {
+        for file in ["main.js", "main.ts"] {
+            let input = BTreeMap::from([(file.into(), code.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert_eq!(differences(&r), 1, "{code}: {r:?}");
+            assert!(
+                r.diagnostics.iter().all(|d| d.behavior == "network"),
+                "{r:?}"
+            );
+            let matching = Session::default()
+                .analyze(
+                    &input,
+                    file,
+                    Some(&declared),
+                    &EnvironmentContract::default(),
+                )
+                .unwrap();
+            assert!(matching.diagnostics.is_empty(), "{code}: {matching:?}");
+            assert_eq!(differences(&report(code, Some(&wrong))), 1);
+        }
+    }
+}
+
+#[test]
+fn escaped_binding_names_and_writes_preserve_shadowing() {
+    for code in [
+        r"function f(f\u0065tch){fetch('https://example.org')}",
+        r"function f(fetch){f\u0065tch('https://example.org')}",
+        r"const f\u0065tch=other; fetch('https://example.org')",
+        r"const {f\u0065tch}=other; fetch('https://example.org')",
+        r"f\u0065tch=other; fetch('https://example.org')",
+        r"globalThis.f\u0065tch=other; fetch('https://example.org')",
+        r"Object.assign(globalThis,{f\u0065tch:other}); fetch('https://example.org')",
+        r"Object.assign(globalThis,{'f\u0065tch':other}); fetch('https://example.org')",
+        r"globalThis['f\u0065tch']=other; fetch('https://example.org')",
+        r"globalThis['f\\u0065tch']('https://example.org')",
+        r"const request=fetch; r\u0065quest=other; request('https://example.org')",
+    ] {
+        let r = report(code, None);
+        assert!(
+            r.allowed && has(&r, "code_analysis_call_unknown"),
+            "{code}: {r:?}"
+        );
+    }
+    let r = report(
+        r"const r\u0065quest=fetch; globalThis.f\u0065tch=other; request('https://example.org')",
+        None,
+    );
+    assert_eq!(differences(&r), 1, "{r:?}");
+}
+
+#[test]
+fn escaped_urls_keep_ambiguous_values_unknown_and_locations_private() {
+    for code in [
+        r"f\uD800tch('https://example.org')",
+        r"f\u{110000}tch('https://example.org')",
+    ] {
+        let r = report(code, None);
+        assert!(
+            !r.allowed && has(&r, "code_analysis_parse_failure"),
+            "{r:?}"
+        );
+    }
+    for url in [
+        r"https://ex\141mple.org",
+        r"https://example.org/\uD800",
+        r"https://example.org/\0",
+        r"https://exa\nmple.org",
+    ] {
+        let r = report(&format!("fetch('{url}');"), None);
+        assert!(
+            r.allowed && has(&r, "code_analysis_dynamic_target"),
+            "{url}: {r:?}"
+        );
+    }
+    let code =
+        r"/* 汉 */ f\u0065tch('https://user:secret@ex\u0061mple.org/private?q=hidden#part');";
+    let r = report(code, None);
+    assert_eq!(differences(&r), 1);
+    assert_eq!((r.diagnostics[0].line, r.diagnostics[0].column), (1, 11));
+    let public = serde_json::to_string(&r).unwrap();
+    for private in ["example.org", "secret", "/private", "hidden", "part"] {
+        assert!(!public.contains(private));
+    }
+    let declaration = declaration("network=[{scope='host',host='trusted.invalid'}]");
+    let r = report(
+        r"fetch('https://trusted.invalid\\@other.invalid');",
+        Some(&declaration),
+    );
+    assert!(r.diagnostics.is_empty(), "{r:?}");
+}
+
+#[test]
+fn https_get_compares_the_literal_https_host() {
+    let expected = declaration("network = [{scope='host',host='example.org'}]");
+    let wrong = declaration("network = [{scope='host',host='other.invalid'}]");
+    for (setup, call, callback) in [
+        ("import https from 'node:https';", "https.get", ""),
+        (
+            "import * as https from 'https';",
+            "https['get']",
+            ", /* callback */ () => {}",
+        ),
+        (
+            "import {get as request} from 'node:https';",
+            "request",
+            ", function () {}",
+        ),
+        (
+            "const h=require('node:https'); const get=h.get; h.get=other;",
+            "get",
+            "",
+        ),
+    ] {
+        let src = format!(
+            "{setup}\n{call}(/* URL */ 'HTTPS://user:secret@EXAMPLE.org:8443/private?q=hidden#fragment'{callback});"
+        );
+        let missing = report(&src, None);
+        assert_eq!(differences(&missing), 1, "{src}: {missing:?}");
+        let diag = &missing.diagnostics[0];
+        assert_eq!(
+            (diag.line, diag.column, diag.behavior.as_str()),
+            (2, 1, "network")
+        );
+        assert_eq!(differences(&report(&src, Some(&wrong))), 1);
+        assert!(
+            report(&src, Some(&expected)).diagnostics.is_empty(),
+            "{src}"
+        );
+        let public = serde_json::to_string(&missing).unwrap();
+        for private in [
+            "user:secret",
+            "example.org",
+            "/private",
+            "q=hidden",
+            "#fragment",
+        ] {
+            assert!(!public.contains(private));
+        }
+    }
+}
+
+#[test]
+fn https_get_keeps_uncertain_targets_and_callees_distinct() {
+    for args in [
+        "url",
+        "{ hostname:'override.invalid' }",
+        "'https://literal.invalid', {hostname:'override.invalid'}, () => {}",
+        "'https://literal.invalid', callbackOrOptions",
+        "'https://literal.invalid', ...extra",
+        "...urls, 'https://literal.invalid'",
+        "'http://literal.invalid'",
+        "'not a URL'",
+    ] {
+        let r = report(
+            &format!("import https from 'node:https'; https.get({args});"),
+            None,
+        );
+        assert!(
+            r.allowed
+                && has(&r, "code_analysis_dynamic_target")
+                && !has(&r, "code_analysis_call_unknown"),
+            "{args}: {r:?}"
+        );
+    }
+    for src in [
+        "function f(https) { https.get('https://example.org'); }",
+        "import h from 'node:https'; const a=h; a.get=other; h.get('https://example.org');",
+        "import h from 'node:https'; Object.assign(h,{get:other}); h.get('https://example.org');",
+        "import h from 'node:https'; h.request('https://example.org');",
+        "function f(require) { require('node:https').get('https://example.org'); }",
+    ] {
+        let r = report(src, None);
+        assert!(
+            r.allowed
+                && has(&r, "code_analysis_call_unknown")
+                && !has(&r, "code_analysis_dynamic_target"),
+            "{src}: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn qualified_fetch_uses_the_same_host_and_privacy_rules() {
+    let declared = declaration("network=[{scope='host',host='example.org'}]");
+    for callee in ["globalThis.fetch", "globalThis['fetch']", "request"] {
+        let src = format!(
+            "const root=globalThis; const request=root.fetch;\n{callee}('https://user:secret@example.org/private?q=hidden');"
+        );
+        let missing = report(&src, None);
+        assert_eq!(differences(&missing), 1, "{src}: {missing:?}");
+        let d = &missing.diagnostics[0];
+        assert_eq!((d.line, d.column, d.behavior.as_str()), (2, 1, "network"));
+        assert!(!serde_json::to_string(&missing).unwrap().contains("secret"));
+        assert!(report(&src, Some(&declared)).diagnostics.is_empty());
+    }
+    let dynamic = report("globalThis.fetch(url)", None);
+    assert!(dynamic.allowed && has(&dynamic, "code_analysis_dynamic_target"));
+}
+
+#[test]
+fn qualified_fetch_respects_shadowing_and_shared_global_writes() {
+    for code in [
+        "new globalThis.fetch('https://example.org');",
+        "function f(globalThis) { globalThis.fetch('https://example.org'); }",
+        "globalThis=other; globalThis.fetch('https://example.org');",
+        "fetch=other; globalThis.fetch('https://example.org');",
+        "const g=globalThis; g.fetch=other; fetch('https://example.org');",
+        "const g=globalThis; Object.assign(g,{fetch:other}); globalThis.fetch('https://example.org');",
+        "const g=globalThis; const set=Object['assign']; set(g,{fetch:other}); fetch('https://example.org');",
+        "globalThis.fetch=other; const saved=globalThis.fetch; saved('https://example.org');",
+        "const g=globalThis; delete g[key]; globalThis.fetch('https://example.org');",
+    ] {
+        let r = report(code, None);
+        assert!(
+            r.allowed && has(&r, "code_analysis_call_unknown"),
+            "{code}: {r:?}"
+        );
+    }
+    for code in [
+        "function f(fetch) { globalThis.fetch('https://example.org'); }",
+        "const g=globalThis; const saved=g.fetch; g.fetch=other; saved('https://example.org');",
+        "const g=globalThis; g.unrelated=other; g.fetch('https://example.org');",
+        "Object.assign(globalThis,{Object:{assign(){}}}); Object.assign(globalThis,{fetch:other}); fetch('https://example.org');",
+        "Object.assign(globalThis,{globalThis:{}}); Object.assign(globalThis,{fetch:other}); fetch('https://example.org');",
+        "const g=globalThis; globalThis=other; g.fetch('https://example.org');",
+    ] {
+        assert_eq!(differences(&report(code, None)), 1, "{code}");
+    }
 }
 
 #[test]
@@ -528,6 +1362,83 @@ fn object_alias_mutations_invalidate_shared_builtin_identity() {
 }
 
 #[test]
+fn object_assign_tracks_replaced_members_without_erasing_other_evidence() {
+    for (setup, expected_read, expected_write) in [
+        ("Object.assign(fs, {readFileSync: () => 0});", false, true),
+        (
+            "Object.assign(alias, {}, {['readFileSync']: other});",
+            false,
+            true,
+        ),
+        ("Object.assign(fs, {[key]: other});", false, false),
+        ("Object.assign(alias, patch);", false, false),
+        (
+            "Object.assign(alias, {'*': other, 'nested.key': other});",
+            true,
+            true,
+        ),
+        (
+            "Object.assign(Object, {assign: noop}); Object.assign(fs, patch);",
+            true,
+            true,
+        ),
+        ("Object.assign(alias, {...patch});", false, false),
+        ("Object.assign({}, {readFileSync: other});", true, true),
+        (
+            "{ const Object = local; Object.assign(fs, patch); }",
+            true,
+            true,
+        ),
+        (
+            "Object.assign = noop; Object.assign(fs, patch);",
+            true,
+            true,
+        ),
+    ] {
+        let code = format!(
+            "import fs from 'node:fs'; const alias = fs; const before = alias.readFileSync;\n\
+             {setup}\n\
+             alias.readFileSync('in');\n\
+             fs.writeFileSync('out', 'data');\n\
+             before('in');\n\
+             const after = fs.readFileSync; after('in');"
+        );
+        for file in ["main.js", "main.ts"] {
+            let r = Session::default()
+                .analyze(
+                    &BTreeMap::from([(file.into(), code.as_bytes())]),
+                    file,
+                    None,
+                    &EnvironmentContract::default(),
+                )
+                .unwrap();
+            for (line, definite) in [
+                (3, expected_read),
+                (4, expected_write),
+                (5, true),
+                (6, expected_read),
+            ] {
+                let expected = if definite {
+                    "code_analysis_declaration_difference"
+                } else {
+                    "code_analysis_call_unknown"
+                };
+                assert!(
+                    r.diagnostics
+                        .iter()
+                        .any(|d| d.line == line && d.code == expected),
+                    "{file}: {setup}: {r:?}"
+                );
+                assert_eq!(
+                    r.diagnostics.iter().any(|d| d.line == line && d.blocking()),
+                    definite
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn member_mutations_preserve_captured_functions_and_unrelated_members() {
     for (source, expected) in [
         (
@@ -851,6 +1762,140 @@ fn filesystem_operations_and_bun_file_construction_are_separate() {
 }
 
 #[test]
+fn saved_bun_file_compares_the_path_at_the_method_call() {
+    for (method, access) in [
+        ("text", "read"),
+        ("json", "read"),
+        ("arrayBuffer", "read"),
+        ("bytes", "read"),
+        ("stream", "read"),
+        ("exists", "read"),
+        ("writer", "write"),
+        ("delete", "remove"),
+    ] {
+        let code = format!("const f = Bun.file('in');\nawait f.{method}();");
+        let missing = report(&code, None);
+        assert_eq!(differences(&missing), 1, "{missing:?}");
+        assert!(
+            missing
+                .diagnostics
+                .iter()
+                .any(|d| d.blocking() && d.line == 2 && d.column == 7)
+        );
+        let decl = declaration(&format!(
+            "filesystem=[{{base='preset',path='in',access=['{access}']}}]"
+        ));
+        let matched = report(&code, Some(&decl));
+        assert!(
+            matched.allowed
+                && !has(&matched, "code_analysis_call_unknown")
+                && !has(&matched, "code_analysis_declaration_uncorroborated"),
+            "{matched:?}"
+        );
+    }
+    let dynamic = report("const f=Bun.file(input); f.text();", None);
+    assert!(
+        dynamic.allowed && has(&dynamic, "code_analysis_dynamic_target"),
+        "{dynamic:?}"
+    );
+    assert!(report("const f=Bun.file('in');", None).allowed);
+}
+
+#[test]
+fn saved_bun_file_requires_the_original_receiver_and_method() {
+    for source in [
+        "function local(Bun){ const f=Bun.file('in'); f.text(); }",
+        "const f=Bun.file('in'); function local(f){ f.text(); }",
+        "let f=Bun.file('in'); f=other; f.text();",
+        "Bun.file=other; const f=Bun.file('in'); f.text();",
+        "const f=Bun.file('in'); const alias=f; alias.text=other; f.text();",
+        "const f=Bun.file('in'); Object.assign(f,{[key]:other}); f.text();",
+        "const f=Bun.file('in'); const detached=f.text; detached();",
+        "Object.assign(Bun,{file:fake}); const f=Bun.file('in'); f.text();",
+        "const f=other.file('in'); f.text();",
+    ] {
+        let r = report(source, None);
+        assert!(
+            r.allowed && has(&r, "code_analysis_call_unknown"),
+            "{source}: {r:?}"
+        );
+    }
+    let r = report(
+        "const f=Bun.file('in'); const alias=f; const g=Bun.file('in'); Object.assign(f,{text:other});\nalias.text();\nalias.json();\ng.text();",
+        None,
+    );
+    let blocked: Vec<_> = r
+        .diagnostics
+        .iter()
+        .filter(|d| d.blocking())
+        .map(|d| d.line)
+        .collect();
+    assert_eq!(blocked, [3, 4], "{r:?}");
+    let captured = report("const f=Bun.file('in'); Bun.file=other; f.text();", None);
+    assert_eq!(differences(&captured), 1, "{captured:?}");
+}
+
+#[test]
+fn copy_and_rename_compare_both_paths_independently() {
+    for (callee, access, callback) in [
+        ("fs.copyFileSync", "read", ""),
+        ("fs.copyFile", "read", ", done"),
+        ("fs.promises.copyFile", "read", ""),
+        ("moveFile", "remove", ""),
+        ("fs.renameSync", "remove", ""),
+        ("fs.rename", "remove", ", done"),
+    ] {
+        let prelude =
+            "import fs from 'node:fs'; import {rename as moveFile} from 'node:fs/promises';";
+        let decl = declaration(&format!(
+            "filesystem=[{{base='preset',path='src',access=['{access}']}},{{base='preset',path='dst',access=['write']}}]"
+        ));
+        for (args, missing, dynamic) in [
+            ("'src', /* destination */ 'dst'", 0, false),
+            ("'dst', 'src'", 2, false),
+            ("input, 'other'", 1, true),
+            ("'other', output", 1, true),
+            ("...paths, 'other'", 0, true),
+            ("'src', ...paths", 0, true),
+        ] {
+            let code = format!("{prelude} {callee}({args}{callback});");
+            let r = report(&code, Some(&decl));
+            assert_eq!(differences(&r), missing, "{code}: {r:?}");
+            assert_eq!(
+                has(&r, "code_analysis_dynamic_target"),
+                dynamic,
+                "{code}: {r:?}"
+            );
+            assert!(!has(&r, "code_analysis_call_unknown"), "{code}: {r:?}");
+            if !dynamic && missing == 0 {
+                assert!(r.diagnostics.is_empty(), "{code}: {r:?}");
+            }
+        }
+    }
+    let distinct = report(
+        "import fs from 'node:fs'; fs['promises.rename'] = other; fs.promises.rename('a', 'b');",
+        None,
+    );
+    assert_eq!(differences(&distinct), 2, "{distinct:?}");
+    for code in [
+        "import fs from 'node:fs'; fs['promises.rename']('a', 'b');",
+        "import p from 'node:fs/promises'; new p.rename('a','b');",
+        "import fs from 'node:fs'; fs.rename('a','b');",
+        "import fs from 'node:fs'; fs.copyFileSync('a');",
+        "import fs from 'node:fs'; import p from 'node:fs/promises'; Object.assign(p,{rename: fn}); fs.promises.rename('a','b');",
+        "function f(fs) { fs.copyFileSync('a','b'); }",
+        "import fs from 'node:fs'; Object.assign(fs, {renameSync: fn}); fs.renameSync('a','b');",
+        "import fs from 'node:fs/promises'; fs.copyFileSync('a','b');",
+    ] {
+        let r = report(code, None);
+        assert!(
+            r.allowed && has(&r, "code_analysis_call_unknown"),
+            "{code}: {r:?}"
+        );
+    }
+}
+
+#[test]
 fn relative_graph_handles_cycles_missing_and_ambiguous_dependencies() {
     let mut input =
         sources("import './a'; import './missing'; import '../escape'; import 'package';");
@@ -1033,6 +2078,69 @@ fn url_identity_uses_url_semantics_without_retaining_credentials() {
     let r = report("fetch('https://example.org:invalid/');", None);
     assert!(r.allowed);
     assert!(has(&r, "code_analysis_dynamic_target"));
+}
+
+#[test]
+fn binding_scope_walks_consume_the_command_budget() {
+    // Few syntax nodes can still require a long ancestor walk for a var binding.
+    let source = "{".repeat(128) + "var local = 0;" + &"}".repeat(128);
+    let input = sources(&source);
+    assert!(
+        Session::default()
+            .analyze(&input, "main.ts", None, &EnvironmentContract::default())
+            .unwrap()
+            .allowed
+    );
+    let mut session = Session::new(
+        Limits {
+            nodes: 450,
+            ..Limits::default()
+        },
+        Arc::new(AtomicBool::new(false)),
+    );
+    assert_eq!(
+        session.analyze(&input, "main.ts", None, &EnvironmentContract::default()),
+        Err(TerminalFailure::Budget)
+    );
+    assert_eq!(
+        session.analyze(
+            &sources("export {};"),
+            "main.ts",
+            None,
+            &EnvironmentContract::default()
+        ),
+        Err(TerminalFailure::Budget)
+    );
+}
+
+#[test]
+fn binding_scope_cache_bounds_siblings_without_leaking_namespace_vars() {
+    let locals = (0..128)
+        .map(|i| format!("var local{i} = 0;"))
+        .collect::<String>();
+    let source = "namespace Local {".to_owned()
+        + &"{".repeat(128)
+        + "var fetch = custom;"
+        + &locals
+        + &"}".repeat(128)
+        + "fetch('https://local.invalid'); } fetch('https://example.org');";
+    let mut session = Session::new(
+        Limits {
+            nodes: 5000,
+            ..Limits::default()
+        },
+        Arc::new(AtomicBool::new(false)),
+    );
+    let r = session
+        .analyze(
+            &sources(&source),
+            "main.ts",
+            None,
+            &EnvironmentContract::default(),
+        )
+        .unwrap();
+    assert_eq!(differences(&r), 1);
+    assert!(has(&r, "code_analysis_call_unknown"));
 }
 
 #[test]

@@ -67,6 +67,8 @@ async fn shadowed_and_replaced_builtins_do_not_block_lifecycle_approval() {
     for code in [
         "export {}; function* fetch(url) { yield url; } fetch('https://fake.invalid');",
         "import fs from 'node:fs'; const alias = fs; alias.readFileSync = () => 'ok'; fs.readFileSync('config');",
+        "namespace Bun { export function write(...args:unknown[]){} } Bun.write('out','data');",
+        "import Bun = require('unknown-package'); Bun.write('out','data');",
     ] {
         let runtime = runtime(code, "", true);
         let plan = runtime
@@ -91,6 +93,8 @@ async fn preserved_builtin_calls_still_block_lifecycle_approval() {
         "import fs from 'node:fs'; const read = fs.readFileSync; const alias = fs; alias.readFileSync = () => 'ok'; read('private');",
         "import fs from 'node:fs'; const alias = fs; alias.custom = 1; fs.readFileSync('private');",
         "import fs from 'node:fs'; function run() { const read = original; read('private'); } const original = fs.readFileSync; run();",
+        "const invoke = fetch<unknown>; invoke('https://example.org');",
+        "declare class Typed { [Object.assign(globalThis,{fetch:other})]: unknown } fetch('https://example.org');",
     ] {
         let runtime = runtime(code, "", true);
         let plan = runtime

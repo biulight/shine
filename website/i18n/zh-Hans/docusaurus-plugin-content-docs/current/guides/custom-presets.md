@@ -106,6 +106,23 @@ JavaScript/TypeScript 依赖。源码行为与声明存在确定差异，或受�
 可在详细审阅中查看。这些结果都不代表代码安全或已被完整分析。没有诊断时，常规审阅不增加分析
 输出；原有 trust 和批准检查仍然适用。
 
+使用 `globalThis.fetch('https://example.org/data')` 时，与使用 `fetch` 一样，需声明网络主机 `example.org`。从 `node:https` 导入的 `https.get('https://example.org/data')` 使用同一主机声明，也可以传入内联回调。URL 为动态值，或 `https.get` 使用 options 对象时，无法确认目标主机，会报告覆盖缺口。
+
+等价写法使用相同的权限检查：受支持的标识符/URL 转义、带引号的导入名称、括号、TypeScript 类型断言和泛型实例化都会保留已识别的调用。例如，`(fetch)(('https://example.org'))` 与 `fetch('https://example.org')` 的检查相同。不支持的转义（包括旧式数字转义）、未配对的代理码元、含控制字符的 URL 和动态值仍会报告覆盖缺口。
+
+纯 TypeScript 类型和 `declare` 声明体不会执行。运行时初始化表达式、enum/namespace 声明体，以及 `typeof process.env.NAME` 这样的表达式仍会产生行为。局部值声明（包括命名空间和导入别名）保留其作用域；通过未知值发起的调用仍是覆盖缺口。不支持的模块路径仍会保留依赖缺口及本地导入名称。
+
+环境变量读取检查会区分读取与普通赋值、解构赋值和删除。计算键、默认值中的读取，以及复合赋值或自增自减仍会检查。这不会改变已声明环境输入的契约。
+
+对于 `const f = Bun.file('in'); await f.text()`，请为 `in` 声明 `read`。仅保存句柄无需声明读取权限，Shine 在脚本调用方法时检查路径。
+
+使用 Node 的 `copyFile` 时，为源路径声明 `read`，为目标路径声明 `write`。使用 `rename` 时，
+为源路径声明 `remove`，为目标路径声明 `write`。同步和 Promise 形式也适用。即使一侧路径是动态值，
+只要另一侧的路径是字面量，Shine 仍会检查它。
+
+如果脚本用 `Object.assign` 替换内置方法，通过被替换成员发起的调用会报告覆盖缺口。
+如果在替换前保存了原函数，调用该函数仍可能需要声明原有权限。
+
 使用 `--verbose` 查看详细审阅，或用 `shine preset lint <PATH> --format json` 获取全部诊断。
 `--deny-warnings` 可让 lint 告警使 CI 失败。详细输出不会执行生成器；执行仍需显式使用
 `--run-generators` 并具有信任授权。Lint 检查所有受支持入口，可能报告某次运行检查范围之外的问题。
