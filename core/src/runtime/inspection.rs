@@ -62,6 +62,8 @@ pub struct AppFileInspection {
     pub current_content: Option<Vec<u8>>,
     pub changes: Vec<InspectionChange>,
     pub code_analysis: Option<crate::analysis::Scope>,
+    /// Non-embedded layers contributing effective files to the blocked generator's category.
+    pub generator_trust_sources: std::collections::BTreeSet<super::PresetSourceKind>,
     pub assessment_error: Option<String>,
     pub assessment_diagnostic: Option<&'static str>,
 }
