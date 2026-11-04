@@ -172,6 +172,8 @@ interactive lifecycle operations can obtain one-time code consent. Generator
 failures do not stop evaluation of the remaining selection, but the command returns nonzero after
 reporting incomplete results. Cancellation, command-wide analysis budget exhaustion, or an analyzer
 failure that prevents safe continuation stops the remaining work.
+The analysis budget includes declaration scope lookup; deeply nested code can exhaust it even in a
+small source file.
 
 Before execution, supported App Bun code is checked against its declarations. A definite difference
 or parse failure prevents that script from starting; existing trust does not override it. Other
