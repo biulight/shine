@@ -22,7 +22,14 @@ fn generated_runtime(kind: PresetSourceKind, enabled: bool) -> CoreRuntime<InMem
     if enabled {
         context.env.insert("ENABLE".into(), "1".into());
     }
-    let snapshot = PresetSnapshot::builder(kind)
+    // The overlay case changes only data. Its metadata and generator stay embedded.
+    let builder = if kind == PresetSourceKind::Overlay {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .overlay_file("app/demo/config", b"overlay fallback".to_vec())
+    } else {
+        PresetSnapshot::builder(kind)
+    };
+    let snapshot = builder
         .file("app/demo/shine.toml", br#"dest = '~/.config/demo'
 [permissions]
 schema_version = 1
@@ -90,6 +97,15 @@ async fn inspection_preserves_generator_states_content_and_execution_boundaries(
             None,
         ),
         (
+            PresetSourceKind::Overlay,
+            true,
+            true,
+            None,
+            InspectionFileStatus::GeneratorTrustRequired,
+            Some("app_generator_trust_required"),
+            None,
+        ),
+        (
             PresetSourceKind::Embedded,
             true,
             true,
@@ -142,6 +158,12 @@ async fn inspection_preserves_generator_states_content_and_execution_boundaries(
             .unwrap();
         let inspection = &inspections[0];
         assert_eq!(inspection.status, status);
+        let expected_sources = if status == InspectionFileStatus::GeneratorTrustRequired {
+            BTreeSet::from([kind])
+        } else {
+            BTreeSet::new()
+        };
+        assert_eq!(inspection.generator_trust_sources, expected_sources);
         assert_eq!(inspection.assessment_diagnostic, diagnostic);
         assert_eq!(inspection.desired_content.as_deref(), desired);
         assert_eq!(

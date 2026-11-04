@@ -167,9 +167,13 @@ state migrations; if configuration validation fails, correct the reported file b
 If a release check fails, `update` still reports configuration updates. Retry the release check
 with `--refresh-release` after restoring connectivity.
 
-`--run-generators` executes App generators and requires trust. Even with a single-file target, it
-can evaluate generators throughout that App category. Failed or incomplete evaluation does not
-establish that the installed content is current.
+With no target, `shine update` counts skipped files by App category. Use `--run-generators` to
+evaluate them. A fully built-in category needs no additional grant. If the category includes files
+from an external preset directory or an overlay, the generator needs matching trust. When blocked,
+`update` identifies the contributing sources. Review the listed generator before granting trust.
+Add `--verbose` for diagnostic locations. Even with a single-file target, Shine can evaluate
+generators throughout that App category. Failed or incomplete evaluation does not establish that
+installed content is current.
 
 For external Shell presets in `snapshot` mode, `update --diff` includes shared category files,
 not just the selected command script. `content: unchanged` does not rule out changes to helpers

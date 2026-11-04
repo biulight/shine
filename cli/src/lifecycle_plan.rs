@@ -345,15 +345,13 @@ async fn review_plans_with_render_mode(
             .collect(),
     };
     for (_, plan) in &planned {
-        for binding in &plan.code_analysis {
-            rendered.extend(crate::code_analysis::lines(
-                &binding.scope,
-                matches!(
-                    render_mode,
-                    PlanRenderMode::Detailed | PlanRenderMode::UpgradeDetailed
-                ),
-            ));
-        }
+        rendered.extend(crate::code_analysis::plan_lines(
+            plan.code_analysis.iter().map(|binding| &binding.scope),
+            matches!(
+                render_mode,
+                PlanRenderMode::Detailed | PlanRenderMode::UpgradeDetailed
+            ),
+        ));
     }
     if !rendered.is_empty() && !development_trust_targets.is_empty() {
         rendered.push(String::new());
@@ -698,7 +696,7 @@ fn confirmation_prompt(planned: &[(LifecyclePlanRequest, PlanV1)]) -> &'static s
             .iter()
             .any(|boundary| boundary.source == CodeSourceV2::ExternalOrOverlay)
     }) {
-        "Apply this Plan, including use of its listed external code? No persistent trust will be saved."
+        "Apply this Plan and authorize its listed external code for this operation only?"
     } else {
         "Apply this Plan?"
     }
@@ -965,8 +963,10 @@ mod tests {
         let mut external = planned[0].clone();
         external.1.code_boundaries[0].source = CodeSourceV2::ExternalOrOverlay;
         planned.push(external);
-        assert!(confirmation_prompt(&planned).contains("listed external code"));
-        assert!(confirmation_prompt(&planned).contains("No persistent trust will be saved"));
+        assert_eq!(
+            confirmation_prompt(&planned),
+            "Apply this Plan and authorize its listed external code for this operation only?"
+        );
     }
 
     #[test]

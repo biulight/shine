@@ -61,6 +61,10 @@ pub fn red(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.red()).to_string()
 }
 
+pub(crate) fn red_stderr(s: &str) -> String {
+    s.if_supports_color(Stream::Stderr, |t| t.red()).to_string()
+}
+
 pub fn bold(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.bold())
         .to_string()

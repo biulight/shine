@@ -99,6 +99,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 &installed_categories,
                 mode,
             )?;
+            if inspection.status == InspectionFileStatus::GeneratorTrustRequired {
+                inspection.generator_trust_sources =
+                    self.app_external_source_kinds(&inspection.category.name);
+            }
             if mode == AppInspectionMode::Evaluated
                 && let Some(generator) = &inspection.file.generator
                 && self.context().env.contains_key(&generator.when_env)
@@ -247,6 +251,7 @@ fn project_app_inspection(
         current_content,
         changes,
         code_analysis: None,
+        generator_trust_sources: Default::default(),
         assessment_error: content.error().map(str::to_owned),
         assessment_diagnostic: content.diagnostic(),
     })

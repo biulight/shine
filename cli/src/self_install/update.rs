@@ -41,6 +41,7 @@ pub async fn handle_update(
     };
     let (mut printed_update, config_update_error) = match config_updates {
         Ok(printed) => (printed, None),
+        Err(error) if error.is::<crate::output::ReportedCommandFailure>() => (false, Some(error)),
         Err(error) => {
             eprintln!(
                 "{}",

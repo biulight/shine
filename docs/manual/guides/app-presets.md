@@ -198,7 +198,9 @@ Installation, including a repair with `--replace-managed`, runs generators enabl
 regardless of their `auto` setting. Refresh displays and revalidates a security Plan; automation
 must add `--yes`.
 
-For external or overlay generators, interactive lifecycle confirmation can authorize one operation.
+When a Security Plan lists external or overlay code, answering `yes` authorizes the listed code
+for this Plan only. The compact analysis lists entries together when they share a script and
+identical advisory findings. Use `--verbose` to inspect each entry separately.
 Automation and `--run-generators` inspection require a matching `shine trust grant app/<CATEGORY>`
 after review. Generators receive declared environment inputs and fixed `SHINE_APP_*` path variables;
 execution time and output size are limited. Run only presets you trust.

@@ -173,7 +173,8 @@ shine app refresh <CATEGORY> <SOURCE_FILE>  # 仅刷新指定源文件
 `--replace-managed` 的修复安装会运行已由 `when_env` 启用的生成器，不受 `auto` 设置影响。
 refresh 会显示并重新校验安全 Plan；自动化调用必须添加 `--yes`。
 
-外部预设或 overlay 的 generator 可通过交互式生命周期确认获得单次授权。
+当安全 Plan 列出来自外部预设或 overlay 的代码时，回答 `yes` 只授权本次 Plan 使用列出的代码。
+使用同一脚本且分析提示完全相同的条目会合并显示。加上 `--verbose` 可逐项查看。
 自动化与 `--run-generators` 检查需要先审阅并运行 `shine trust grant app/<CATEGORY>`。
 生成器会收到声明的环境输入和固定 `SHINE_APP_*` 路径变量，并受执行时间、输出大小限制。
 请只运行你信任的预设。

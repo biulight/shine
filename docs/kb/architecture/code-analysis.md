@@ -71,7 +71,15 @@ Only difference and failure diagnostics block, and all diagnostic classes can co
 
 P2 aggregation is confined to CLI text rendering. Ordinary reviews group repeated coverage gaps
 by code and behavior within one entry, showing the original diagnostic count and first location.
-Detailed review and author Plan rendering retain individual diagnostics and opaque identities.
+For a failed generator in compact global `update`, identical nonblocking reports for the same
+category and script can share a summary listing every affected source. Known coverage gaps use
+plain-language counts with full locations in `--verbose`. Blocking findings stay per entry.
+A generator trust denial names the non-embedded layers contributing effective files anywhere
+in that App category, even when the generator script itself comes from the embedded base.
+Compact lifecycle Plan review lists all entries sharing the same script, target and identical
+nonblocking report together within each Plan. Coverage notes describe analysis limits; the Plan
+prompt describes one-operation consent. Detailed review and author Plan rendering retain individual
+diagnostics and opaque identities.
 Explicit inspection uses the existing display modes: `info --verbose/--diff`, detailed `update`
 views and `app info` retain every evaluated location. This changes only rendering of captured
 reports; no display flag enables generator evaluation or changes its trust requirements.
