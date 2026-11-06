@@ -11,6 +11,7 @@ use tokio::fs;
 mod github;
 mod upgrade;
 
+pub(crate) use github::rate_limit_http_status;
 use github::{current_auth_mode, fetch_latest_release_for_version_check};
 pub use upgrade::upgrade_to_release;
 

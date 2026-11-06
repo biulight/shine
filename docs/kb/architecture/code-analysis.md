@@ -167,7 +167,9 @@ P2 aggregation is confined to CLI text rendering. Ordinary reviews group repeate
 by code and behavior within one entry, showing the original diagnostic count and first location.
 For a failed generator in compact global `update`, identical nonblocking reports for the same
 category and script can share a summary listing every affected source. Known coverage gaps use
-plain-language counts with full locations in `--verbose`. Blocking findings stay per entry.
+plain-language counts. Global `update --run-generators --verbose` shows failures before inventory
+and groups identical advisory reports, with counts and one location per diagnostic class. A final
+result counts affected files separately from the release check. Blocking reports stay per entry.
 A generator trust denial names the non-embedded layers contributing effective files anywhere
 in that App category, even when the generator script itself comes from the embedded base. The CLI
 points to `shine trust inspect` before enrollment because a category grant covers every listed capability.
@@ -175,13 +177,17 @@ Compact lifecycle Plan review lists all entries sharing the same script, target 
 nonblocking report together within each Plan. Coverage notes describe analysis limits; the Plan
 prompt describes one-operation consent. Detailed review and author Plan rendering retain individual
 diagnostics and opaque identities.
-Explicit inspection uses the existing display modes: `info --verbose/--diff`, detailed `update`
-views and `app info` retain every evaluated location. This changes only rendering of captured
+Targeted `update --run-generators` lists category-scoped assessment failures before the selected
+diffs. Its verbose view shares the global advisory summary, and evaluation errors remain attached
+to the affected file even when a different file was selected. `info --verbose/--diff`,
+global `update --diff`, and `app info` retain every evaluated location. This changes only rendering of captured
 reports; no display flag enables generator evaluation or changes its trust requirements.
 Lint text groups only `code_analysis_*` warnings with the same target, code and message, retaining
 an example resource including its entry label. Non-analysis warnings and all errors stay individual.
 The text points to lint JSON for all checked source entries; that scope can differ from a runtime
-review's triggered entries and environment contract.
+review's triggered entries and environment contract. Update prints a concrete lint path only for
+an external base without a configured overlay. For layered sources the hint calls for a complete
+preset tree, since the metadata, generator and imports can come from different layers.
 
 Core reports, JSON, diagnostic ordering/counts, schema/rule versions, admission, evidence binding,
 trust and approval are unchanged. Lint `valid`, `clean`, `complete`, summary and `--deny-warnings`

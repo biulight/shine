@@ -30,15 +30,20 @@ pub(crate) fn plan_lines<'a>(
     }
     groups
         .into_iter()
-        .flat_map(|(scope, entries)| entry_lines(scope, false, &entries))
+        .flat_map(|(scope, entries)| entry_lines(scope, false, &entries, "--verbose"))
         .collect()
 }
 
 pub(crate) fn lines(scope: &Scope, detailed: bool) -> Vec<String> {
-    entry_lines(scope, detailed, &[&scope.entry])
+    entry_lines(scope, detailed, &[&scope.entry], "--verbose")
 }
 
-fn entry_lines(scope: &Scope, detailed: bool, entries: &[&str]) -> Vec<String> {
+fn entry_lines(
+    scope: &Scope,
+    detailed: bool,
+    entries: &[&str],
+    full_location_flags: &str,
+) -> Vec<String> {
     let diagnostics = scope
         .report
         .diagnostics
@@ -123,7 +128,7 @@ fn entry_lines(scope: &Scope, detailed: bool, entries: &[&str]) -> Vec<String> {
         }
     }
     if summarized {
-        lines.push("    Full locations: re-run with --verbose. A separate `shine preset lint <PATH> --format json` checks all source entries.".into());
+        lines.push(format!("    Full locations: re-run with {full_location_flags}. A separate `shine preset lint <PATH> --format json` checks all source entries."));
     }
     lines
 }
@@ -131,7 +136,7 @@ fn entry_lines(scope: &Scope, detailed: bool, entries: &[&str]) -> Vec<String> {
 /// Short explanation for an already identified generator. Keep blocking diagnostics individual.
 pub(crate) fn update_summary(scope: &Scope) -> Vec<String> {
     if scope.report.diagnostics.iter().any(|d| d.blocking()) {
-        return lines(scope, false);
+        return entry_lines(scope, false, &[&scope.entry], "--verbose --diff");
     }
     let mut counts = [0usize; 3];
     for diagnostic in &scope.report.diagnostics {
@@ -142,7 +147,7 @@ pub(crate) fn update_summary(scope: &Scope) -> Vec<String> {
             ("code_analysis_builtin_unsupported", "dependency") => 0,
             ("code_analysis_call_unknown", "code") => 1,
             ("code_analysis_dynamic_target", "network") => 2,
-            _ => return lines(scope, false),
+            _ => return entry_lines(scope, false, &[&scope.entry], "--verbose --diff"),
         };
         counts[index] += 1;
     }
@@ -166,8 +171,67 @@ pub(crate) fn update_summary(scope: &Scope) -> Vec<String> {
     };
     vec![
         format!("  Static analysis could not verify {description}."),
-        "  Run `shine update --run-generators --verbose` for diagnostic locations.".into(),
+        "  Run `shine update --run-generators --verbose` for a summary with example locations."
+            .into(),
     ]
+}
+
+/// Summarize advisory evidence already captured for this invocation. For a blocking
+/// report, keep every diagnostic and its entry identity available for repair.
+pub(crate) fn verbose_generator_summary(scope: &Scope, entries: usize) -> Vec<String> {
+    if scope.report.diagnostics.iter().any(Diagnostic::blocking) {
+        return lines(scope, true);
+    }
+    let shared = if entries > 1 {
+        " · same report for these files"
+    } else {
+        ""
+    };
+    let mut result = vec![format!("  Static analysis{shared} · 0 blocking findings")];
+    let mut groups = BTreeMap::new();
+    for diagnostic in &scope.report.diagnostics {
+        let (order, label, singular, plural, detail) =
+            match (diagnostic.code.as_str(), diagnostic.behavior.as_str()) {
+                ("code_analysis_dynamic_target", "network") => {
+                    (0, "Network", "target", "targets", "determined at runtime")
+                }
+                ("code_analysis_call_unknown", "code") => {
+                    (1, "Calls", "call", "calls", "outside verified coverage")
+                }
+                ("code_analysis_builtin_unsupported", "dependency") => (
+                    2,
+                    "Dependency",
+                    "dependency",
+                    "dependencies",
+                    "outside verified coverage",
+                ),
+                ("code_analysis_declaration_uncorroborated", _) => (
+                    3,
+                    "Declaration",
+                    "permission declaration",
+                    "permission declarations",
+                    "unconfirmed",
+                ),
+                (code, behavior) => (4, behavior, "location", "locations", code),
+            };
+        let (count, _) = groups
+            .entry((order, label, singular, plural, detail))
+            .or_insert((0usize, diagnostic));
+        *count += 1;
+    }
+    let encode = crate::output::escape_controls;
+    for ((_, label, singular, plural, detail), (count, first)) in groups {
+        result.push(format!(
+            "    {:<12} {count} {} {} · {}:{}:{}",
+            encode(label),
+            if count == 1 { singular } else { plural },
+            encode(detail),
+            encode(&first.file),
+            first.line,
+            first.column
+        ));
+    }
+    result
 }
 
 #[cfg(test)]

@@ -42,8 +42,18 @@ pub(super) async fn collect_app_files(
     run_generators: bool,
     categories: Vec<String>,
 ) -> Result<Vec<AppInfoFile>> {
+    Ok(app_info_files_from_inspections(
+        collect_app_inspections(config, run_generators, categories).await?,
+    ))
+}
+
+pub(super) async fn collect_app_inspections(
+    config: &Config,
+    run_generators: bool,
+    categories: Vec<String>,
+) -> Result<Vec<shine_core::runtime::AppFileInspection>> {
     let runtime = crate::core_runtime::from_config(config).await?;
-    let inspections = shine_core::frontend::FrontendService::new(runtime)
+    Ok(shine_core::frontend::FrontendService::new(runtime)
         .inspect_apps_with_options(
             shine_core::runtime::AppInspectionOptions {
                 run_generators,
@@ -53,8 +63,7 @@ pub(super) async fn collect_app_files(
         )
         .await
         .map_err(shine_core::frontend::FrontendServiceError::into_source)?
-        .files;
-    Ok(app_info_files_from_inspections(inspections))
+        .files)
 }
 
 pub(super) fn app_info_files_from_inspections(

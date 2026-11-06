@@ -171,9 +171,15 @@ With no target, `shine update` counts skipped files by App category. Use `--run-
 evaluate them. A fully built-in category needs no additional grant. If the category includes files
 from an external preset directory or an overlay, the generator needs matching trust. When blocked,
 `update` identifies the contributing sources. Review the listed generator before granting trust.
-Add `--verbose` for diagnostic locations. Even with a single-file target, Shine can evaluate
-generators throughout that App category. Failed or incomplete evaluation does not establish that
-installed content is current.
+With a target, `shine update surge --run-generators` lists files it could not check before
+showing diffs for files with updates. A generator failure elsewhere in the same App category
+still makes a single-file check exit with status 1.
+Add `--verbose` to see the generator and its static analysis summary. Files sharing a generator and identical advisory findings are listed together, with counts and
+an example location for each kind of finding. Blocking findings retain their individual locations.
+Use `shine preset lint <PATH> --format json` for all locations in a separate source check.
+If an overlay is configured, supply a complete preset directory containing the effective base and overlay files.
+Without a target, verbose mode shows blocked files before the inventory. Failed or incomplete
+evaluation does not establish that installed content is current.
 
 For external Shell presets in `snapshot` mode, `update --diff` includes shared category files,
 not just the selected command script. `content: unchanged` does not rule out changes to helpers
