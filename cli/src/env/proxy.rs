@@ -144,11 +144,47 @@ pub async fn uninstall(config: &Config, command: &str) -> Result<()> {
 }
 
 async fn uninstall_for_platform(config: &Config, command: &str, windows: bool) -> Result<()> {
-    let _lifecycle_guard = lock_proxy_lifecycle(config).await?;
+    uninstall_reviewed(config, command, windows, None).await
+}
+
+pub(crate) async fn installed_commands(config: &Config) -> Result<Vec<String>> {
+    Ok(load_manifest(config.shine_dir())
+        .await?
+        .entries
+        .into_keys()
+        .collect())
+}
+
+pub(crate) async fn review_self_removal(
+    config: &Config,
+    command: &str,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
+    validate_command(command)?;
+    uninstall_reviewed(config, command, cfg!(windows), Some((dry_run, yes))).await
+}
+
+async fn uninstall_reviewed(
+    config: &Config,
+    command: &str,
+    windows: bool,
+    review: Option<(bool, bool)>,
+) -> Result<()> {
+    let preview = review.is_some_and(|(dry, _)| dry);
+    let _lifecycle_guard = if preview {
+        None
+    } else {
+        Some(lock_proxy_lifecycle(config).await?)
+    };
     let path = config.shine_dir().join("config.toml");
     // Acquire every cooperating lock before observing ownership. In particular,
     // waiting for the configuration writer must not stale the launcher preflight.
-    let _config_guard = crate::config::env_write::lock_target(&path).await?;
+    let _config_guard = if preview {
+        None
+    } else {
+        Some(crate::config::env_write::lock_target(&path).await?)
+    };
     let mut manifest = load_manifest(config.shine_dir()).await?;
     let mut launchers = vec![config.bin_dir().join(command)];
     if windows {
@@ -170,6 +206,40 @@ async fn uninstall_for_platform(config: &Config, command: &str, windows: bool) -
             );
         }
         owned.push((launcher, snapshot));
+    }
+    if let Some((dry_run, yes)) = review {
+        let target = manifest
+            .entries
+            .get(command)
+            .context("proxy receipt changed; retry")?;
+        let expected = prepare_shims(
+            config.bin_dir(),
+            command,
+            target,
+            config.shine_dir(),
+            windows,
+        )?;
+        for ((path, snapshot), shim) in owned.iter().zip(expected) {
+            anyhow::ensure!(
+                snapshot.as_ref().is_none_or(|s| s.bytes == shim.bytes),
+                "proxy launcher was edited; preserving {}",
+                escape_controls(&path.display().to_string())
+            );
+        }
+        println!(
+            "Remove proxy {} and its global rule in {}",
+            escape_controls(command),
+            escape_controls(&path.display().to_string())
+        );
+        for (launcher, snapshot) in &owned {
+            if snapshot.is_some() {
+                println!("  {}", escape_controls(&launcher.display().to_string()));
+            }
+        }
+        if dry_run {
+            return Ok(());
+        }
+        crate::self_install::confirm_removal("Remove this proxy?", yes)?;
     }
     for (launcher, snapshot) in &owned {
         verify_uninstall_launcher(launcher, snapshot.as_ref()).await?;
@@ -631,8 +701,15 @@ async fn mutate_rules_locked(
     change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
 ) -> Result<()> {
     let input = crate::config::ConfigInput::capture(path).await?;
-    let text = input.contents.unwrap_or_default();
-    let contents = render_rules(&text, change)?;
+    let text = input.contents.as_deref().unwrap_or_default();
+    let contents = render_rules(text, change)?;
+    if contents == text {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    if input.contents.is_some() {
+        return crate::persist::write_profile_like(path, contents.as_bytes(), path).await;
+    }
     crate::persist::atomic_write_private(path, contents.as_bytes()).await
 }
 
@@ -1091,6 +1168,62 @@ mod tests {
             for (path, bytes) in launchers {
                 assert_eq!(tokio::fs::read(path).await.unwrap(), bytes);
             }
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn self_removal_preserves_proxy_config_security_and_streams() {
+        let dir = crate::test_support::make_temp_dir("shine-self-proxy-security").await;
+        let config = uninstall_fixture(&dir).await;
+        let path = config.config_path();
+        let stream = dir.join("config.toml:personal");
+        std::fs::write(&stream, b"personal stream").unwrap();
+        let security = |script: &str| {
+            let result = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", script])
+                .env("SHINE_TEST_CONFIG", path)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{result:?}");
+            result.stdout
+        };
+        security(
+            "$ErrorActionPreference='Stop'; $a=Get-Acl -LiteralPath $env:SHINE_TEST_CONFIG; $a.SetAccessRuleProtection($true,$true); Set-Acl -LiteralPath $env:SHINE_TEST_CONFIG -AclObject $a",
+        );
+        let query = "(Get-Acl -LiteralPath $env:SHINE_TEST_CONFIG).Sddl";
+        let before = security(query);
+        uninstall_reviewed(&config, "demo", true, Some((false, true)))
+            .await
+            .unwrap();
+        assert_eq!(security(query), before);
+        assert_eq!(std::fs::read(stream).unwrap(), b"personal stream");
+        assert!(!std::fs::read_to_string(path).unwrap().contains("env_proxy"));
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn self_removal_preserves_proxy_edits_even_with_the_original_marker() {
+        let dir = crate::test_support::make_temp_dir("shine-self-proxy-edit").await;
+        let config = uninstall_fixture(&dir).await;
+        let path = config.bin_dir().join("demo.cmd");
+        let mut edited = tokio::fs::read(&path).await.unwrap();
+        edited.extend_from_slice(b"REM custom setting\r\n");
+        tokio::fs::write(&path, &edited).await.unwrap();
+        for dry in [true, false] {
+            let error = uninstall_reviewed(&config, "demo", true, Some((dry, true)))
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("edited"));
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), edited);
+            assert!(
+                load_manifest(config.shine_dir())
+                    .await
+                    .unwrap()
+                    .entries
+                    .contains_key("demo")
+            );
         }
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }

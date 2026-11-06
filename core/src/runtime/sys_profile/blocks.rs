@@ -281,6 +281,58 @@ fn sys_sentinel(os_id: &str, phase: SysProfilePhase) -> (&'static str, &'static 
     }
 }
 
+/// Return the startup file without the exact loader blocks emitted by this version.
+pub fn detach_sys_loader(
+    content: &str,
+    os_id: &str,
+    shell_name: Option<&str>,
+) -> Result<Option<String>> {
+    let legacy = legacy_sys_sentinel(os_id);
+    anyhow::ensure!(
+        !content.contains(legacy.0) && !content.contains(legacy.1),
+        "legacy Sys loader needs manual review"
+    );
+    let mut output = content.to_owned();
+    for phase in SYS_PROFILE_PHASES {
+        let (start, end) = sys_sentinel(os_id, phase);
+        if !output.contains(start) && !output.contains(end) {
+            continue;
+        }
+        anyhow::ensure!(
+            output.matches(start).count() == 1 && output.matches(end).count() == 1,
+            "ambiguous Sys loader"
+        );
+        let first = output.find(start).unwrap();
+        let last = output.find(end).unwrap() + end.len();
+        anyhow::ensure!(
+            first < last
+                && (first == 0
+                    || output[..first].ends_with('\n')
+                    || &output[..first] == "\u{feff}"),
+            "modified Sys loader"
+        );
+        let expected = sys_shell_profile_block(os_id, phase, shell_name);
+        anyhow::ensure!(
+            eol_eq(
+                &output.as_bytes()[first..last],
+                expected.trim_end_matches('\n').as_bytes()
+            ),
+            "modified Sys loader"
+        );
+        let tail = &output[last..];
+        let newline = if tail.starts_with("\r\n") {
+            2
+        } else if tail.starts_with('\n') {
+            1
+        } else {
+            anyhow::ensure!(tail.is_empty(), "modified Sys loader");
+            0
+        };
+        output.replace_range(first..last + newline, "");
+    }
+    Ok((output != content).then_some(output))
+}
+
 fn sys_shell_profile_block(
     os_id: &str,
     phase: SysProfilePhase,

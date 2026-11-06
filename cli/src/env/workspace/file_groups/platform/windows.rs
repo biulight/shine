@@ -18,6 +18,12 @@ use windows_sys::core::BOOL;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Identity(u32, u32, u32);
 
+impl Identity {
+    pub(crate) fn binary_identity(&self) -> String {
+        format!("{}:{}:{}", self.0, self.1, self.2)
+    }
+}
+
 fn wide(path: &Path) -> Result<Vec<u16>> {
     let mut value: Vec<u16> = path.as_os_str().encode_wide().collect();
     ensure!(!value.contains(&0), "NUL in file path");

@@ -1732,3 +1732,12 @@ preparation/review. Explicit evaluation has the same preparation and launch gate
 lifecycle approval. The final script launcher rejects absent/stale/blocking evidence before writing
 its UUID invocation snapshot. Cancellation uses parser checks and existing Host process supervision;
 normal cleanup and forced-abort residue retain ADR 0092 semantics. See [code analysis](code-analysis.md).
+
+## Self uninstall
+
+Read-only dispatch loads the current configuration without starting initialization or update
+workers. Preview builds domain uninstall plans and inventories program receipts, service state
+and final cleanup candidates. Apply uses each domain's approval, lock and recovery path.
+After all domains converge, it captures a new final review, acquires domain and config locks,
+rechecks that review, clears only the listed state and removes verified program copies last.
+A retry re-inventories the remaining resources. See [ADR 0165](../decisions/0165-self-uninstall.md).

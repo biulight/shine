@@ -388,6 +388,7 @@ See [SSH sessions, secret brokering, and file transfer](../guides/ssh-transfer.m
 ```text
 shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
+shine self uninstall [--dry-run | --yes]
 ```
 
 `stable` follows released versions. `preview` follows the replaceable preview build. See

@@ -144,4 +144,32 @@ Shine cannot elevate itself to upgrade when running from a protected directory. 
 install and run Shine from a user-writable directory. On Windows, installing or upgrading in a
 protected location requires a terminal with the necessary permissions.
 
+## Uninstall Shine
+
+Run `shine self uninstall --dry-run` from the account and configuration you want to clean up.
+Review the listed changes. Run `shine self uninstall` to approve them interactively, or
+`shine self uninstall --yes` to accept them without a prompt.
+
+Shine uses each domain's uninstall rules for managed App files, Shell configuration, Sys items
+and environment proxies. For the default account configuration, it also checks for exact Sys
+startup blocks and the retired HTTP service. It keeps personal settings, tasks, external presets,
+encryption identities, custom Sys profiles and software installed by bootstrap. The configuration
+directory can still contain those files, caches and locks. The preview lists any trust grants
+and broker policies scheduled for removal. If Shine cannot inspect the account's service
+manager, retry from a session that can. If it finds a legacy service while using a custom
+configuration directory, review `shine clear serve` separately.
+
+If a recovery journal or a modified managed file blocks cleanup, follow the reported domain's
+recovery or uninstall instructions and rerun the command. If a Shell startup block points to
+another Shine configuration or contains edits, review the reported file. Only the exact loader
+for the selected configuration can be removed automatically. Earlier successful steps stay applied.
+Shine removes recorded program copies last, after checking their file identity and contents
+against the running build. A changed or different-version copy needs separate review.
+
+For a Cargo installation, use the Cargo uninstall command printed by Shine. For a manual download
+or an older installation without a matching receipt, remove the executable through its original
+installation channel after managed cleanup. On Windows, close running instances and invoke
+`self uninstall` from a separate copy of the same build with the same configuration. The separate
+copy remains available after cleanup.
+
 Next: [Complete your first preset installation](./quick-start.md).

@@ -86,6 +86,7 @@ pub use pack::{
     PRESET_BUNDLE_SCHEMA_VERSION, PresetPackArtifactV1, PresetPackArtifactV2, PresetPackArtifactV3,
     PresetPackReportV1, PresetPackReportV2, PresetPackReportV3, pack_preset_path,
 };
+pub use planner::sys_profile_block_paths;
 pub use planner::{
     AppApprovedUpgradeOptions, AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest,
     OpaqueSecretVersion, PlanningInputVersions, ShellPlanRequest, SysBootstrapPlanRequest,
@@ -142,7 +143,7 @@ pub use sys_model::{
     SysItem, SysItemMode, SysItemOutcome, SysManifest, SysPackageProvider, SysProfile,
     SysProfilePhase, SysShellIntegration, SysShellKind, SysUpdateRow, SysUpgradeReport,
 };
-pub use sys_profile::{SysProfileStateReport, SysProfileStateRequest};
+pub use sys_profile::{SysProfileStateReport, SysProfileStateRequest, detach_sys_loader};
 pub use trust::ExternalCodeRequirementReport;
 pub use validation::{
     PRESET_VALIDATION_SCHEMA_VERSION, PresetCategoryValidation, PresetDiagnostic,
