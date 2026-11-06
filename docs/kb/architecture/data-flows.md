@@ -367,6 +367,27 @@ ADR 0079.
 
 ## Frontend authority and execution
 
+For an App install request, the read-only facade can explain the proposed operation.
+The interactive `shine app install` path can also obtain approval and carry it to execution.
+
+```mermaid
+flowchart TD
+    request["App install request for a selected target"]
+    request -->|Read-only facade| report["Return a safe Plan review report"]
+    request -->|Interactive CLI| review["Review the Plan against captured Preset, configuration and target state"]
+    review --> ready{"User confirms a ready Plan, including any one-operation code consent?"}
+    ready -->|No| stop["Stop before installation"]
+    ready -->|Yes| approved["Bind one approval to the reviewed request and Plan"]
+    approved --> fresh["Recapture inputs and regenerate the Plan for that request"]
+    fresh --> matchPlan{"Configuration revision, Plan fingerprint and permissions match?"}
+    matchPlan -->|No| stale["Reject before installation; a new review is required"]
+    matchPlan -->|Yes| apply["Core rechecks approval and executes the App install"]
+```
+
+For eligible external code, the interactive confirmation can include consent for that exact
+code in this operation. A later `shine update --run-generators` evaluation of an external or
+overlay generator still requires matching persistent trust.
+
 `FrontendService::capture` accepts distribution-resolved context and source settings and delegates
 effective snapshot capture to the shared host-backed bootstrap. Trusted distribution code supplies
 an opaque configuration revision. `ReadOnlyFrontend` returns only safe reports and safe diagnostic
