@@ -7,6 +7,10 @@ access rules. Shell moves the original into rollback before writing the reviewed
 preserving security only on in-place edits misses this path. Compare owner, group, DACL and named
 streams across both paths and check that the rollback still contains its originals ([ADR 0165](decisions/0165-self-uninstall.md)).
 
+When ACL tests launch `powershell.exe` from a PowerShell 7 CI session, clear `PSModulePath` on
+that child process. Otherwise Windows PowerShell can find an incompatible security module and
+fail at `Get-Acl` before the test exercises the file operation.
+
 ## 2026-11-07 — App manifest cleanup depends on both receipt stores
 
 Coupling empty-manifest deletion to whole embedded-cache purge left empty schema 2 records after
