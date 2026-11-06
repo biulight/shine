@@ -21,7 +21,7 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-This page reflects the built-in `presets/` directory for Shine 2.9.0. For another version, use
+This page reflects the built-in `presets/` directory for Shine 2.10.0. For another version, use
 `shine list --available` and `--help` as the authority.
 
 The table below shows platform availability.
@@ -97,9 +97,9 @@ commands to connect those files to the active application configuration; follow 
 | `docker-desktop` | Windows; `~/AppData/Roaming/Docker/settings-store.json` | JSON-merge manages only `proxy` and `containersProxy`; restart Docker Desktop afterward. |
 | `docker-engine` | Unix: `/etc/docker/daemon.json`; Windows: `~/.docker/daemon.json` | Template plus JSONC conversion. Unix needs administrator access; restart Docker Engine afterward. |
 | `fastfetch` | `~/.config/fastfetch/` | Fastfetch system-information configuration. |
-| `ghostty` | Unix; `~/.config/ghostty/` | Main configuration and built-in light/dark themes; backgrounds use `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK`. |
+| `ghostty` | Unix; `~/.config/ghostty/` | Main configuration and built-in light/dark themes; backgrounds use `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK`. Ctrl + `\` creates a split to the right; Ctrl + `-` creates one below. Ctrl + H/J/K/L focuses the left/down/up/right split; Super + [ / ] is unbound (Cmd on macOS). The navigation bindings use `performable:`: Ghostty consumes the keys only when it can perform the navigation; otherwise, terminal applications receive them. |
 | `git` | `~/.gitconfig` | Common aliases and defaults; an unmanaged existing file is backed up by normal app rules. |
-| `JetBrains` | `~/.ideavimrc` | IdeaVim configuration; enable the IdeaVim plugin in the IDE. |
+| `JetBrains` | `~/.ideavimrc` | IdeaVim configuration; enable the IdeaVim plugin in the IDE. In Normal mode, Ctrl + H/J/K/L focuses the left/down/up/right editor split, matching the Ghostty preset. |
 | `starship` | `~/.config/starship.toml` | Starship prompt configuration; install and enable Starship separately. |
 | `surge` | macOS; `~/Library/Application Support/Surge/Profiles/` | Local proxies, groups, rules, and an optional generated URI subscription. See the [generated-file and artifact workflow](../guides/app-presets.md#generated-files-and-surge-uri-subscriptions). |
 | `vim` | `~/.vim/` | Basic Vim configuration and a machine-local override. |

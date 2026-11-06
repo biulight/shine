@@ -17,6 +17,13 @@ slug: /upgrading
 本页只记录需要提前准备或人工迁移的事项；新增功能与修复列表见
 [版本说明](https://github.com/biulight/shine/releases)。
 
+## 升级到 2.10 时检查外部 App 预设 {#upgrade-to-shine-210}
+
+如果你维护含 Bun 脚本的 App 预设，请先用 Shine 2.10 运行 `shine preset lint ./my-presets`，
+再将预设用于自动化。2.10 能识别一些 2.9 会漏报的未声明访问，例如通过先前保存的
+`Bun.file` 句柄读取文件。遇到阻塞执行的诊断时，请修正脚本或声明所需权限，再运行一次 lint。
+详见[执行前检查 App 代码](./custom-presets.md#执行前检查-app-代码)。
+
 ## 从 2.6.x 或更早版本升级：Preset 环境输入 {#upgrade-to-shine-27}
 
 从 2.6 或更早版本升级时，请在更新外部 Preset 或自动化前检查以下兼容性变化。

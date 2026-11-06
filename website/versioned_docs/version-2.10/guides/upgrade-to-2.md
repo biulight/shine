@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Upgrade from Shine 1.x
 
-This guide covers upgrading an existing 1.x installation to Shine 2.9. Review the lifecycle security
+This guide covers upgrading an existing 1.x installation to Shine 2.10. Review the lifecycle security
 and recovery changes below, plus the applicable configuration and script changes in
 [Upgrades and migration](./upgrading.md).
 
@@ -13,7 +13,7 @@ Interactive lifecycle Plan confirmation can authorize the listed external code f
 without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
 Development trust; explicit `--run-generators` inspection also requires a grant.
 
-## Install Shine 2.9
+## Install Shine 2.10
 
 On macOS or Linux, install the latest stable release:
 

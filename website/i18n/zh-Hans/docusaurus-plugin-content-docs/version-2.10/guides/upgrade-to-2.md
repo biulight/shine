@@ -5,13 +5,13 @@ sidebar_position: 1
 
 # 从 Shine 1.x 升级
 
-本页说明如何从既有 1.x 安装升级到 Shine 2.9。请先阅读下列生命周期安全与恢复变化，
+本页说明如何从既有 1.x 安装升级到 Shine 2.10。请先阅读下列生命周期安全与恢复变化，
 以及[升级与迁移](./upgrading.md)中适用的配置与脚本变更。
 
 交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
 必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
 
-## 安装 Shine 2.9
+## 安装 Shine 2.10
 
 在 macOS 或 Linux 上安装最新稳定版：
 

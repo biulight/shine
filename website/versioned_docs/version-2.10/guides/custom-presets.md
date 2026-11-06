@@ -125,6 +125,56 @@ languages, are advisory. Declarations not corroborated by the analyzed source ar
 and appear in detailed review. Neither means the code is safe or fully analyzed. Reports without
 diagnostics add no ordinary output; existing trust and approval checks still apply.
 
+For `globalThis.fetch('https://example.org/data')`, declare the network host `example.org`,
+just as for `fetch`. The same host declaration covers `https.get('https://example.org/data')`
+from `node:https`, with or without an inline callback. Dynamic URLs and `https.get` calls with
+an options object produce a coverage gap because the target host cannot be confirmed.
+
+Equivalent spellings use the same permission checks: supported identifier/URL escapes, quoted
+import names, parentheses, TypeScript type assertions and generic instantiations preserve recognized
+calls. For example, `(fetch)(('https://example.org'))` is checked like `fetch('https://example.org')`.
+Unsupported escapes (including legacy numeric escapes), unpaired surrogates, URLs containing
+control characters and dynamic values retain coverage gaps.
+
+An ambient namespace containing only types or just `export {}` leaves a global of the same
+name visible. For example, `declare namespace fetch { type Options = {}; export { Options } }`
+leaves calls to the global `fetch` subject to network checks. A class or a namespace that declares
+a value can shadow a builtin, including when the name uses Unicode escapes.
+
+A script that checks `(await fetch('https://example.org')).status === 200` must declare
+`example.org`, even if it replaces `fetch` afterward. The same applies when the response property
+is used as a computed index. An optional call such as `cb?.(fetch(url))` skips its arguments if
+`cb` is null or undefined. If Shine cannot establish which function an argument will call after a
+replacement, it reports a coverage gap. For example, `for (let dep = require('./dep'); false;) {}`
+loads the dependency before the loop tests its condition. Shine checks that dependency even if the
+script later replaces `require`. The same rule applies to an `if` condition, a `switch` expression,
+or a dependency loaded when a `finally` block runs.
+
+If a script saves the original global object and assigns it back, a later write to `globalThis.fetch`
+can replace the global function. Shine reports a coverage gap when it cannot confirm that a call
+still uses the builtin. Conversely, if an object or array assignment puts a new object into
+`globalThis`, changing that object's `fetch` property leaves the original bare `fetch` subject to
+network checks. For example, after `({...globalThis} = source)`, `globalThis` refers to a new
+object. Declare the network host for a subsequent bare `fetch(url)` call.
+
+Runtime initializers, enum and namespace bodies, and expressions such as `typeof process.env.NAME`
+are checked for effects. An unsupported module path retains its dependency gap and local import names.
+
+Environment-read checks distinguish reads from plain assignment, destructuring assignment and
+deletion. Shine checks reads in computed keys, evaluated defaults, compound assignments, and
+updates. This does not change the contract for declared environment inputs.
+
+For `const f = Bun.file('in'); await f.text()`, declare `read` on `in`. Saving the handle alone
+requires no read permission. Shine checks the path when the script calls the method.
+
+For Node `copyFile`, declare `read` on the source and `write` on the destination. For `rename`,
+declare `remove` on the source and `write` on the destination. These rules also cover the sync
+and promise forms. When one path is dynamic, Shine still checks the other path if it is a literal.
+
+If a script replaces a built-in method with `Object.assign`, calls through the replaced member
+produce a coverage gap. Calls through a function saved before replacement can still require its
+original permission.
+
 Use `--verbose` for detailed review or `shine preset lint <PATH> --format json` for all diagnostics.
 `--deny-warnings` makes lint warnings fail CI. More detailed output does not execute generators;
 that still requires `--run-generators` and trust. Lint checks all supported entries, so it can
