@@ -97,6 +97,7 @@ the move. Missing or changed backups can require manual repair; generated-file m
 by `shine app recover`.
 
 `app uninstall --force` permits deleting user-modified managed content; preview it with `--dry-run`.
+Uninstall uses the strategy recorded at installation, even if the preset now declares a different one.
 Uninstall also deletes the selected category's entire Shine cache, including any extra files there.
 Without a category, it clears all App caches. External preset sources are preserved. Keep personal
 files outside these caches and review the removal Plan before approval.
@@ -115,8 +116,13 @@ Shine 2.8 and later write App installation state that Shine 2.7.x and earlier ca
 If you intend to downgrade, reinstalling the old binary or resealing encrypted sources does not convert App installation
 records. An older client rejects incompatible records; `app install --replace-managed` also needs to read
 them and cannot bypass this limit. Do not delete records or edit their version number to bypass
-that check. Undoing managed file changes and making state readable by an older client are
-separate operations.
+that check. With this version, preview and complete App uninstall before replacing the binary.
+Once the last ordinary and secret App receipts are removed, Shine removes the empty installation record,
+including after category-by-category removal or when using external presets. Resolve protected files
+or pending recovery with the newer binary first. The older version can then install from a preset it
+supports and create its own App record. If category removal was interrupted after clearing its last
+receipt, rerun the same category uninstall. This retry reviews and removes only the empty record
+and leaves category caches in place.
 
 ## Recover an interrupted App operation
 

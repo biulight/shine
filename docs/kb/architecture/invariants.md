@@ -32,8 +32,9 @@ bugs. Check this list before changing the modules named in each entry.
   Asset copy/export and Config file/global-load tests call their production owners. Removal tests
   use approved Shell uninstall. CLI uninstall always requests internal cleanup: extra cache-tree
   files survive targeted Shell removal but are included in whole-shell cleanup. App cleanup removes
-  the selected internal category tree, or the entire App tree without a target. Only an empty App
-  manifest may be deleted; protected/failed receipts remain available for retry.
+  the selected internal category tree, or the entire App tree without a target. Only a reviewed empty App
+  manifest may be deleted after ordinary and secret receipts are exhausted and recovery is idle;
+  protected/failed receipts retain the schema guard for retry.
   External preset sources remain preserved. Core retains its explicit purge field for Plan binding
   and existing callers; the CLI no longer accepts `--purge` (ADR 0148). Do not revive the retired
   asset-name deletion algorithm (ADR 0136).

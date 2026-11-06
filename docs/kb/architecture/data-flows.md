@@ -789,6 +789,10 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
 3. Restore `<name>.shine.bak` if one exists.
 4. Remove the manifest entry.
 
+CLI cleanup also plans removal of the existing App manifest if it will exhaust both ordinary and
+secret receipts. Under the App lock, execution checks the remaining receipts and journals after
+resource and cache reconciliation. Preserving an external source does not preserve an empty guard.
+
 CLI App and Shell uninstall share a completion policy over typed lifecycle outcomes. Preserved,
 conflicting, or failed outcomes produce an incomplete summary and a nonzero actual-command exit,
 even when independent resources were removed. Successful preview remains zero. App local file

@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-11-07 — App manifest cleanup depends on both receipt stores
+
+Coupling empty-manifest deletion to whole embedded-cache purge left empty schema 2 records after
+external and targeted removal. Testing only ordinary entries also removed the old-client guard
+while modified secret files still had receipts. Plan cleanup from both stores, then verify the
+result under the App lock. Use the installed strategy for both Plan assessment and removal. After the last receipt commits,
+a category retry must still review the empty guard even if it has no files left to select.
+A v2.7.2 reinstall needs compatible sources and no newer App guard.
+
 ## 2026-11-06 — Check emitted bindings and capture order
 
 Compare TypeScript shadowing cases against the pinned Bun transpiler. A type-only namespace can

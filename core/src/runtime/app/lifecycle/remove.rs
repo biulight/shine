@@ -36,11 +36,17 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
 
         self.run_app_teardown(&categories, request.dry_run, &mut state.report, observer)
             .await?;
+        let had_selected_entries = !selected.is_empty();
         for entry in selected {
             self.remove_app_file(entry, &request, &mut approved, admin_authorized, &mut state)
                 .await?;
         }
-        self.finish_app_removal(&request, category_names, state)
+        if !request.dry_run
+            && (had_selected_entries || !request.purge || !self.secret_store()?.entries.is_empty())
+        {
+            save_manifest(&self.host, &self.context.shine_dir, &state.manifest).await?;
+        }
+        self.finish_app_removal(&request, category_names, state.report)
             .await
     }
 
@@ -317,17 +323,8 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
         &self,
         request: &AppUninstallLifecycleRequest,
         category_names: BTreeSet<String>,
-        state: RemovalState,
+        mut report: AppLifecycleReport,
     ) -> Result<AppLifecycleReport> {
-        let RemovalState {
-            manifest,
-            mut report,
-        } = state;
-
-        if !request.dry_run {
-            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-        }
-
         if !self.context.is_external_presets {
             let cache_targets = if request.purge && request.target.is_none() {
                 vec!["app".to_string()]
@@ -340,7 +337,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                     .collect()
             };
             for target in cache_targets {
-                let mut outcome = self
+                let outcome = self
                     .reconcile_app_cache(AppCacheRequest {
                         prefix: target.clone(),
                         dry_run: request.dry_run,
@@ -349,33 +346,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                         overwrite: false,
                     })
                     .await?;
-                // In previews, manifest contains the projected remaining receipts. Never
-                // discard records needed to retry protected or failed removals.
-                if request.purge && target == "app" && manifest.entries.is_empty() {
-                    let path = self.context.shine_dir.join("app-manifest.toml");
-                    match self.host.metadata(&path).await {
-                        Ok(_) => {
-                            if !request.dry_run {
-                                self.host
-                                    .remove_file(&path)
-                                    .await
-                                    .map_err(|error| error.into_anyhow("purging App manifest"))?;
-                            }
-                            outcome.status = if request.dry_run {
-                                LifecycleStatus::Previewed
-                            } else {
-                                LifecycleStatus::Changed
-                            };
-                            outcome.effects.push(if request.dry_run {
-                                LifecycleEffect::ReceiptRemovePreviewed
-                            } else {
-                                LifecycleEffect::ReceiptRemoved
-                            });
-                        }
-                        Err(error) if error.is_not_found() => {}
-                        Err(error) => return Err(error.into_anyhow("inspecting App manifest")),
-                    }
-                }
                 report.lifecycle.push(outcome);
             }
         } else if request.purge {
@@ -394,6 +364,64 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
             );
         }
         Ok(report)
+    }
+
+    /// Called under the lifecycle lock for execution. A failed per-file removal
+    /// may have retained receipts even when the reviewed Plan projected none.
+    pub(crate) async fn reconcile_empty_app_manifest(
+        &self,
+        plan: &crate::plan::PlanV1,
+        report: &mut AppLifecycleReport,
+        preview: bool,
+    ) -> Result<()> {
+        if !plan.steps.iter().any(|step| {
+            step.target == "app"
+                && step.resource.as_deref() == Some("app-manifest.toml")
+                && step.action == PlanActionV1::Remove
+        }) {
+            return Ok(());
+        }
+        if preview
+            && report.files.iter().any(|file| {
+                matches!(
+                    file.action,
+                    AppFileAction::Failed | AppFileAction::UserModified
+                )
+            })
+        {
+            return Ok(());
+        }
+        if !preview {
+            if !load_manifest(&self.host, &self.context.shine_dir)
+                .await?
+                .entries
+                .is_empty()
+                || !self.secret_store()?.entries.is_empty()
+                || self.secret_journal()?.is_some()
+                || self.app_operation_journal_bytes().await?.is_some()
+            {
+                return Ok(());
+            }
+            self.host
+                .remove_file(&self.context.shine_dir.join("app-manifest.toml"))
+                .await
+                .map_err(|error| error.into_anyhow("removing empty App manifest"))?;
+        }
+        report.lifecycle.push(LifecycleOutcomeV1::new(
+            "app",
+            Some("purge"),
+            if preview {
+                LifecycleStatus::Previewed
+            } else {
+                LifecycleStatus::Changed
+            },
+            [if preview {
+                LifecycleEffect::ReceiptRemovePreviewed
+            } else {
+                LifecycleEffect::ReceiptRemoved
+            }],
+        ));
+        Ok(())
     }
 }
 

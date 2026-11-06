@@ -103,7 +103,9 @@ async fn handle_uninstall_with_reporter(
             )
             .await?
     };
-    if let Some(category) = category.filter(|_| core_report.files.is_empty()) {
+    if let Some(category) = category
+        .filter(|_| core_report.files.is_empty() && core_report.lifecycle.outcomes.is_empty())
+    {
         observer
             .reporter
             .emit(PresentationEvent::stdout(report::no_installed_files_text(
@@ -673,7 +675,8 @@ mod tests {
         let result = handle_uninstall_with_result(&config, Some("sample"), true, false)
             .await
             .unwrap();
-        assert_eq!(result.summary().changed, 1);
+        assert_eq!(result.summary().changed, 2); // selected receipt and empty manifest
+        assert!(!config.shine_dir().join("app-manifest.toml").exists());
         assert!(
             result.outcomes[0]
                 .effects
@@ -851,7 +854,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.summary().changed, 1);
+        assert_eq!(result.summary().changed, 2); // selected receipt and empty manifest
+        assert!(!config.shine_dir().join("app-manifest.toml").exists());
         assert_eq!(
             result.outcomes[0].effects,
             vec![LifecycleEffect::ReceiptRemoved]
@@ -919,7 +923,8 @@ mod tests {
         let result = handle_uninstall_with_result(&config, Some("retired"), false, false)
             .await
             .unwrap();
-        assert_eq!(result.summary().changed, 1);
+        assert_eq!(result.summary().changed, 2); // selected receipt and empty manifest
+        assert!(!config.shine_dir().join("app-manifest.toml").exists());
         assert!(
             result.outcomes[0]
                 .effects
@@ -1012,7 +1017,8 @@ mod tests {
             let result = handle_uninstall_with_result(&config, Some("retired"), false, false)
                 .await
                 .unwrap();
-            assert_eq!(result.summary().changed, 1);
+            assert_eq!(result.summary().changed, 2); // selected receipt and empty manifest
+            assert!(!config.shine_dir().join("app-manifest.toml").exists());
             if json_merge {
                 let remaining: serde_json::Value =
                     serde_json::from_slice(&fs::read(&destination).await.unwrap()).unwrap();
@@ -1072,6 +1078,12 @@ mod tests {
                 .contains(&LifecycleEffect::CachePurged)
         );
 
+        assert!(!config.shine_dir().join("app-manifest.toml").exists());
+        // An empty record left by an older uninstall is reclaimed by a whole-App retry.
+        AppManifest::default()
+            .save(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let global_cache = config.presets_dir().join("app/other");
         fs::create_dir_all(&global_cache).await.unwrap();
         fs::write(global_cache.join("orphan"), b"cache")
@@ -1087,9 +1099,11 @@ mod tests {
             .unwrap();
         assert!(global_purge.effects.contains(&LifecycleEffect::CachePurged));
         assert!(
-            global_purge
-                .effects
-                .contains(&LifecycleEffect::ReceiptRemoved)
+            global
+                .outcomes
+                .iter()
+                .any(|outcome| outcome.resource.as_deref() == Some("purge")
+                    && outcome.effects.contains(&LifecycleEffect::ReceiptRemoved))
         );
         assert!(!config.shine_dir().join("app-manifest.toml").exists());
         fs::remove_dir_all(&dir).await.unwrap();
