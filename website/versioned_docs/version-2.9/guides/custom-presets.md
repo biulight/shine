@@ -34,8 +34,12 @@ You can use the same flow without an AI client:
 ```bash
 mkdir -p my-presets/app/my-editor
 cd my-presets/app/my-editor
-shine preset new app  # Create an App template
-# Add config files and edit shine.toml.
+shine preset new app
+```
+
+Add config files and edit shine.toml.
+
+```bash
 shine preset validate . --format json
 shine preset lint . --format json
 shine preset plan . --platform macos --format json
@@ -47,11 +51,11 @@ unrestricted author statement:
 
 Choose the category type; run only its command:
 
-```bash
-shine preset new app --unrestricted    # Create an App template with the author statement
-shine preset new shell --unrestricted  # Create a Shell template with the author statement
-shine preset new sys --unrestricted    # Create a Sys template with the author statement
-```
+| Operation | Command |
+| --- | --- |
+| Create an App template with the author statement | `shine preset new app --unrestricted` |
+| Create a Shell template with the author statement | `shine preset new shell --unrestricted` |
+| Create a Sys template with the author statement | `shine preset new sys --unrestricted` |
 
 All arbitrary code is unisolated whether this option is present or absent. The option does not skip
 trust, Plan review, administrator authorization, ownership checks, or explicit environment inputs.
@@ -154,11 +158,11 @@ types and recompile. Regenerate lifecycle reports and approvals with the upgrade
 
 Preview the active external source and overlay, or name a repository, category, or manifest:
 
-```bash
-shine preset migrate --dry-run               # Preview active external sources
-shine preset migrate ./my-presets --dry-run  # Preview this source's migration
-shine preset migrate ./my-presets            # Apply after reviewing the preview
-```
+| Operation | Command |
+| --- | --- |
+| Preview active external sources | `shine preset migrate --dry-run` |
+| Preview this source's migration | `shine preset migrate ./my-presets --dry-run` |
+| Apply after reviewing the preview | `shine preset migrate ./my-presets` |
 
 Review the metadata diff before confirming; the default answer is No. Migration changes only
 `shine.toml` and backs it up before writing. It does not change scripts, data files, environment
@@ -249,11 +253,11 @@ For persistent authorization, inspect and grant the target:
 Inspect the target first, then choose snapshot or development trust.
 Development trust also authorizes future code changes; use it only when you intend that scope.
 
-```bash
-shine trust inspect <TARGET>              # Inspect without granting trust
-shine trust grant <TARGET>                # Grant snapshot trust
-shine trust grant <TARGET> --development  # Trust future changes
-```
+| Operation | Command |
+| --- | --- |
+| Inspect without granting trust | `shine trust inspect <TARGET>` |
+| Grant snapshot trust | `shine trust grant <TARGET>` |
+| Trust future changes | `shine trust grant <TARGET> --development` |
 
 Snapshot trust covers the reviewed target and effective category content. Changes to files,
 metadata, source layers, or executable permissions require renewed review. Dependencies such as
@@ -278,12 +282,12 @@ in the current active Preset. Revoking `preset` clears every stored Preset trust
 Inspect the target first, then choose only the required grant or revoke operation.
 Development trust also authorizes future code changes; use it only when you intend that scope.
 
-```bash
-shine trust inspect preset              # Inspect without granting trust
-shine trust grant preset                # Grant snapshot trust
-shine trust grant preset --development  # Trust future changes
-shine trust revoke preset               # Revoke trust
-```
+| Operation | Command |
+| --- | --- |
+| Inspect without granting trust | `shine trust inspect preset` |
+| Grant snapshot trust | `shine trust grant preset` |
+| Trust future changes | `shine trust grant preset --development` |
+| Revoke trust | `shine trust revoke preset` |
 
 Older grants marked as needing review cannot authorize new operations. Review and grant them again.
 
@@ -371,8 +375,12 @@ An overlay replaces base-preset files at the same relative path and can add new 
 ```bash
 shine preset overlay link ~/dotfiles/shine-overlay --create
 shine preset overlay info
-# When you want to stop using this overlay:
-shine preset overlay unlink  # Unlink the overlay
+```
+
+When you want to stop using this overlay:
+
+```bash
+shine preset overlay unlink
 ```
 
 Local `preset link` and `preset overlay link` paths, including resolved symlink targets, must be
@@ -398,7 +406,7 @@ and use `shine preset overlay link <PATH>` from the project instead.
 
 ```bash
 shine preset overlay link --git https://example.com/team/shine-overlay.git --branch main
-shine preset pull  # Pull preset sources only
+shine preset pull
 shine preset overlay info
 ```
 
@@ -540,11 +548,11 @@ or pull before inspecting or applying configuration:
 
 Choose one pull/update operation:
 
-```bash
-shine preset pull     # Pull preset sources only
-shine update --pull   # Pull, then check for updates
-shine upgrade --pull  # Pull, then apply configuration updates
-```
+| Operation | Command |
+| --- | --- |
+| Pull preset sources only | `shine preset pull` |
+| Pull, then check for updates | `shine update --pull` |
+| Pull, then apply configuration updates | `shine upgrade --pull` |
 
 Shine locates the repositories containing the base presets and active overlay. If both sources are in
 one repository it pulls only once; non-Git sources are skipped. `update --pull`
@@ -566,11 +574,11 @@ Generate a `shine.toml` template in an application, shell, or sys category direc
 
 Choose the category type; run only its command:
 
-```bash
-shine preset new app    # Create an App template
-shine preset new shell  # Create a Shell template
-shine preset new sys    # Create a Sys template
-```
+| Operation | Command |
+| --- | --- |
+| Create an App template | `shine preset new app` |
+| Create a Shell template | `shine preset new shell` |
+| Create a Sys template | `shine preset new sys` |
 
 Existing files require `--force`. Without it, existing entries, including dangling symbolic links,
 are refused, and concurrent creations cannot overwrite each other.
@@ -636,10 +644,10 @@ Legacy string arrays such as `env = ["SOURCE=TARGET"]` are no longer accepted in
 Relevant commands report a migration hint; unrelated commands do not automatically migrate files.
 Review and apply the conversion explicitly:
 
-```bash
-shine preset migrate ./my-presets --dry-run  # Preview this source's migration
-shine preset migrate ./my-presets            # Apply after reviewing the preview
-```
+| Operation | Command |
+| --- | --- |
+| Preview this source's migration | `shine preset migrate ./my-presets --dry-run` |
+| Apply after reviewing the preview | `shine preset migrate ./my-presets` |
 
 Migration reads the old explicit sensitivity declarations, preserves aliases and conditions, and
 backs up metadata before applying changes. Missing or conflicting sensitivity requires manual

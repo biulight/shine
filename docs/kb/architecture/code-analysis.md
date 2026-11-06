@@ -61,7 +61,42 @@ cross-function mutation order still produce gaps rather than definite builtin ef
 Rule version 7 tracks `Object.assign` writes to supported builtin objects and their immutable
 aliases. Literal source keys invalidate individual members. Dynamic keys, spreads and opaque
 sources can replace any member of the target. Previously captured function values retain the
-existing same-scope ordering rule. The assign call itself retains its coverage gap.
+existing same-scope ordering rule. A straight-line call before a later replacement in the same
+function retains its original builtin identity. Calls on uncertain paths keep advisory gaps.
+Ordinary member writes and `Object.assign` share receiver resolution. A conditional or cross-function
+replacement can make the identity uncertain. It cannot rule out a later write through the original
+receiver. Begin with all candidate receivers. Exclude a builtin only after a guaranteed write of
+a distinct value in the same function, and only until another write could restore the original.
+Fresh literals, unmodified local functions and their immutable aliases establish distinct identity.
+For a known builtin slot, a different known builtin also proves replacement once its RHS identity
+has been checked against all candidate writes. Arbitrary property names may denote the same value.
+A dynamic key can restore any matching member. A possible restoration in another function has
+unknown execution order. Repeat until the guaranteed writes stabilize. Only aliases feeding a
+write's operands participate in these budgeted rounds. The final effect pass uses all possible
+writes. Dynamic keys can invalidate individual reads without proving any specific key was written.
+
+An `if` or `while` condition and a `switch` discriminant are evaluated before their respective
+bodies. A classic `for` evaluates its initializer and first condition before the body or update.
+Arithmetic compound assignments evaluate their right operand, while logical assignments may skip it.
+A `finally` body runs even after a throw. A handler or an effectful finalizer can observe a
+partially completed `try` body. Track its entry past erased types, literal data and other
+non-throwing operands, but stop at operations that could call user code or throw before the load.
+A `try/finally` with an empty finalizer can complete normally only after the body. A throw or break can still skip statements later in a block.
+Comparisons evaluate both operands. An ordinary subscript evaluates its receiver and key.
+An optional chain can skip computed keys and call arguments through subsequent accesses until
+parentheses end the chain. Reading a method on the result of `require()` happens after its
+arguments run, so a replacement inside an argument is visible at that lookup.
+
+Destructuring evaluates its input first, then processes targets from left to right. A simple
+target with a default stores its value after evaluating the default. Statically matched properties
+and array elements in literal inputs can prove the identity of a write. A numeric property cannot overwrite an unrelated named
+field. An object or array rest target receives a fresh object or array, even for an opaque input.
+A matched, definitely defined literal bypasses its default. Its default expression is still checked
+for syntax and charged to the traversal budget, but contributes no effects or dependencies.
+Spreads, accessors, dynamic keys and possibly undefined inputs can still leave the assigned
+identity unknown. An earlier target can
+therefore replace the loader seen by a later default. Evaluation order affects mutation lookup
+only. Diagnostics and lexical bindings use the original source locations.
 
 Version 7 also compares both paths in Node copies and renames. A copy reads its source, a rename
 removes the source name, and both write the destination. Each literal is compared independently.
@@ -82,9 +117,9 @@ IR or external compiler is needed for these local decisions.
 
 | Boundary | Owner | Required behavior |
 | --- | --- | --- |
-| Type syntax versus runtime | Syntax traversal and `is_type_syntax` | Validate and budget every node. Pure types create neither value bindings nor effects. Ambient declarations retain unknown value bindings but have no runtime effects. Initializers, enum/namespace bodies and runtime computed keys remain analyzed. |
+| Type syntax versus runtime | Syntax traversal and `is_type_syntax` | Validate and budget every node. Pure types create neither value bindings nor effects. Ambient declarations can introduce unknown values. An empty ambient export list supplies no value. A named ambient export follows the nearest declaration of its local name, including type-only imports and nested namespaces. Unresolved exports remain unknown values. Initializers, enum/namespace bodies and runtime computed keys remain analyzed. |
 | Equivalent operands | `wrapped_operand` | Parentheses, `as`, `satisfies`, non-null/angle assertions and generic instantiations select the same runtime operand for calls, aliases, literals, receivers and write targets. Exclude their type operands from all runtime passes. |
-| Names and lexical identity | Binding collection and `Bindings::visible/member` | Decode identifier and quoted import names; normalize named default imports without treating literal dotted names as paths. Unknown imports, import aliases, enums, namespaces and ambient value declarations still shadow globals in their own scope. Namespace bodies contain their own `var` bindings. Type-only names do not. |
+| Names and lexical identity | Binding collection and `Bindings::visible/member` | Decode identifier and quoted import names; normalize named default imports without treating literal dotted names as paths. Unknown imports, import aliases, enums, emitted namespaces and ambient value declarations still shadow globals in their own scope. Namespace bodies contain their own `var` bindings. Bun erases simple namespaces containing only types. Dotted declarations can still emit their outer namespace. |
 | Read/write roles and mutation | `pattern_targets` and the mutation pass | Collect write-only targets and mutations from the same pattern traversal. Plain/destructuring assignment, loop targets and deletion are not environment reads. Computed keys, default RHS values, compound assignment and update still read their operands. |
 
 The additional state separates binding collection from runtime passes; it does not add another
@@ -103,7 +138,7 @@ Keep these limits explicit:
 - Unknown module spellings and `import = require(...)` retain dependency gaps; registering their
   local names does not resolve their values or expand the dependency graph. Namespace export
   values and internal import aliases are not interpreted.
-- Arbitrary expression evaluation, destructured value propagation, function returns and general
+- Arbitrary expression evaluation, general destructured value propagation, function returns and general
   control-flow analysis remain outside the resolver. Same-function capture ordering retains the
   existing syntactic rule, not a proof about loops, reachability or all executions.
 - Mutation coverage remains direct/pattern writes and supported `Object.assign` calls. Reflective
@@ -134,7 +169,8 @@ For a failed generator in compact global `update`, identical nonblocking reports
 category and script can share a summary listing every affected source. Known coverage gaps use
 plain-language counts with full locations in `--verbose`. Blocking findings stay per entry.
 A generator trust denial names the non-embedded layers contributing effective files anywhere
-in that App category, even when the generator script itself comes from the embedded base.
+in that App category, even when the generator script itself comes from the embedded base. The CLI
+points to `shine trust inspect` before enrollment because a category grant covers every listed capability.
 Compact lifecycle Plan review lists all entries sharing the same script, target and identical
 nonblocking report together within each Plan. Coverage notes describe analysis limits; the Plan
 prompt describes one-operation consent. Detailed review and author Plan rendering retain individual
@@ -171,9 +207,9 @@ per-entry diagnostic work is still charged on cache hits. These are conservative
 not a time/memory guarantee or a claim of exhaustive analysis. Binding lookup is indexed by name;
 more than 128 candidates for a name is unresolved rather than allowing unbounded scope matching.
 
-Function/namespace binding-scope walks charge the same node-work budget and check cancellation.
-Ancestor results are cached only within one parsed tree, so sibling declarations do not repeat a
-deep parent walk. Function capture boundaries remain separate from namespace binding boundaries.
+Both declaration-scope and execution-scope walks charge the node-work budget and check cancellation.
+Ancestor results are cached only within one parsed tree, so sibling declarations, calls and
+`Object.assign` candidates share the cost of a deep parent walk. Function capture boundaries remain separate from namespace binding boundaries.
 The `binding_scope_*` regressions cover budget exhaustion/terminal reuse and bounded sibling
 lookup without leaking namespace variables. Counting only the initial tree walk missed this work;
 the extra namespace pass in the initial v7 implementation made the existing deep-block cost worse.

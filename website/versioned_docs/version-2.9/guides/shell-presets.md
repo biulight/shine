@@ -17,12 +17,12 @@ limits, commands available in the current session, and required environment vari
 
 List the presets first, then choose one installation scope:
 
-```bash
-shine shell list                            # List Shell presets
-shine shell install proxy
-shine shell install utils/shine-env-export  # Install only this command
-shine shell install                         # Install every category available on this platform
-```
+| Operation | Command |
+| --- | --- |
+| List Shell presets | `shine shell list` |
+| Install the proxy category | `shine shell install proxy` |
+| Install only this command | `shine shell install utils/shine-env-export` |
+| Install every category available on this platform | `shine shell install` |
 
 You can also let Shine identify whether a category is a shell or application preset:
 
@@ -110,11 +110,11 @@ still apply.
 
 ## Uninstall
 
-```bash
-shine shell uninstall proxy --dry-run         # Preview category removal
-shine shell uninstall proxy                   # Apply after review
-shine shell uninstall utils/shine-env-export  # Alternative: remove only this command
-```
+| Operation | Command |
+| --- | --- |
+| Preview category removal | `shine shell uninstall proxy --dry-run` |
+| Apply after review | `shine shell uninstall proxy` |
+| Alternative: remove only this command | `shine shell uninstall utils/shine-env-export` |
 
 Uninstall and `shine upgrade` also show their planned changes.
 Confirmation defaults to No; automation must pass `--yes`, while the Plan and safety checks still

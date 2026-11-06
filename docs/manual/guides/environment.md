@@ -18,13 +18,13 @@ and brokered on-demand decryption as described below.
 
 Choose commands for the operation you need; do not run this as a set/delete sequence:
 
-```bash
-shine env list                      # List variables and their sources
-shine env get HTTP_PROXY_PORT       # Read the effective value
-shine env explain HTTP_PROXY_PORT   # Inspect precedence and sources
-shine env set HTTP_PROXY_PORT 6152  # Save a value
-shine env delete HTTP_PROXY_PORT    # Delete the selected stored value
-```
+| Operation | Command |
+| --- | --- |
+| List variables and their sources | `shine env list` |
+| Read the effective value | `shine env get HTTP_PROXY_PORT` |
+| Inspect precedence and sources | `shine env explain HTTP_PROXY_PORT` |
+| Save a value | `shine env set HTTP_PROXY_PORT 6152` |
+| Delete the selected stored value | `shine env delete HTTP_PROXY_PORT` |
 
 `PROXY_NO_PROXY` controls the `NO_PROXY` and `no_proxy` values set by `setproxy` and defaults to
 `localhost,127.0.0.1,::1`. After changing it or another proxy variable, `shine update` marks the
@@ -75,14 +75,16 @@ shadowed entries and report the saved file, current effective source, and whethe
 
 Choose the operation and storage location you need:
 
-```bash
-shine env set HTTP_PROXY_PORT 7890 --global              # Write global configuration
-shine env set HTTP_PROXY_PORT 8080 --project             # Write project configuration
-shine env set HTTP_PROXY_PORT 8081 --project --env-file  # Write the project env file
-shine env set HTTP_PROXY_PORT 6152 --overlay             # Write the manual overlay
-shine env delete HTTP_PROXY_PORT --global --env-file     # Delete from the global env file
-shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --project --env-file
-```
+| Operation | Command |
+| --- | --- |
+| Write global configuration | `shine env set HTTP_PROXY_PORT 7890 --global` |
+| Write project configuration | `shine env set HTTP_PROXY_PORT 8080 --project` |
+| Write the project env file | `shine env set HTTP_PROXY_PORT 8081 --project --env-file` |
+| Write the manual overlay | `shine env set HTTP_PROXY_PORT 6152 --overlay` |
+| Delete from the global env file | `shine env delete HTTP_PROXY_PORT --global --env-file` |
+| Save an encrypted copy of the effective `MY_TOKEN` as `MY_TOKEN_SECRET` in the project env file | `shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --project --env-file` |
+
+The encryption command above preserves the plaintext `MY_TOKEN` in its original layer.
 
 Deletion removes only an existing entry in the selected file; an absent local entry is an error.
 It restores inheritance, never disables a variable, removes other layers, or also deletes
@@ -112,7 +114,7 @@ arrays, or a table without `value`—fail explicitly.
 After changing a value used by template rendering, run:
 
 ```bash
-shine upgrade  # Apply updates to installed configuration
+shine upgrade
 ```
 
 ## Manual upgrade and rollback for env layering
@@ -271,10 +273,10 @@ Older Secure Enclave identities may have an `age1se...` recipient, which require
 `age-plugin-se` even on a machine that only encrypts. From the project containing the workspace,
 preview and apply the public-recipient conversion:
 
-```bash
-shine state migrate --dry-run  # Preview legacy-state migration
-shine state migrate            # Apply after reviewing the preview
-```
+| Operation | Command |
+| --- | --- |
+| Preview legacy-state migration | `shine state migrate --dry-run` |
+| Apply after reviewing the preview | `shine state migrate` |
 
 Migration converts configured `age1se...` recipients to equivalent `age1tag...` recipients without
 decrypting secrets. Reseal afterward to use the new recipients. Existing ciphertext remains
@@ -461,12 +463,12 @@ Use repeatable `--with` without changing the current terminal or creating worksp
 
 Choose one injection method:
 
-```bash
-shine env run --with MY_TOKEN -- bun run build                            # Inject under the same name
-shine env run --with MY_TOKEN=API_TOKEN -- bun run build                  # Rename for the child process
-shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build  # Inject multiple variables
-shine env run --no-workspace --with MY_TOKEN -- bun run build             # Skip workspace loading
-```
+| Operation | Command |
+| --- | --- |
+| Inject under the same name | `shine env run --with MY_TOKEN -- bun run build` |
+| Rename for the child process | `shine env run --with MY_TOKEN=API_TOKEN -- bun run build` |
+| Inject multiple variables | `shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build` |
+| Skip workspace loading | `shine env run --no-workspace --with MY_TOKEN -- bun run build` |
 
 Each key prefers `<KEY>_SECRET` and falls back to plaintext `<KEY>`. The name after `=` is the child
 process variable. Explicit `--with` values override the current process and workspace.
@@ -562,11 +564,11 @@ the real program:
 
 Choose the state and scope you need:
 
-```bash
-shine env proxy disable gh            # Disable the proxy
-shine env proxy enable gh             # Enable the proxy
-shine env proxy disable gh --project  # Disable the project proxy
-```
+| Operation | Command |
+| --- | --- |
+| Disable the proxy | `shine env proxy disable gh` |
+| Enable the proxy | `shine env proxy enable gh` |
+| Disable the project proxy | `shine env proxy disable gh --project` |
 
 Without `--project`, enable/disable changes the global rule even inside a project. A project rule
 can still override it. If Shine reports that the rule was saved but its effective state could not
@@ -602,10 +604,10 @@ For setup commands, local policies, enrollment, and the complete security bounda
 
 At a project root with Vite-style `.env` files, generate a Shine workspace and TOML sources:
 
-```bash
-shine env workspace init --from-dotenv --dry-run  # Preview importing dotenv files
-shine env workspace init --from-dotenv            # Apply the reviewed import
-```
+| Operation | Command |
+| --- | --- |
+| Preview importing dotenv files | `shine env workspace init --from-dotenv --dry-run` |
+| Apply the reviewed import | `shine env workspace init --from-dotenv` |
 
 The command reads `.env`, `.env.local`, `.env.<mode>`, and `.env.<mode>.local`, discovers modes, and
 preserves that precedence. Source dotenv files are unchanged. Existing targets are not overwritten

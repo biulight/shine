@@ -1,5 +1,33 @@
 # Lessons Learned
 
+## 2026-11-06 — Check emitted bindings and capture order
+
+Compare TypeScript shadowing cases against the pinned Bun transpiler. A type-only namespace can
+vanish entirely, while a class name parsed as a type identifier still binds a runtime value.
+Check direct calls on both sides of a replacement and verify the helper captured by a later
+alias before recording its writes. Charge execution-scope lookup to the command budget and
+reuse sibling results, including when testing whether a call can mutate a builtin.
+
+Read a method after evaluating its receiver. Resolve ordinary writes and assign helpers against
+the same capture evidence, including writes in closures. Rebuilding every alias for each unrelated
+member write exhausted the node budget on a flat preset. Batch the writes and recheck only their
+receiver and callee dependencies before the final effect comparison.
+
+Exercise both skipped and evaluated arguments when checking optional calls. In a destructuring
+fixture, place the loader call before and after the target that replaces it, and in the input
+itself. These positions observe different values even when the call appears earlier in the file.
+For ambient named exports, check the local declaration as well as the export spelling.
+Pair a dependency in an `if` condition with the same dependency in its conditional body. For
+receiver writes, contrast an unused function that could replace the receiver with a preceding
+unconditional replacement. Check whether the assigned value is distinct and whether another
+write could restore the original before the next use. Test restoration on both sides of that use.
+Compare equivalent array and object patterns, and exercise a dependency from both a try body and
+its finalizer. A local function declaration needs the same replacement check as an inline function,
+including a control where the declared name has been reassigned.
+For destructuring, pair numeric keys that collide with ones that do not. A rest target receives a
+fresh value, and a definitely defined literal input skips its default. Check both cases against a
+write that actually restores the original global object.
+
 ## 2026-11-05 — Budget binding lookup, not only the syntax walk
 
 Deep blocks with many `var` declarations repeatedly searched the same ancestors. Namespace-aware

@@ -16,10 +16,10 @@ sidebar_position: 3
 ## 先查看，再执行
 
 ```bash
-shine sys list                 # 查看当前平台的系统项目
-shine sys list --all           # 包括其他平台的项目
+shine sys list
+shine sys list --all
 shine sys info split-dns
-shine sys bootstrap --dry-run  # 预览初始化，不修改系统
+shine sys bootstrap --dry-run
 ```
 
 `--dry-run` 会显示选择结果、provider/脚本调用，以及每个将持久加载的 item-owned shell 集成，但不执行变更。某些初始化项目需要管理员权限或额外环境变量，`shine sys info <ITEM>` 会列出要求。
@@ -31,15 +31,15 @@ shine sys bootstrap --dry-run  # 预览初始化，不修改系统
 
 按需选择一种初始化方式；使用 `--yes` 前先审阅 Plan：
 
-```bash
-shine sys bootstrap                                # 交互选择项目
-shine sys bootstrap mise                           # 仅初始化 mise
-shine sys bootstrap rust mise                      # 按顺序初始化这两个项目
-shine sys bootstrap --item rust --item mise --yes  # 显式指定项目并非交互批准
-shine sys bootstrap --preset recommended           # 使用 recommended 配置组合
-shine sys bootstrap --preset minimal               # 使用 minimal 配置组合
-shine sys bootstrap --proxy --dry-run              # 使用代理设置预览
-```
+| 操作 | 命令 |
+| --- | --- |
+| 交互选择项目 | `shine sys bootstrap` |
+| 仅初始化 mise | `shine sys bootstrap mise` |
+| 按顺序初始化这两个项目 | `shine sys bootstrap rust mise` |
+| 显式指定项目并非交互批准 | `shine sys bootstrap --item rust --item mise --yes` |
+| 使用 recommended 配置组合 | `shine sys bootstrap --preset recommended` |
+| 使用 minimal 配置组合 | `shine sys bootstrap --preset minimal` |
+| 使用代理设置预览 | `shine sys bootstrap --proxy --dry-run` |
 
 - 位置参数 item ID 只引导这些项目，保留输入顺序，并忽略重复项。
 - 重复使用 `--item` 是供脚本与 setup orchestrator 使用的等价显式写法。
@@ -132,11 +132,11 @@ selection profile 也不是软件或 shell 配置的 desired-state 替换集合�
 
 禁用前先预览，仅在需要时重新启用：
 
-```bash
-shine sys profile disable mise --dry-run  # 预览禁用集成
-shine sys profile disable mise            # 禁用 shell 集成
-shine sys profile enable mise             # 重新启用 shell 集成
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览禁用集成 | `shine sys profile disable mise --dry-run` |
+| 禁用 shell 集成 | `shine sys profile disable mise` |
+| 重新启用 shell 集成 | `shine sys profile enable mise` |
 
 声明式 PATH 集成只会添加尚不存在的目录；重复加载生成的 profile 不会追加相同条目，
 包含空格或 shell 模式字符的路径也按字面值匹配。
@@ -162,15 +162,15 @@ profile 命令会区分改动完成、已经启用或禁用，以及 `needs acti
 按需选择操作，应用或移除前先预览。只有审阅同一 Plan 后才使用 `--yes`；
 恢复命令仅用于处理中断的操作。
 
-```bash
-shine sys apply --dry-run
-shine sys apply split-dns
-shine sys apply split-dns --yes  # 非交互批准
-shine sys uninstall split-dns --dry-run
-shine sys uninstall split-dns
-shine sys recover                # 审阅中断的受管操作
-shine sys recover --yes          # 非交互批准
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览改动 | `shine sys apply --dry-run` |
+| 应用 split-dns | `shine sys apply split-dns` |
+| 非交互批准 | `shine sys apply split-dns --yes` |
+| 预览移除 | `shine sys uninstall split-dns --dry-run` |
+| 审阅后移除 | `shine sys uninstall split-dns` |
+| 审阅中断的受管操作 | `shine sys recover` |
+| 非交互批准 | `shine sys recover --yes` |
 
 对于受管系统项目，`shine update` 比较期望配置与安装记录，`shine upgrade` 还会检查实际系统资源。
 在 Windows 上，如果 split-DNS 的 NRPT 规则与安装记录、期望配置都一致，就不需要更新或管理员权限。

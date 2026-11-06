@@ -13,11 +13,11 @@ desktop application. Inspect and preview before applying to confirm destinations
 permissions:
 
 ```bash
-shine shell list      # List Shell presets
-shine app list        # List App presets
+shine shell list
+shine app list
 shine app info ghostty
 shine app install ghostty --dry-run
-shine sys list --all  # Include other platforms
+shine sys list --all
 shine sys info split-dns
 ```
 

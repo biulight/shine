@@ -15,7 +15,7 @@ permissions, and restart requirements.
 ## Browse and preview
 
 ```bash
-shine app list  # List App presets
+shine app list
 shine app info starship
 shine app install starship --dry-run
 ```
@@ -29,9 +29,13 @@ Install once, then check and apply updates when needed:
 
 ```bash
 shine app install starship
-# Equivalent: shine install app/starship
-shine update   # Check for updates without applying them
-shine upgrade  # Apply updates to installed configuration
+```
+
+The equivalent target form is `shine install app/starship`.
+
+```bash
+shine update
+shine upgrade
 ```
 
 `shine update` compares installed results with presets and reports status without applying it.
@@ -74,10 +78,10 @@ for the complete author workflow.
 
 ## Uninstall and restore
 
-```bash
-shine app uninstall starship --dry-run  # Preview removal
-shine app uninstall starship            # Apply only after reviewing the preview
-```
+| Operation | Command |
+| --- | --- |
+| Preview removal | `shine app uninstall starship --dry-run` |
+| Apply only after reviewing the preview | `shine app uninstall starship` |
 
 Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a Plan before making
 changes. The prompt defaults to No. Use command-level `--yes` only after reviewing the same scope in
@@ -158,12 +162,12 @@ current. Use `--run-generators` to execute the selected generators explicitly an
 
 Choose one inspection scope; these commands execute generators:
 
-```bash
-shine app info surge --run-generators           # Evaluate generators and inspect status
-shine info app/surge --run-generators --diff    # Evaluate and inspect differences
-shine update app/surge --run-generators --diff  # Check this App with generator evaluation
-shine update --run-generators                   # Evaluate all installed App categories
-```
+| Operation | Command |
+| --- | --- |
+| Evaluate generators and inspect status | `shine app info surge --run-generators` |
+| Evaluate and inspect differences | `shine info app/surge --run-generators --diff` |
+| Check this App with generator evaluation | `shine update app/surge --run-generators --diff` |
+| Evaluate all installed App categories | `shine update --run-generators` |
 
 The global form evaluates generators for every installed App category; the targeted forms evaluate
 only the selected App. Both automatic and `auto = false` manual generators participate because the
@@ -189,10 +193,10 @@ Automatic generators may also run during an approved install or upgrade. A manua
 
 Choose a category-wide or single-file refresh:
 
-```bash
-shine app refresh <CATEGORY>                # Refresh manual outputs in the category
-shine app refresh <CATEGORY> <SOURCE_FILE>  # Refresh only the selected source
-```
+| Operation | Command |
+| --- | --- |
+| Refresh all tracked automatic and manual outputs | `shine app refresh <CATEGORY>` |
+| Refresh only the selected source | `shine app refresh <CATEGORY> <SOURCE_FILE>` |
 
 `SOURCE_FILE` is the relative `[[files]].source` path. A failed refresh preserves the last successful
 content. A user-modified destination is also preserved unless you explicitly add `--force`.
@@ -203,9 +207,10 @@ must add `--yes`.
 When a Security Plan lists external or overlay code, answering `yes` authorizes the listed code
 for this Plan only. The compact analysis lists entries together when they share a script and
 identical advisory findings. Use `--verbose` to inspect each entry separately.
-Automation and `--run-generators` inspection require a matching `shine trust grant app/<CATEGORY>`
-after review. Generators receive declared environment inputs and fixed `SHINE_APP_*` path variables;
-execution time and output size are limited. Run only presets you trust.
+For automation or `--run-generators`, review every capability listed by
+`shine trust inspect app/<CATEGORY>`. Confirming `shine trust grant app/<CATEGORY>` trusts all
+listed generators, hooks, and artifacts for that snapshot. Generators receive declared environment
+inputs and fixed `SHINE_APP_*` path variables. Execution time and output size are limited. Run only presets you trust.
 
 Permission declarations help you review a preset; they do not sandbox its code. Never include
 secret values or credentials in those declarations. See
@@ -409,11 +414,11 @@ Interactive lifecycle confirmation can instead authorize only the current operat
 Inspect the target first, then choose snapshot or development trust.
 Development trust also authorizes future code changes; use it only when you intend that scope.
 
-```bash
-shine trust inspect app/<CATEGORY>              # Inspect without granting trust
-shine trust grant app/<CATEGORY>                # Grant snapshot trust
-shine trust grant app/<CATEGORY> --development  # Trust future changes
-```
+| Operation | Command |
+| --- | --- |
+| Inspect without granting trust | `shine trust inspect app/<CATEGORY>` |
+| Grant snapshot trust | `shine trust grant app/<CATEGORY>` |
+| Trust future changes | `shine trust grant app/<CATEGORY> --development` |
 
 `trust inspect` shows what needs authorization without granting trust. Snapshot trust binds the complete
 effective App category, including helper and data files. Use `--development` only when you intend

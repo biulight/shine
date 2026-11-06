@@ -34,7 +34,7 @@ cargo install shine-cli
 已有 Shine 安装可以显式切换到 stable 通道：
 
 ```bash
-shine self upgrade --channel stable  # 重新安装最新稳定版，也可从 preview 切回
+shine self upgrade --channel stable
 ```
 
 `shine self upgrade --channel preview` 会改为跟随持续覆盖的 preview 构建，而不是稳定版。
@@ -91,10 +91,10 @@ shine sys profile disable <ITEM>
 
 先检查旧 runtime 和 environment 状态，再应用迁移：
 
-```bash
-shine state migrate --dry-run  # 预览旧状态迁移
-shine state migrate            # 审阅预览后应用迁移
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览旧状态迁移 | `shine state migrate --dry-run` |
+| 审阅预览后应用迁移 | `shine state migrate` |
 
 旧 App、Shell 和 Sys 安装仍可读取，也能直接升级或移除，无需先重新安装。被用户修改或不属于
 Shine 的命令入口和用户文件会保留并报告，不会覆盖。
@@ -117,9 +117,13 @@ shine sys recover
 首次升级配置前，先审阅当前激活的 1.x external source 与 overlay：
 
 ```bash
-shine preset migrate --dry-run  # 预览当前外部预设源的迁移
+shine preset migrate --dry-run
 shine preset migrate
-# 审阅同一来源后用于自动化：
+```
+
+审阅同一来源后用于自动化：
+
+```bash
 shine preset migrate --yes
 ```
 

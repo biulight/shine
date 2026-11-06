@@ -208,9 +208,9 @@ leave historical major versions unchanged.
 
 ### Command examples
 
-Put short purposes and option differences in trailing comments when the example language supports
-comments (`#` in Bash, Zsh, and PowerShell). Keep prerequisites, risks, and longer explanations in
-prose; readers must see execution prerequisites and destructive effects before the command block.
+Keep explanations outside commands intended for interactive shells. Default interactive Zsh passes
+`#` and subsequent words as arguments. Use prose for sequences and a purpose/command table for
+alternatives. Explain prerequisites and destructive effects before the command.
 Do not repeat the same short explanation in a paragraph below the block, or annotate obvious
 single commands merely for uniformity.
 
@@ -220,5 +220,5 @@ consecutive steps. For real workflows, preserve the order and explicit review bo
 preview and mutation. Retain local/remote and shell-specific labels where execution context changes.
 Keep comments short and readable in both locales. Never append a comment after a shell continuation
 backslash, inside a quoted argument, or to a format that has no comment syntax; use a preceding
-comment or prose for multiline commands. Check that edits preserve executable arguments and do not
+explanation outside the code block for multiline commands. Check that edits preserve executable arguments and do not
 turn examples into automatic approval or execution instructions.

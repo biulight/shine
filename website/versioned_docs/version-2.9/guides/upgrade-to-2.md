@@ -36,7 +36,7 @@ cargo install shine-cli
 An existing Shine installation can switch explicitly to the stable channel:
 
 ```bash
-shine self upgrade --channel stable  # Reinstall latest stable; also return from preview
+shine self upgrade --channel stable
 ```
 
 `shine self upgrade --channel preview` follows the continuously replaced preview build instead of
@@ -96,10 +96,10 @@ shine sys profile disable <ITEM>
 
 Inspect legacy runtime and environment state before applying its migration:
 
-```bash
-shine state migrate --dry-run  # Preview legacy-state migration
-shine state migrate            # Apply after reviewing the preview
-```
+| Operation | Command |
+| --- | --- |
+| Preview legacy-state migration | `shine state migrate --dry-run` |
+| Apply after reviewing the preview | `shine state migrate` |
 
 Legacy App, Shell, and Sys installations remain readable and can be upgraded or removed without
 reinstalling first. Modified or foreign command entries and user-owned files are preserved and
@@ -124,9 +124,13 @@ backups, or recovery files remain untouched for manual review.
 Review active 1.x external sources and overlays before the first configuration upgrade:
 
 ```bash
-shine preset migrate --dry-run  # Preview active external sources
+shine preset migrate --dry-run
 shine preset migrate
-# For automation after reviewing the same source:
+```
+
+For automation after reviewing the same source:
+
+```bash
 shine preset migrate --yes
 ```
 

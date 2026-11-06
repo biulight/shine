@@ -2718,6 +2718,8 @@ fn compact_update_groups_shared_generator_reports_and_verbose_keeps_each_entry()
         "config.txt",
         "manual.txt",
         "Static analysis could not verify a dependency, 2 calls, and a network target.",
+        "shine trust inspect app/demo",
+        "every listed generator, hook and artifact",
         "shine trust grant app/demo",
         "--verbose",
     ] {

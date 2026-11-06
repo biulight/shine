@@ -21,12 +21,12 @@ an upgrade, coordinate both peers before running it.
 
 Choose one connection example:
 
-```bash
-shine ssh user@example.com           # Open an interactive remote shell
-shine ssh -p 2222 user@example.com   # Use a custom SSH port
-shine ssh user@2001:db8::1           # Connect to an IPv6 address
-shine ssh user@example.com uname -a  # Run one remote command
-```
+| Operation | Command |
+| --- | --- |
+| Open an interactive remote shell | `shine ssh user@example.com` |
+| Use a custom SSH port | `shine ssh -p 2222 user@example.com` |
+| Connect to an IPv6 address | `shine ssh user@2001:db8::1` |
+| Run one remote command | `shine ssh user@example.com uname -a` |
 
 Shine forwards the supplied SSH arguments to the system `ssh`. In a remote shell it sets variables
 needed by the session; transfer commands must run inside that shell.
@@ -45,11 +45,11 @@ Place forwarding options before the SSH target:
 
 Choose one forwarding method:
 
-```bash
-shine ssh --with API_URL dev                                        # Forward a plain variable
-shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'  # Rename the forwarded variable
-shine ssh --with-secret API_TOKEN dev                               # Forward a decrypted secret
-```
+| Operation | Command |
+| --- | --- |
+| Forward a plain variable | `shine ssh --with API_URL dev` |
+| Rename the forwarded variable | `shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'` |
+| Forward a decrypted secret | `shine ssh --with-secret API_TOKEN dev` |
 
 `--with` reads only the exact plaintext `[env]` key and never decrypts `KEY_SECRET` automatically.
 Use `--with-secret KEY[=ALIAS]` explicitly for decryption. Values exist only in the remote process
@@ -254,13 +254,13 @@ Inside a remote shell opened by `shine ssh`:
 
 Choose one download example. Preview the destination before allowing replacement; SCP may overwrite existing files even without `--force`.
 
-```bash
-shine local download ./logs/app.log                                 # Download to the local starting directory
-shine local download ./logs/app.log ./downloaded/app.log --dry-run  # Preview destination
-shine local download ./logs/app.log ./downloaded/app.log --force    # Allow replacement at the destination
-shine local download ./logs/app.log --scp                           # Use SCP directly
-shine local download ./dist ./dist-copy                             # Download a directory
-```
+| Operation | Command |
+| --- | --- |
+| Download to the local starting directory | `shine local download ./logs/app.log` |
+| Preview destination | `shine local download ./logs/app.log ./downloaded/app.log --dry-run` |
+| Allow replacement at the destination | `shine local download ./logs/app.log ./downloaded/app.log --force` |
+| Use SCP directly | `shine local download ./logs/app.log --scp` |
+| Download a directory | `shine local download ./dist ./dist-copy` |
 
 The remote side resolves the source; the local side resolves the destination. Without a destination,
 the item is placed in the local directory from which `shine ssh` started, using the source name.
@@ -286,11 +286,11 @@ Still inside the remote shell:
 
 Preview first; choose a file or directory transfer as needed. Use `--force` only when replacement is intended.
 
-```bash
-shine local upload ./release.tar.gz /tmp/release.tar.gz --dry-run  # Preview upload
-shine local upload ./release.tar.gz /tmp/release.tar.gz --force    # Allow replacement at the destination
-shine local upload ./site /tmp/site                                # Upload a directory
-```
+| Operation | Command |
+| --- | --- |
+| Preview upload | `shine local upload ./release.tar.gz /tmp/release.tar.gz --dry-run` |
+| Allow replacement at the destination | `shine local upload ./release.tar.gz /tmp/release.tar.gz --force` |
+| Upload a directory | `shine local upload ./site /tmp/site` |
 
 The local side resolves the source and the remote side resolves the destination. Without a
 destination, Shine places it in the remote current directory using the source name. Directory upload

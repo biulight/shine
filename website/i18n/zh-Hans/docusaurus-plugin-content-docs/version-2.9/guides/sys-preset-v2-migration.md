@@ -109,7 +109,7 @@ shine preset overlay link ./my-presets
 在目标操作系统上检查 Shine 实际读取到的安装项：
 
 ```bash
-shine sys list  # 查看当前平台的系统项目
+shine sys list
 shine sys info neovim
 shine sys bootstrap neovim --dry-run
 ```

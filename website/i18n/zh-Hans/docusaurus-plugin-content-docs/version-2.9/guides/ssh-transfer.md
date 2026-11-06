@@ -19,12 +19,12 @@ Shine 通道报告协议版本不匹配时，升级本地或远端较旧的 Shin
 
 按需选择一种连接方式：
 
-```bash
-shine ssh user@example.com           # 打开交互远端 shell
-shine ssh -p 2222 user@example.com   # 指定 SSH 端口
-shine ssh user@2001:db8::1           # 连接 IPv6 地址
-shine ssh user@example.com uname -a  # 运行一条远端命令
-```
+| 操作 | 命令 |
+| --- | --- |
+| 打开交互远端 shell | `shine ssh user@example.com` |
+| 指定 SSH 端口 | `shine ssh -p 2222 user@example.com` |
+| 连接 IPv6 地址 | `shine ssh user@2001:db8::1` |
+| 运行一条远端命令 | `shine ssh user@example.com uname -a` |
 
 `shine ssh` 会把你提供的 SSH 参数传给系统 `ssh`。进入远端 shell 后，Shine 会设置本次会话需要的环境变量；传输命令必须在这个远端 shell 中运行。
 会话初始化或启动 SSH 失败时，Shine 会自动清理未完成的会话。
@@ -42,11 +42,11 @@ Windows 可以作为本机端发起这种传输会话。Windows 作为远端时�
 
 按需选择一种转发方式：
 
-```bash
-shine ssh --with API_URL dev                                        # 转发普通变量
-shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'  # 重命名转发变量
-shine ssh --with-secret API_TOKEN dev                               # 转发解密后的密钥
-```
+| 操作 | 命令 |
+| --- | --- |
+| 转发普通变量 | `shine ssh --with API_URL dev` |
+| 重命名转发变量 | `shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'` |
+| 转发解密后的密钥 | `shine ssh --with-secret API_TOKEN dev` |
 
 `--with` 只读取完全同名的明文 `[env]` 键，不会自动解密 `KEY_SECRET`；需要解密时必须显式使用 `--with-secret KEY[=ALIAS]`。值只写入远端进程环境，不写远端配置文件，但远端 shell 启动文件仍可能再次覆盖同名变量。
 
@@ -226,13 +226,13 @@ PowerShell 的正常 profile，因此 Shine 管理的 `PATH` 和 source-command 
 
 按需选择一种下载方式。允许覆盖前先预览目标；SCP 即使不带 `--force` 也可能覆盖已有文件。
 
-```bash
-shine local download ./logs/app.log                                 # 下载到本地连接起始目录
-shine local download ./logs/app.log ./downloaded/app.log --dry-run  # 预览目标路径
-shine local download ./logs/app.log ./downloaded/app.log --force    # 允许覆盖目标文件
-shine local download ./logs/app.log --scp                           # 直接使用 SCP
-shine local download ./dist ./dist-copy                             # 下载目录
-```
+| 操作 | 命令 |
+| --- | --- |
+| 下载到本地连接起始目录 | `shine local download ./logs/app.log` |
+| 预览目标路径 | `shine local download ./logs/app.log ./downloaded/app.log --dry-run` |
+| 允许覆盖目标文件 | `shine local download ./logs/app.log ./downloaded/app.log --force` |
+| 直接使用 SCP | `shine local download ./logs/app.log --scp` |
+| 下载目录 | `shine local download ./dist ./dist-copy` |
 
 `download` 的来源路径由远端解析，目标路径由本机解析。未指定目标时，Shine 会把文件或目录放到本机启动 `shine ssh` 时所在目录，并沿用来源名称。
 
@@ -254,11 +254,11 @@ shine local upload './release notes.txt' '/tmp/release files'
 
 先预览，再按需选择文件或目录传输。只有明确需要覆盖时才使用 `--force`。
 
-```bash
-shine local upload ./release.tar.gz /tmp/release.tar.gz --dry-run  # 预览上传
-shine local upload ./release.tar.gz /tmp/release.tar.gz --force    # 允许覆盖目标文件
-shine local upload ./site /tmp/site                                # 上传目录
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览上传 | `shine local upload ./release.tar.gz /tmp/release.tar.gz --dry-run` |
+| 允许覆盖目标文件 | `shine local upload ./release.tar.gz /tmp/release.tar.gz --force` |
+| 上传目录 | `shine local upload ./site /tmp/site` |
 
 `upload` 的来源路径由本机解析，目标路径由远端解析。未指定目标时，Shine 会把文件或目录放到远端当前目录，并沿用来源名称。
 

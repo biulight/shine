@@ -30,8 +30,12 @@ Cursor 等客户端的配置。
 ```bash
 mkdir -p my-presets/app/my-editor
 cd my-presets/app/my-editor
-shine preset new app  # 创建 App 模板
-# 添加配置文件并编辑 shine.toml。
+shine preset new app
+```
+
+添加配置文件并编辑 shine.toml。
+
+```bash
 shine preset validate . --format json
 shine preset lint . --format json
 shine preset plan . --platform macos --format json
@@ -42,11 +46,11 @@ shine preset test . --format json
 
 选择类别类型，只执行对应命令：
 
-```bash
-shine preset new app --unrestricted    # 创建带作者声明的 App 模板
-shine preset new shell --unrestricted  # 创建带作者声明的 Shell 模板
-shine preset new sys --unrestricted    # 创建带作者声明的 Sys 模板
-```
+| 操作 | 命令 |
+| --- | --- |
+| 创建带作者声明的 App 模板 | `shine preset new app --unrestricted` |
+| 创建带作者声明的 Shell 模板 | `shine preset new shell --unrestricted` |
+| 创建带作者声明的 Sys 模板 | `shine preset new sys --unrestricted` |
 
 无论是否使用该选项，所有任意代码都未隔离。该选项不会跳过 trust、安全 Plan、管理员授权、
 所有权检查或显式环境输入。
@@ -133,11 +137,11 @@ fixture 报告使用 schema 2。Fixture 输入仍为 schema 1；可用 `expect.a
 
 可预览当前激活的 external source 与 overlay，也可以指定仓库、类别或 manifest：
 
-```bash
-shine preset migrate --dry-run               # 预览当前外部预设源的迁移
-shine preset migrate ./my-presets --dry-run  # 预览指定预设源的迁移
-shine preset migrate ./my-presets            # 审阅预览后应用迁移
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览当前外部预设源的迁移 | `shine preset migrate --dry-run` |
+| 预览指定预设源的迁移 | `shine preset migrate ./my-presets --dry-run` |
+| 审阅预览后应用迁移 | `shine preset migrate ./my-presets` |
 
 确认前请审阅元数据差异，默认回答为 No。迁移仅修改 `shine.toml`，并在写入前备份；不会修改
 脚本、数据文件、环境值、已安装资源或信任。提示需要手动迁移的条目须自行处理；
@@ -220,11 +224,11 @@ Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值�
 先检查目标，再选择快照信任或开发信任。
 开发信任也会授权未来的代码变更，仅在你明确接受此范围时使用。
 
-```bash
-shine trust inspect <TARGET>              # 仅检查，不授予信任
-shine trust grant <TARGET>                # 授予快照信任
-shine trust grant <TARGET> --development  # 信任未来的代码变更
-```
+| 操作 | 命令 |
+| --- | --- |
+| 仅检查，不授予信任 | `shine trust inspect <TARGET>` |
+| 授予快照信任 | `shine trust grant <TARGET>` |
+| 信任未来的代码变更 | `shine trust grant <TARGET> --development` |
 
 Snapshot trust 适用于已审阅的目标及有效类别内容。文件、元数据、来源层或可执行权限变化后，
 需要重新审阅。该授权不保证 `node_modules` 等依赖、解释器、外部工具及下载内容的安全。
@@ -246,12 +250,12 @@ Preset trust grant：
 先检查目标，再按需选择一种授权或撤销操作。
 开发信任也会授权未来的代码变更，仅在你明确接受此范围时使用。
 
-```bash
-shine trust inspect preset              # 仅检查，不授予信任
-shine trust grant preset                # 授予快照信任
-shine trust grant preset --development  # 信任未来的代码变更
-shine trust revoke preset               # 撤销信任
-```
+| 操作 | 命令 |
+| --- | --- |
+| 仅检查，不授予信任 | `shine trust inspect preset` |
+| 授予快照信任 | `shine trust grant preset` |
+| 信任未来的代码变更 | `shine trust grant preset --development` |
+| 撤销信任 | `shine trust revoke preset` |
 
 旧授权若提示需要重新审阅，就不能批准新操作。请审阅后重新授权。
 
@@ -333,8 +337,12 @@ Overlay 按相同相对路径覆盖基础预设，也可以增加新类别：
 ```bash
 shine preset overlay link ~/dotfiles/shine-overlay --create
 shine preset overlay info
-# 不再使用此 overlay 时再执行：
-shine preset overlay unlink  # 解除 overlay 关联
+```
+
+不再使用此 overlay 时再执行：
+
+```bash
+shine preset overlay unlink
 ```
 
 `preset link` 和 `preset overlay link` 的本地路径（包括解析符号链接后的目标）必须是有效的
@@ -357,7 +365,7 @@ Git 托管 overlay 属于全局配置。请在不受任何 `shine.config.toml` �
 
 ```bash
 shine preset overlay link --git https://example.com/team/shine-overlay.git --branch main
-shine preset pull  # 仅拉取预设源
+shine preset pull
 shine preset overlay info
 ```
 
@@ -476,11 +484,11 @@ shine init
 
 按需选择一种拉取或更新操作：
 
-```bash
-shine preset pull     # 仅拉取预设源
-shine update --pull   # 拉取后检查更新
-shine upgrade --pull  # 拉取后更新配置
-```
+| 操作 | 命令 |
+| --- | --- |
+| 仅拉取预设源 | `shine preset pull` |
+| 拉取后检查更新 | `shine update --pull` |
+| 拉取后更新配置 | `shine upgrade --pull` |
 
 Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源属于同一仓库时只拉取一次，非 Git 来源会跳过。`update --pull` 和 `upgrade --pull` 会在拉取后重新加载配置，因此仓库中更新的 `shine.config.toml` 也会在后续步骤生效。
 
@@ -498,11 +506,11 @@ Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源
 
 选择类别类型，只执行对应命令：
 
-```bash
-shine preset new app    # 创建 App 模板
-shine preset new shell  # 创建 Shell 模板
-shine preset new sys    # 创建 Sys 模板
-```
+| 操作 | 命令 |
+| --- | --- |
+| 创建 App 模板 | `shine preset new app` |
+| 创建 Shell 模板 | `shine preset new shell` |
+| 创建 Sys 模板 | `shine preset new sys` |
 
 已有文件时只有加上 `--force` 才会覆盖。未指定时会拒绝已有目录项（包括悬空符号链接），
 并发创建也不会互相覆盖。类别格式属于预设作者接口，修改后先运行
@@ -552,10 +560,10 @@ generator 的 `when_env` 仍填写其 `env` 列表中的来源名称，继续作
 预设元数据不再接受 `env = ["SOURCE=TARGET"]` 等旧字符串数组。相关命令会提示迁移，其他命令不会
 自动迁移文件。请显式预览并应用转换：
 
-```bash
-shine preset migrate ./my-presets --dry-run  # 预览指定预设源的迁移
-shine preset migrate ./my-presets            # 审阅预览后应用迁移
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览指定预设源的迁移 | `shine preset migrate ./my-presets --dry-run` |
+| 审阅预览后应用迁移 | `shine preset migrate ./my-presets` |
 
 迁移读取旧声明中的显式敏感性，保留别名和条件，并在写入前备份元数据。缺少或冲突的敏感性需要人工
 修正。Git 管理的 overlay 必须在上游 checkout 中迁移。迁移不会运行脚本、解密值、授予信任或更新

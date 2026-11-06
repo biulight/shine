@@ -10,10 +10,10 @@ sidebar_position: 3
 ## 1. 查看可用预设
 
 ```bash
-shine shell list        # 查看 Shell 预设
-shine app list          # 查看 App 预设
-shine sys list          # 查看当前平台的系统项目
-shine list --available  # 查看所有类型的可用资源
+shine shell list
+shine app list
+shine sys list
+shine list --available
 ```
 
 `list --available` 也可追加 `app`、`shell` 或 `sys` 过滤。
@@ -22,8 +22,9 @@ shine list --available  # 查看所有类型的可用资源
 
 ```bash
 shine shell install proxy
-# 等价的规范 target 写法：shine install shell/proxy
 ```
+
+等价的目标写法是 `shine install shell/proxy`。
 
 Shine 通过 `~/.shine/bin/` 提供这些命令，并将该目录加入支持的 shell profile。
 
@@ -34,8 +35,9 @@ Shine 通过 `~/.shine/bin/` 提供这些命令，并将该目录加入支持的
 
 ```bash
 source ~/.zshrc
-# bash 用户使用：source ~/.bashrc
 ```
+
+Bash 用户请运行 `source ~/.bashrc`。
 
 PowerShell 用户可重新打开终端，确保更新后的 profile 生效。
 
@@ -43,8 +45,8 @@ PowerShell 用户可重新打开终端，确保更新后的 profile 生效。
 
 ```bash
 setproxy
-shine list              # 查看已安装资源
-shine info shell/proxy  # 查看命令、入口和来源
+shine list
+shine info shell/proxy
 ```
 
 脚本中使用完整 target `shell/proxy`，裸名称只在 app 与 shell 类别之间唯一时才可使用。
@@ -58,7 +60,7 @@ usetproxy
 ## 4. 安全预览卸载
 
 ```bash
-shine shell uninstall proxy --dry-run  # 预览卸载类别
+shine shell uninstall proxy --dry-run
 ```
 
 确认输出后去掉 `--dry-run` 即可执行。Shine 只移除自身管理的脚本、命令入口和相关 profile 片段。
