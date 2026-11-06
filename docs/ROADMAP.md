@@ -11,20 +11,21 @@
 
 > A trusted lifecycle runtime for portable personal capabilities.
 
-短期先把 Preset、生命周期、安全模型和 Core API 做扎实；下一步先建立 CLI、AI adapter 和 UI
-共同复用的 Frontend Service，再通过受限 AI 集成和可信人类界面降低使用门槛。每个 Phase 都应可
-独立发布，只有满足 exit criteria 后才进入下一阶段。
+CLI 已通过共享 Frontend Service 审查和执行 Preset 生命周期操作。下一步要验证的是：哪些实际任务
+需要本地 CLI 与作者 Skill 之外的入口？后续 AI adapter 和可信人类界面复用同一服务，各阶段按自己的
+exit criteria 独立验收。
 
 ## Current Baseline
 
+本节描述当前实现。相对稳定版 `v2.9.0` 的增量将随下一版本一起发布。
+
 - Phase 1、Phase 2 的 lifecycle contract 与 Core extraction 已完成；App、Shell、Sys 的领域执行、
   manifest/receipt 和 host ports 由 `shine-core` 持有，CLI 保留参数、交互和展示。
-- Phase 3 已完成：所有 mutation 均使用 snapshot-bound security Plan；外部 App/Sys 代码使用绑定
-  target、capability、code digest、trust layer 与 permission set 的 scoped trust grant。
-- `shine preset validate` 与 skill-first AI authoring 已存在，应继续作为 schema 和静态验证权威。
+- Phase 3 已完成：受 Plan 管理的生命周期操作按 snapshot 审批。Core 推导受管操作的权限，
+  单独评估外部代码信任；支持的 App Bun 入口还须通过声明与代码的静态检查。
+- `shine-preset-author` Skill 调用本地 CLI 起草和检查 Preset，`shine preset validate` 提供权威静态验证。
 - Read-oriented App status/update 默认不运行 generator；开发者可通过 `--run-generators` 显式执行并
-  在内存中检查最终内容，写入仍只发生在显式 refresh 或已批准 mutation。GPG/age portable
-  secrets 和 machine-local env 已存在。
+  在内存中检查最终内容。外部或 overlay generator 的显式检查需要匹配的持久信任。
 - Phase 4 已收口：App 静态 Copy 与 key-owned JSON 的 create/update/relocate/remove，Shell 的
   launcher、cache、snapshot、rendered output 与 profile sentinel，以及 managed Sys file、split-DNS
   与显式 Sys profile sentinel 均已接入版本化 Action IR、domain operation journal、receipt/positive
@@ -45,14 +46,18 @@
   operation state、安全 events 和 lifecycle/recovery execution。CLI 已接入共享批准与执行入口；
   受限只读 facade 不持有运行时或批准权限。一次性批准保留完整 reviewed request，conformance
   fixtures 覆盖普通、专用和恢复操作及失效边界。`CoreRuntime` 继续是 workspace-internal。
+- 生命周期 Plan、approval 与 review 使用 schema v4。除已有的 GPG/age portable secrets 和本机 env 外，
+  托管 App secret 文件也有独立的所有权检查和逐文件恢复；通过 SSH broker 交付 secret 文件需要
+  匹配本地授权策略。后续前端须保留这些授权与恢复边界，见
+  [ADR 0158](kb/decisions/0158-managed-app-secret-files-and-file-broker.md)。
 
 ## Guiding Principles
 
 ```text
-AI clients ── Skill / MCP ──┐
-CLI ────────────────────────┤
-shine-ui ───────────────────┼── Frontend Service ── shine-core ── OS
-Preset ─────────────────────┘
+Local AI client + author Skill → CLI ──────────┐
+Local MCP adapter (candidate, read-only) ──────┼→ Frontend Service (shine-core)
+shine-ui (planned, human-facing) ──────────────┘        ↓
+                                              Core lifecycle → OS
 ```
 
 - AI proposes; Shine validates and plans; a human approves mutations; Core executes.
@@ -94,18 +99,22 @@ parsing、terminal interaction、formatting、prompts 和 distribution-specific 
 
 ## Phase 3 — Security, Plan and Trust Model
 
-**Outcome:** Preset 显式声明 filesystem、network、commands、administrator、env/secret 和 system
-permissions；所有 mutation 都经过可审查、绑定输入 snapshot 的 Plan 和 approval。
+**Outcome:** 对受 Plan 管理的生命周期操作，用户能审查 Shine 将执行的变更、所需权限和会触发的
+外部代码。批准绑定到具体请求和当时的输入，代码信任按目标与能力单独判断。
 
 **Exit criteria:**
 
-- 每个 operation 都能计算 permission set；未声明或无法计算的权限 fail closed。
+- Core 从受管操作推导权限；无法确定必要权限时阻止执行。脚本作者对文件、网络和命令的声明
+  供审查使用；任意脚本仍可访问其进程权限允许的资源。环境输入与管理员授权按执行契约检查。
+- 对支持的 App Bun 入口，确定的声明差异或分析失败会阻止执行；分析覆盖缺口作为提示。
+  静态检查本身不授予代码信任。
 - Plan 不修改系统、不执行 Preset code，也不暴露 secret plaintext。
-- Apply 只接受同一 source/state snapshot 的 Plan；权限扩大必须重新确认。
+- Apply 重新捕获输入并生成 Plan；配置版本、Plan 指纹或权限与批准不匹配时，须重新审查。
 - 现有 coarse grants 有兼容迁移，升级不能静默扩大授权。
 
-安全 Plan 不运行 generator、hook、artifact 或 bootstrap script；read-oriented status/update 仅在
-显式 `--run-generators` 时执行 generator，且不得写入目标或 manifest。
+可信交互前端可在符合条件的操作中取得仅对本次有效的外部代码同意。自动确认和外部 generator 的
+显式只读检查仍要求匹配的持久信任。参见[代码信任](kb/decisions/0091-derived-code-boundaries-and-author-capability-statements.md)、
+[静态检查](kb/decisions/0150-preset-code-analysis-admission.md)和[App 安装审查与执行流程图](kb/architecture/data-flows.md#frontend-authority-and-execution)。
 
 ## Phase 4 — Declarative Actions and Recovery (Complete)
 
@@ -189,9 +198,11 @@ adapter 只有在 2.0 release gate 和本阶段 conformance gates 同时满足�
 
 ## Phase 7 — Agent Integration and AI Preset Authoring
 
-**Outcome:** 保留 skill-first workflow，并增加受限的 local MCP adapter，将现有 draft、explain、
-validate、repair、permission minimization 和 human review 闭环接入主流 AI clients。Shine 作为这些
-harness 的 capability runtime，而不是自己实现模型编排或 AI shell agent。
+**Status:** 本地作者 Skill 已交付。受限 MCP 是下一候选：出现本地 shell + Skill 难以满足的具体
+客户端工作流后，再确定首个切片；下列 MCP 验收条件在立项后适用。见 [ADR 0033](kb/decisions/0033-skill-first-ai-preset-authoring.md)。
+
+**Outcome:** 保留 skill-first workflow。若 MCP 立项，用受限的本地 adapter 将现有起草、验证、
+修复、最小权限审查和人类确认流程接入有需要的 AI clients。
 
 **Exit criteria:**
 
@@ -256,21 +267,22 @@ Shine 应专注：
 ## Priority and Dependencies
 
 ```text
-P0  Preset model, lifecycle, env/secrets, shine-core     Phase 1–2
-P1  Plan, permissions, validation, trust                Phase 3
-P2  Declarative actions, recovery, Preset DX            Phase 4–5
-DONE Shine 2.0 real-state stabilization                 Completed release gate
-DONE Frontend Service and conformance contract          Phase 6
-NOW Agent Skill + local MCP integration                 Phase 7
-P5  Trusted shine-ui and consumer UX                    Phase 8
-P6  Registry and sharing                                Phase 9
+DONE       Preset model, lifecycle, env/secrets, shine-core    Phase 1–2
+DONE       Plan, permissions, validation, trust                Phase 3
+DONE       Declarative actions, recovery, Preset DX            Phase 4–5
+DONE       Shine 2.0 real-state stabilization                 Release gate
+DONE       Frontend Service and conformance contract          Phase 6
+SHIPPED    Local preset authoring Skill                       Phase 7
+CANDIDATE  Local MCP adapter, pending client need             Phase 7
+PLANNED    Trusted shine-ui and consumer UX                   Phase 8
+PLANNED    Registry and sharing                               Phase 9
 ```
 
 - Phase 2 依赖 Phase 1 的 structured lifecycle seam。
 - Phase 3 必须在任何新的 AI/Registry execution path 之前完成。
 - Phase 4 依赖 Phase 3 的 permission 和 plan model。
-- Phase 6 是真实 lifecycle MCP tools 与 `shine-ui` 的共同前置；read-only contract/prototype 可与 2.0
-  稳定化并行，但 mutation adapter 必须同时通过 release gate 与 conformance gate。
+- Phase 6 已提供真实 lifecycle MCP tools 与 `shine-ui` 的共同前置；新的 mutation adapter
+  仍须通过对应的真实平台验证和 conformance gate。
 - Phase 7 的 authoring-only MCP 可先复用 Phase 5 reports；访问真实 host state 或发起 review request
   的 tools 依赖 Phase 6。
 - Phase 8 可以提前做 UX prototype，但可发布 UI 必须复用 Phase 6 service；不得以 Tauri adapter
@@ -282,7 +294,6 @@ P6  Registry and sharing                                Phase 9
 - Roadmap 是方向与 phase gates，不是 live task list。
 - 具体 deliverables、模块迁移映射和 acceptance tests 放入对应 planning issues 或 PRD。
 - 改变现有设计或安全语义时，用 ADR 更新权威决策；Roadmap 不替代 ADR。
-- Phase 6 implementation 必须先接受 Frontend Service contract ADR；Phase 7/8 adapters 只能扩展该
-  contract，不能为某个 AI client 或 UI 复制 lifecycle semantics。
+- Phase 7/8 adapters 遵循 Phase 6 已接受的 Frontend Service contract；新增审批或执行语义须先更新 ADR。
 - 尚未发布的命令、schema 和 UI 不提前进入 public manual。
 - User-visible release changes 必须同步 English 与 Simplified Chinese manual。
