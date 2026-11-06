@@ -19,7 +19,7 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-本文依据 Shine 2.9.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
+本文依据 Shine 2.10.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
 
 下表列出各平台可用的内置预设。
 
@@ -87,9 +87,9 @@ shine sys info split-dns
 | `docker-desktop` | Windows；`~/AppData/Roaming/Docker/settings-store.json` | 仅 JSON 合并管理 `proxy` 与 `containersProxy` 键；使用模板渲染，完成后重启 Docker Desktop。 |
 | `docker-engine` | Unix：`/etc/docker/daemon.json`；Windows：`~/.docker/daemon.json` | Docker daemon 配置，使用模板和 JSONC 转 JSON；Unix 目标需要管理员权限，完成后重启 Docker Engine。 |
 | `fastfetch` | `~/.config/fastfetch/` | Fastfetch 系统信息配置。 |
-| `ghostty` | Unix；`~/.config/ghostty/` | Ghostty 主配置与内置明暗主题；主题背景可使用 `GHOSTTY_BG_LIGHT`、`GHOSTTY_BG_DARK` 模板变量。 |
+| `ghostty` | Unix；`~/.config/ghostty/` | Ghostty 主配置与内置明暗主题；主题背景可使用 `GHOSTTY_BG_LIGHT`、`GHOSTTY_BG_DARK` 模板变量。Ctrl + `\` 向右新建分屏，Ctrl + `-` 向下新建分屏。Ctrl + H/J/K/L 分别切换到左/下/上/右分屏；解除 Super + [ / ] 的绑定（macOS 上为 Cmd）。切换绑定使用 `performable:`：仅在 Ghostty 能执行切换时接管按键，否则交给终端内的程序处理。 |
 | `git` | `~/.gitconfig` | Git 常用别名和默认配置。安装前会按普通 app 预设规则备份不受管文件。 |
-| `JetBrains` | `~/.ideavimrc` | JetBrains 的 IdeaVim 配置；需要已在 IDE 中启用 IdeaVim 插件。 |
+| `JetBrains` | `~/.ideavimrc` | JetBrains 的 IdeaVim 配置；需要已在 IDE 中启用 IdeaVim 插件。普通模式下，Ctrl + H/J/K/L 分别切换到左/下/上/右编辑器分屏，与 Ghostty 预设保持一致。 |
 | `starship` | `~/.config/starship.toml` | Starship prompt 配置；需要另行安装并在 shell 中启用 Starship。 |
 | `surge` | macOS；`~/Library/Application Support/Surge/Profiles/` | 本地代理、策略组和规则文件，以及可选的 URI 订阅生成文件。需已安装 Surge；生成、刷新和 `app artifact apply/remove` 的 profile `#!include` 流程见[应用配置指南](../guides/app-presets.md#生成式文件与-surge-uri-订阅)。 |
 | `vim` | `~/.vim/` | Vim 基础配置和机器本地覆盖文件。 |

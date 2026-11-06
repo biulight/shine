@@ -19,7 +19,7 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-本文依据 Shine 2.9.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
+本文依据 Shine 2.10.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
 
 下表列出各平台可用的内置预设。
 

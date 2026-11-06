@@ -17,7 +17,7 @@ exit criteria 独立验收。
 
 ## Current Baseline
 
-本节描述当前实现。相对稳定版 `v2.9.0` 的增量将随下一版本一起发布。
+本节以 Shine `2.10.0` 的实现为基线。
 
 - Phase 1、Phase 2 的 lifecycle contract 与 Core extraction 已完成；App、Shell、Sys 的领域执行、
   manifest/receipt 和 host ports 由 `shine-core` 持有，CLI 保留参数、交互和展示。

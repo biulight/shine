@@ -21,7 +21,7 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-This page reflects the built-in `presets/` directory for Shine 2.9.0. For another version, use
+This page reflects the built-in `presets/` directory for Shine 2.10.0. For another version, use
 `shine list --available` and `--help` as the authority.
 
 The table below shows platform availability.

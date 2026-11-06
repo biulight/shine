@@ -18,6 +18,14 @@ When upgrading from **1.x**, also read [Upgrade from Shine 1.x](./upgrade-to-2.m
 This page covers advance preparation and manual migration. For new features and fixes, see
 [Release notes](https://github.com/biulight/shine/releases).
 
+## Review external App presets when moving to 2.10 {#upgrade-to-shine-210}
+
+If you maintain App presets with Bun scripts, use Shine 2.10 to run
+`shine preset lint ./my-presets` before using them in automation. Shine can now recognize
+undeclared access that 2.9 missed, such as a read through a saved `Bun.file` handle.
+For each blocking finding, correct the script or declare the access it needs, then run lint
+again. See [App code checks](./custom-presets.md#check-app-code-before-execution).
+
 ## From 2.6.x or earlier: Preset environment inputs {#upgrade-to-shine-27}
 
 When upgrading from 2.6 or earlier, review these compatibility changes before updating external

@@ -28,7 +28,7 @@ shine --version
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.9.0 sh install.sh
+SHINE_VERSION=2.10.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -41,7 +41,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.9.0"; .\install.ps1
+$env:SHINE_VERSION = "2.10.0"; .\install.ps1
 ```
 
 ## 安装 preview
@@ -136,5 +136,26 @@ cargo install shine-cli
 Unix 上，安装或同步到受保护位置时会请求 `sudo` 授权。但从受保护目录运行的 Shine 无法自行
 提权升级；如需使用自升级，请安装并运行用户可写目录中的 Shine。Windows 在受保护位置安装
 或升级时，需使用具备相应权限的终端。
+
+## 卸载 Shine
+
+在需要清理的账户和配置下运行 `shine self uninstall --dry-run`，核对列出的变更。
+运行 `shine self uninstall` 可交互确认，运行 `shine self uninstall --yes` 可直接批准。
+
+Shine 按各自的卸载规则处理受管 App 文件、Shell 配置、Sys 项和环境代理。对于账户默认配置，
+还会检查 Sys 启动文件中与原文一致的加载块，以及旧版 HTTP 服务。个人设置、任务、外部预设、
+加密身份、自定义 Sys 配置和 bootstrap 安装的软件会保留。配置目录中仍可能有这些文件、
+缓存和锁文件。预览会列出准备移除的信任授权和 broker 策略文件。
+如果 Shine 无法查询账户的服务管理器，请切换到能查询它的会话后重试。如果使用自定义配置
+目录时检测到旧服务，请单独核查 `shine clear serve` 的清理范围。
+
+如果恢复日志或被修改的受管文件阻止清理，请按提示处理对应模块的恢复或卸载，再运行本命令。
+如果 Shell 启动块指向另一套 Shine 配置或含有手动修改，请核查提示中的文件。只有与当前配置生成内容一致的启动块才会自动移除。
+此前已成功的步骤继续生效。Shine 最后才移除有安装回执的程序副本，并核对文件身份及其内容
+是否与当前运行的构建一致。已更换或版本不同的副本需要单独核查。
+
+如果通过 Cargo 安装，请使用 Shine 输出的 Cargo 卸载命令。手动下载或缺少匹配回执的旧安装，
+请在受管资源清理完成后按原安装渠道移除程序。在 Windows 上，先关闭正在运行的实例，
+再从同一构建的另一份副本、使用同一配置运行 `self uninstall`。完成清理后，发起命令的副本会保留。
 
 下一步：[完成第一次预设安装](./quick-start.md)。

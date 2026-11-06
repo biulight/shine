@@ -150,7 +150,7 @@ Keep these limits explicit:
 For future syntax changes, first add an equivalent transformation and a shadowed/rewritten or
 unknown-value control to the relevant matrix axis. Fix a shared owner when an invariant fails;
 record an explicit gap when the value cannot be established. Expand the API or module-resolution
-scope only as a separate decision. These unreleased corrections keep rule version 7.
+scope only as a separate decision. Shine 2.10 ships these corrections under rule version 7.
 
 Regression coverage includes literal/comment and dynamic/spread pairs, local versus outer mutation,
 JS/TS default parameter scopes, replaced versus captured loaders, and author fixtures for all three

@@ -110,6 +110,39 @@ JavaScript/TypeScript 依赖。源码行为与声明存在确定差异，或受�
 可在详细审阅中查看。这些结果都不代表代码安全或已被完整分析。没有诊断时，常规审阅不增加分析
 输出；原有 trust 和批准检查仍然适用。
 
+使用 `globalThis.fetch('https://example.org/data')` 时，与使用 `fetch` 一样，需声明网络主机 `example.org`。从 `node:https` 导入的 `https.get('https://example.org/data')` 使用同一主机声明，也可以传入内联回调。URL 为动态值，或 `https.get` 使用 options 对象时，无法确认目标主机，会报告覆盖缺口。
+
+等价写法使用相同的权限检查：受支持的标识符/URL 转义、带引号的导入名称、括号、TypeScript 类型断言和泛型实例化都会保留已识别的调用。例如，`(fetch)(('https://example.org'))` 与 `fetch('https://example.org')` 的检查相同。不支持的转义（包括旧式数字转义）、未配对的代理码元、含控制字符的 URL 和动态值仍会报告覆盖缺口。
+
+如果 `declare namespace` 只包含类型，或仅包含 `export {}`，同名全局函数仍然可见。例如，
+`declare namespace fetch { type Options = {}; export { Options } }` 后对全局 `fetch` 的调用仍需检查网络权限。
+类或声明了值的命名空间可以遮蔽内置名称，使用 Unicode 转义拼写的名称也会被识别。
+
+脚本检查 `(await fetch('https://example.org')).status === 200` 时，即使稍后替换了 `fetch`，也需为
+`example.org` 声明网络权限。将响应属性用作计算下标时同样如此。在 `cb?.(fetch(url))` 中，
+如果 `cb` 为 null 或 undefined，就会跳过实参求值。如果发生过替换，Shine 无法确定实参会调用哪个函数时，会报告覆盖缺口。
+例如，在 `for (let dep = require('./dep'); false;) {}` 中，循环判断条件之前就会加载依赖。即使脚本稍后替换了 `require`，
+Shine 仍会检查该依赖。在 `if` 条件、`switch` 表达式或执行的 `finally` 块中加载依赖时，也按同一规则检查。
+
+如果脚本保存原来的全局对象，随后将它赋回，之后对 `globalThis.fetch` 的写入仍可能替换全局函数。
+Shine 无法确认调用仍使用内置函数时，会报告覆盖缺口。反过来，如果对象或数组解构把一个新对象赋给 `globalThis`，
+修改该对象的 `fetch` 属性后，直接调用原来的 `fetch` 仍需检查网络权限。例如，执行 `({...globalThis} = source)` 后，
+`globalThis` 指向一个新对象，直接调用 `fetch(url)` 仍需声明对应的网络主机。
+
+Shine 会检查运行时初始化表达式、enum 和命名空间的声明体，以及 `typeof process.env.NAME` 等表达式的行为。
+不支持的模块路径仍会保留依赖缺口及本地导入名称。
+
+环境变量读取检查会区分读取与普通赋值、解构赋值和删除。Shine 会检查计算键、实际执行的默认表达式、复合赋值和自增自减中的读取。这不会改变已声明环境输入的契约。
+
+对于 `const f = Bun.file('in'); await f.text()`，请为 `in` 声明 `read`。仅保存句柄无需声明读取权限，Shine 在脚本调用方法时检查路径。
+
+使用 Node 的 `copyFile` 时，为源路径声明 `read`，为目标路径声明 `write`。使用 `rename` 时，
+为源路径声明 `remove`，为目标路径声明 `write`。同步和 Promise 形式也适用。即使一侧路径是动态值，
+只要另一侧的路径是字面量，Shine 仍会检查它。
+
+如果脚本用 `Object.assign` 替换内置方法，通过被替换成员发起的调用会报告覆盖缺口。
+如果在替换前保存了原函数，调用该函数仍可能需要声明原有权限。
+
 使用 `--verbose` 查看详细审阅，或用 `shine preset lint <PATH> --format json` 获取全部诊断。
 `--deny-warnings` 可让 lint 告警使 CI 失败。详细输出不会执行生成器；执行仍需显式使用
 `--run-generators` 并具有信任授权。Lint 检查所有受支持入口，可能报告某次运行检查范围之外的问题。
