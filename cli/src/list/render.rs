@@ -1,5 +1,6 @@
 //! Terminal presentation; diff reads remain at their original output boundaries.
 use super::*;
+use crate::generator_review::{GeneratorView, file_unit, generator_failed, print_generator_review};
 use query::{InventoryInputs, StatusInputs, UpdateInputs};
 use shine_core::runtime::AppFileInspection;
 
@@ -41,106 +42,6 @@ fn print_generator_notice(attention: &GeneratorAttention<'_>, run_generators: bo
                 row.status_text
             ))
         );
-    }
-}
-
-fn file_unit(count: usize) -> &'static str {
-    if count == 1 { "file" } else { "files" }
-}
-
-fn generator_failed(file: &AppFileInspection) -> bool {
-    matches!(
-        file.status,
-        FileStatus::GeneratorTrustRequired | FileStatus::GeneratorEvaluationFailed
-    )
-}
-
-fn same_generator_report(left: &AppFileInspection, right: &AppFileInspection) -> bool {
-    match (&left.code_analysis, &right.code_analysis) {
-        (Some(a), Some(b)) => crate::code_analysis::same_advisory_report(a, b),
-        _ => false,
-    }
-}
-
-fn print_generator_errors(files: &[AppFileInspection]) {
-    let mut categories = BTreeMap::new();
-    for file in files.iter().filter(|file| generator_failed(file)) {
-        categories
-            .entry((&file.category.name, file.status))
-            .or_insert_with(Vec::new)
-            .push(file);
-    }
-    for ((category, status), failures) in categories {
-        let target = format!("app/{category}");
-        let trust = status == FileStatus::GeneratorTrustRequired;
-        let reason = if trust {
-            use shine_core::runtime::PresetSourceKind::{External, Overlay};
-            let sources = &failures[0].generator_trust_sources;
-            match (sources.contains(&External), sources.contains(&Overlay)) {
-                (true, true) => {
-                    "uses external preset and overlay files and requires generator trust"
-                }
-                (true, false) => "uses an external preset source and requires generator trust",
-                (false, true) => "includes overlay files and requires generator trust",
-                (false, false) => "requires generator trust",
-            }
-        } else {
-            "generator evaluation failed"
-        };
-        let count = failures.len();
-        eprintln!(
-            "{} {} {reason}. Could not check {count} {} for updates.",
-            colors::red_stderr("Error:"),
-            colors::bold_stderr(&output::escape_controls(&target)),
-            file_unit(count)
-        );
-        let mut groups: Vec<Vec<&AppFileInspection>> = Vec::new();
-        for file in failures {
-            if let Some(group) = groups
-                .iter_mut()
-                .find(|group| same_generator_report(group[0], file))
-            {
-                group.push(file);
-            } else {
-                groups.push(vec![file]);
-            }
-        }
-        for group in groups {
-            let first = group[0];
-            if let Some(generator) = &first.file.generator {
-                eprintln!(
-                    "\n  {}  {}",
-                    colors::dim_for_stream("Generator", owo_colors::Stream::Stderr),
-                    output::escape_controls(&generator.script.to_string_lossy())
-                );
-            }
-            for (index, file) in group.iter().enumerate() {
-                let label = if index == 0 {
-                    colors::dim_for_stream("Files", owo_colors::Stream::Stderr)
-                } else {
-                    "     ".to_owned()
-                };
-                eprintln!(
-                    "  {label}      {}",
-                    output::escape_controls(&file.file.source_rel.to_string_lossy())
-                );
-            }
-            if let Some(scope) = &first.code_analysis {
-                let summary = crate::code_analysis::update_summary(scope);
-                if !summary.is_empty() {
-                    eprintln!();
-                }
-                for line in summary {
-                    eprintln!("{line}");
-                }
-            }
-        }
-        if trust && !target.chars().any(char::is_control) {
-            let argument = crate::shell_quote::command_arg(&target);
-            eprintln!(
-                "\nReview all capabilities for this category:\n  shine trust inspect {argument}\nIf you trust every listed generator, hook and artifact, grant trust for this snapshot and retry:\n  shine trust grant {argument}\n  shine update --run-generators"
-            );
-        }
     }
 }
 
@@ -368,7 +269,7 @@ pub(super) async fn update(
             &refresh_commands,
         );
         if attention.has_failures() {
-            print_generator_errors(&app_inspections);
+            print_generator_review(config, &app_inspections, GeneratorView::CompactList);
             return Err(output::ReportedCommandFailure.into());
         }
         return Ok(true);
@@ -518,7 +419,17 @@ pub(super) async fn status(
         return Ok(());
     }
 
-    print_app_analysis(&app_inspections, true);
+    let summarize = run_generators && !diff;
+    let failure = if summarize {
+        Some(print_generator_review(
+            config,
+            &app_inspections,
+            GeneratorView::VerboseList,
+        ))
+    } else {
+        print_app_analysis(&app_inspections, true);
+        None
+    };
     let update_diffs = if diff {
         Some(query::collect_diffs(config, app_inspections).await?)
     } else {
@@ -659,6 +570,16 @@ pub(super) async fn status(
             };
 
             let run_hint = app_status_run_hint(row);
+            let unchecked = failure
+                .as_ref()
+                .and_then(|counts| counts.files_by_category.get(&row.category));
+            let status_text = match (row.file_status, unchecked) {
+                (
+                    FileStatus::GeneratorTrustRequired | FileStatus::GeneratorEvaluationFailed,
+                    Some(&count),
+                ) => format!("{count} generated {} unchecked", file_unit(count)),
+                _ => row.status_text.to_owned(),
+            };
 
             println!(
                 "  {}  {}{}{}  {}{}",
@@ -666,7 +587,7 @@ pub(super) async fn status(
                 label,
                 pad,
                 dest_part,
-                colors::status_label(row.status_text, row.sym),
+                colors::status_label(&status_text, row.sym),
                 run_hint,
             );
 
@@ -791,6 +712,13 @@ pub(super) async fn status(
     }
 
     let attention = GeneratorAttention::from_rows(&app_rows);
+    if let Some(failure) = failure {
+        return if attention.has_failures() {
+            Err(failure.into())
+        } else {
+            Ok(())
+        };
+    }
     print_generator_notice(&attention, run_generators);
     if attention.has_failures() {
         anyhow::bail!("one or more App generators could not be evaluated");

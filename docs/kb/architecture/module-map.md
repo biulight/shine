@@ -20,6 +20,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/analysis/` | Bounded pure JS/TS facts, dependency traversal, entry-specific declaration comparison and safe diagnostics |
 | `core/src/runtime/code_analysis.rs` | Private command evidence, lock-external preparation, launcher admission and cancellation state |
 | `cli/src/code_analysis.rs` | Shared safe analysis text for lifecycle review and explicit evaluation |
+| `cli/src/generator_review.rs` | Global and targeted update output for captured generator inspections, including trust failures, affected files and analysis summaries |
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
 | `core/src/action.rs` | Versioned executable Action IR, constructors, opaque provenance and rollback DTOs |
 | `core/src/action/contracts.rs`, `action/contracts/` | Exhaustive resource-family routing and domain validation/permission rules; incompatible input fails closed |

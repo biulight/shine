@@ -330,7 +330,8 @@ regressions use `read_minimal_config_file`; global-only initialization uses the 
 `load_global_runtime(true)` owner (ADR 0136).
 
 The CLI list facade delegates ordered observations to `list/query.rs`, pure grouping and action
-selection to `list/projection.rs`, and output to `list/render.rs`. Local query results retain App
+selection to `list/projection.rs`, and output to `list/render.rs`. Global and targeted update share
+`generator_review.rs` to present the captured App generator assessments. Local query results retain App
 inspections for diff collection without re-evaluation. Simple Shell inventory projects only
 available/installed targets; a receipt can establish installation even when its launcher is missing.
 Managed Sys inventory uses the frontend's OS/managed receipt filter; its former test-only runtime

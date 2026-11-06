@@ -245,6 +245,15 @@ pub async fn handle_update_target(
     target: &str,
     run_generators: bool,
 ) -> Result<()> {
+    handle_update_target_with_verbosity(config, target, run_generators, false).await
+}
+
+pub(crate) async fn handle_update_target_with_verbosity(
+    config: &Config,
+    target: &str,
+    run_generators: bool,
+    verbose: bool,
+) -> Result<()> {
     crate::config::print_presets_note(config);
     let mut diffs = UpdateDiffs::collect(config, false).await?;
 
@@ -254,13 +263,22 @@ pub async fn handle_update_target(
 
     let candidates = resolve::build_candidates(&diffs.app_files, &diffs.shell_files);
     let refs = resolve::resolve_target(target, &candidates)?;
-    if run_generators {
+    let failure = if run_generators {
         let categories = app_categories_for_refs(&refs);
         if categories.is_empty() {
             bail!("--run-generators requires an App target");
         }
-        diffs.app_files = collect::collect_app_files(config, true, categories).await?;
-    }
+        let mut inspections = collect::collect_app_inspections(config, true, categories).await?;
+        // Match the installed target projection before rendering any sibling assessments.
+        inspections
+            .retain(|file| file.status != FileStatus::NotInstalled && file.destination.is_some());
+        let failure =
+            crate::generator_review::print_target_generator_review(config, &inspections, verbose);
+        diffs.app_files = collect::app_info_files_from_inspections(inspections);
+        failure
+    } else {
+        None
+    };
     let mut printed = false;
     let mut shell_diff_state = ShellDiffState::default();
 
@@ -334,10 +352,15 @@ pub async fn handle_update_target(
         }
     }
 
-    let (generator_failed, generator_incomplete) =
-        print_generator_notice(&diffs.app_files, &refs, run_generators, true);
-
-    if !printed && !generator_incomplete && !generator_failed {
+    if let Some(failure) = failure {
+        if verbose {
+            eprintln!("\n{}  {failure}.", colors::bold_stderr("Result"));
+        }
+        return Err(crate::output::ReportedCommandFailure.into());
+    }
+    let incomplete =
+        !run_generators && print_generator_notice(&diffs.app_files, &refs, false, true).1;
+    if !printed && !incomplete {
         println!(
             "{}",
             colors::dim(&format!(
@@ -345,10 +368,6 @@ pub async fn handle_update_target(
                 escape_controls(target)
             ))
         );
-    }
-
-    if generator_failed {
-        bail!("one or more App generators could not be evaluated");
     }
     Ok(())
 }
