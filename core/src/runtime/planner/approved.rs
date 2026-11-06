@@ -60,6 +60,8 @@ where
             .await?;
         let rows = self.secret_report_rows(&plan, true)?;
         let mut report = self.uninstall_apps(request, observer, interaction).await?;
+        self.reconcile_empty_app_manifest(&plan, &mut report, true)
+            .await?;
         for row in &rows {
             report.lifecycle.push(self.secret_report_outcome(row));
         }
@@ -218,14 +220,15 @@ where
             )
             .await;
         self.check_analysis_command()?;
-        result.and_then(|mut report| {
-            let rows = self.secret_report_rows(&plan, false)?;
-            for row in &rows {
-                report.lifecycle.push(self.secret_report_outcome(row));
-            }
-            report.files.extend(rows);
-            Ok(report)
-        })
+        let mut report = result?;
+        self.reconcile_empty_app_manifest(&plan, &mut report, false)
+            .await?;
+        let rows = self.secret_report_rows(&plan, false)?;
+        for row in &rows {
+            report.lifecycle.push(self.secret_report_outcome(row));
+        }
+        report.files.extend(rows);
+        Ok(report)
     }
 }
 

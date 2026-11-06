@@ -5213,9 +5213,7 @@ fn top_level_uninstall_uses_receipts_after_app_source_removal() {
             fs::read(destination.join("config.txt")).unwrap(),
             b"original"
         );
-        let manifest: shine_core::install::AppManifest =
-            toml::from_str(&fs::read_to_string(state.join("app-manifest.toml")).unwrap()).unwrap();
-        assert!(manifest.entries.is_empty());
+        assert!(!state.join("app-manifest.toml").exists());
     }
 }
 
@@ -7916,9 +7914,8 @@ fn app_uninstall_defaults_to_reviewed_internal_cleanup() {
                 !external,
                 "{removed_text}"
             );
-            assert_eq!(
+            assert!(
                 removed_text.contains("empty App manifest removed"),
-                !external && whole,
                 "{removed_text}"
             );
             if external {
@@ -7931,19 +7928,188 @@ fn app_uninstall_defaults_to_reviewed_internal_cleanup() {
                     fs::read(sibling.join("extra.txt")).unwrap(),
                     b"sibling cache"
                 );
-                let remaining: AppManifest =
-                    toml::from_str(&fs::read_to_string(state.join("app-manifest.toml")).unwrap())
-                        .unwrap();
-                assert!(remaining.entries.is_empty());
             } else {
                 assert!(!state.join("presets/app").exists());
-                assert!(!state.join("app-manifest.toml").exists());
             }
+            assert!(!state.join("app-manifest.toml").exists());
             assert_eq!(
                 fs::read(state.join("config.toml")).unwrap(),
                 b"schema_version = 2\n"
             );
         }
+    }
+}
+
+#[test]
+fn app_uninstall_review_uses_the_installed_strategy_after_a_preset_edit() {
+    for installed_json in [false, true] {
+        let fixture = Fixture::new();
+        fs::write(fixture.0.join("shine.config.toml"), "schema_version = 2\n").unwrap();
+        let presets = fixture.0.join("presets");
+        let app = presets.join("app/demo");
+        fs::create_dir_all(&app).unwrap();
+        let source = app.join("config");
+        let json = r#"{"key":1}"#;
+        let configure = |merge: bool| {
+            let base = "metadata_schema_version=2\ndest='~/demo'\n[[files]]\nsource='config'\n";
+            let mode = if merge {
+                "install_mode='json-merge'\nmanaged_keys=['key']\n"
+            } else {
+                ""
+            };
+            fs::write(app.join("shine.toml"), format!("{base}{mode}")).unwrap();
+            fs::write(&source, if merge { json } else { "text" }).unwrap();
+        };
+        let run = |args: &[&str]| {
+            fixture
+                .command()
+                .env("SHINE_PRESETS", &presets)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        configure(installed_json);
+        let installed = run(&["app", "install", "demo", "--yes"]);
+        assert!(installed.status.success(), "{installed:?}");
+        let dest = fixture.0.join("home/demo/config");
+        if installed_json {
+            fs::write(&dest, r#"{"key":1,"user":2}"#).unwrap();
+        }
+        configure(!installed_json);
+        let before = fs::read(&dest).unwrap();
+        let guard = fixture.0.join("state/app-manifest.toml");
+        let receipts = fs::read(&guard).unwrap();
+        let edited = if installed_json {
+            r#"{"key":3,"user":2}"#
+        } else {
+            "local edit"
+        };
+        fs::write(&dest, edited).unwrap();
+        let protected = run(&["app", "uninstall", "demo", "--yes"]);
+        assert!(!protected.status.success(), "{protected:?}");
+        assert!(
+            String::from_utf8_lossy(&protected.stdout).contains("app_user_modified"),
+            "{protected:?}"
+        );
+        assert_eq!(fs::read_to_string(&dest).unwrap(), edited);
+        assert_eq!(fs::read(&guard).unwrap(), receipts);
+        fs::write(&dest, &before).unwrap();
+        let preview = run(&["app", "uninstall", "demo", "--dry-run"]);
+        assert!(preview.status.success(), "{preview:?}");
+        assert!(
+            String::from_utf8_lossy(&preview.stdout).contains("would remove empty App manifest"),
+            "{preview:?}"
+        );
+        assert_eq!(fs::read(&guard).unwrap(), receipts);
+        assert_eq!(fs::read(&dest).unwrap(), before);
+        let removed = run(&["app", "uninstall", "demo", "--yes"]);
+        assert!(removed.status.success(), "{removed:?}");
+        let text = String::from_utf8_lossy(&removed.stdout);
+        assert!(!text.contains("app_user_modified"), "{text}");
+        assert!(text.contains("empty App manifest removed"), "{text}");
+        assert!(!guard.exists());
+        if installed_json {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&fs::read(dest).unwrap()).unwrap(),
+                serde_json::json!({"user":2})
+            );
+        } else {
+            assert!(!dest.exists());
+        }
+    }
+}
+
+#[test]
+fn app_uninstall_category_retry_reviews_only_the_empty_manifest() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::write(fixture.0.join("shine.config.toml"), "schema_version = 2\n").unwrap();
+    let sibling = state.join("presets/app/sibling/extra");
+    fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+    fs::write(&sibling, "keep").unwrap();
+    let selected_cache = state.join("presets/app/git/extra");
+    fs::create_dir_all(selected_cache.parent().unwrap()).unwrap();
+    fs::write(&selected_cache, "keep").unwrap();
+    let guard = state.join("app-manifest.toml");
+    let empty = "schema_version = 2\nentries = []\n";
+    fs::write(&guard, empty).unwrap();
+    let run = |flags: &[&str]| {
+        fixture
+            .command()
+            .args(["app", "uninstall", "git"])
+            .args(flags)
+            .output()
+            .unwrap()
+    };
+    let preview = run(&["--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(
+        String::from_utf8_lossy(&preview.stdout).contains("would remove empty App manifest"),
+        "{preview:?}"
+    );
+    let declined = run(&[]);
+    assert!(!declined.status.success(), "{declined:?}");
+    assert_eq!(fs::read_to_string(&guard).unwrap(), empty);
+    // A pending transaction still owns the guard, even when the manifest is empty.
+    let journal = state.join("app-operation-journal.toml");
+    fs::write(&journal, "interrupted").unwrap();
+    let blocked = run(&["--yes"]);
+    assert!(!blocked.status.success(), "{blocked:?}");
+    assert_eq!(fs::read_to_string(&guard).unwrap(), empty);
+    assert_eq!(fs::read(&journal).unwrap(), b"interrupted");
+    fs::remove_file(journal).unwrap();
+    let done = run(&["--yes"]);
+    assert!(done.status.success(), "{done:?}");
+    assert!(
+        String::from_utf8_lossy(&done.stdout).contains("empty App manifest removed"),
+        "{done:?}"
+    );
+    assert!(!guard.exists());
+    assert_eq!(fs::read(&selected_cache).unwrap(), b"keep");
+    assert_eq!(fs::read(&sibling).unwrap(), b"keep");
+    let repeat = run(&["--yes"]);
+    assert!(repeat.status.success(), "{repeat:?}");
+    assert!(!guard.exists());
+}
+
+#[test]
+fn failed_json_removal_does_not_announce_or_delete_empty_app_manifest() {
+    use shine_core::install::{AppEntry, AppInstallStrategy, AppManifest};
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    let destination = fixture.0.join("invalid.json");
+    fs::write(&destination, "user edit").unwrap();
+    let manifest = AppManifest {
+        entries: vec![AppEntry {
+            source: "app/retired/file.json".into(),
+            destination: destination.clone(),
+            backup: None,
+            content_hash: 1,
+            install_strategy: AppInstallStrategy::JsonMerge {
+                managed_keys: vec!["key".into()],
+            },
+            uses_env: false,
+            requires_admin: false,
+        }],
+        ..AppManifest::default()
+    };
+    let guard = state.join("app-manifest.toml");
+    fs::write(&guard, toml::to_string_pretty(&manifest).unwrap()).unwrap();
+    for flag in ["--dry-run", "--yes"] {
+        let output = fixture
+            .command()
+            .args(["app", "uninstall", "retired", "--force", flag])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("empty App manifest"), "{stdout}");
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "user edit");
+        assert_eq!(
+            toml::from_str::<AppManifest>(&fs::read_to_string(&guard).unwrap()).unwrap(),
+            manifest
+        );
     }
 }
 

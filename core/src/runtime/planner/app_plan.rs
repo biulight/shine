@@ -82,7 +82,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let mut permissions = PermissionAccumulator::default();
         let mut steps = Vec::new();
 
-        self.plan_app_secrets(
+        let remaining_secrets = self.plan_app_secrets(
             &request,
             &manifest,
             &mut state,
@@ -107,14 +107,32 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         }
 
         if request.operation == LifecycleOperation::Uninstall {
-            self.plan_app_uninstall(
-                &request,
-                &manifest,
-                &mut state,
-                &mut permissions,
-                &mut steps,
-            )
-            .await?;
+            let removed_entries = self
+                .plan_app_uninstall(
+                    &request,
+                    &manifest,
+                    &mut state,
+                    &mut permissions,
+                    &mut steps,
+                )
+                .await?;
+            if request.purge
+                && manifest_bytes.is_some()
+                && remaining_secrets == 0
+                && removed_entries == manifest.entries.len()
+            {
+                add_shine_receipt_permission(
+                    self.context(),
+                    &mut permissions,
+                    "app-manifest.toml",
+                    request.operation,
+                );
+                steps.push(PlanStepV1::new(
+                    "app",
+                    Some("app-manifest.toml"),
+                    PlanActionV1::Remove,
+                ));
+            }
         } else {
             self.plan_app_convergence(
                 &request,
@@ -190,7 +208,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         state: &mut StateCapture,
         permissions: &mut PermissionAccumulator,
         steps: &mut Vec<PlanStepV1>,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         let receipt_categories = manifest
             .entries
             .iter()
@@ -203,6 +221,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 app_source_parts(&entry.source).map(|(category, _)| category.to_string())
             })
             .collect::<BTreeSet<_>>();
+        // A targeted retry with no ordinary receipts only reconciles shared
+        // installation state; the executor skips teardown and cache removal.
+        if request.target.is_some() && receipt_categories.is_empty() {
+            return Ok(0);
+        }
         for category_name in &receipt_categories {
             let category_prefix = format!("app/{category_name}/");
             if !self
@@ -281,6 +304,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             })
         });
         let mut changed_categories = BTreeSet::new();
+        let mut removed_entries = 0;
         for entry in entries {
             let (category, resource) =
                 app_source_parts(&entry.source).unwrap_or(("unknown", "unknown"));
@@ -315,14 +339,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             } else {
                 None
             };
-            let modified = match (active_file.as_ref(), current.as_deref()) {
-                (Some(file), Some(bytes)) => installed_strategy_hash(&file.install_strategy, bytes)
-                    .map(|hash| hash.is_some_and(|hash| hash != entry.content_hash))
-                    .unwrap_or(true),
-                (None, Some(bytes)) => installed_strategy_hash(&entry.install_strategy, bytes)
-                    .map(|hash| hash.is_some_and(|hash| hash != entry.content_hash))
-                    .unwrap_or(true),
-                (_, None) => false,
+            let hash = match current.as_deref() {
+                Some(bytes) => installed_strategy_hash(&entry.install_strategy, bytes),
+                None => Ok(None),
+            };
+            let modified = match &hash {
+                Ok(value) => value.is_some_and(|value| value != entry.content_hash),
+                Err(_) => true,
             };
             let action = if modified && !request.force {
                 PlanActionV1::Preserve
@@ -340,12 +363,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         crate::install::AppInstallStrategy::Copy
                             | crate::install::AppInstallStrategy::JsonMerge { .. }
                     )
-                    && current.as_deref().is_some_and(|bytes| {
-                        installed_strategy_hash(&file.install_strategy, bytes)
-                            .ok()
-                            .flatten()
-                            .is_some_and(|hash| hash == entry.content_hash || request.force)
-                    })
+                    && matches!(hash, Ok(Some(value)) if value == entry.content_hash || request.force)
             });
             let remove_rollback = if action == PlanActionV1::Remove && typed_removal_candidate {
                 let metadata = self
@@ -410,15 +428,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     &entry.destination,
                     rollback,
                 );
-                if matches!(
+            }
+            if action == PlanActionV1::Remove
+                && matches!(hash, Ok(Some(_)))
+                && matches!(
                     entry.install_strategy,
                     crate::install::AppInstallStrategy::JsonMerge { .. }
-                ) {
-                    permissions.implicit(PermissionV1::Filesystem {
-                        access: FilesystemAccessV1::Write,
-                        path: review_path(self.context(), &entry.destination),
-                    });
-                }
+                )
+            {
+                permissions.implicit(PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: review_path(self.context(), &entry.destination),
+                });
             }
             let mut step = PlanStepV1::new(format!("app/{category}"), Some(resource), action);
             if modified && request.force && action == PlanActionV1::Remove {
@@ -432,6 +453,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 });
             }
             if action == PlanActionV1::Remove {
+                // Force can request removal, but an unreadable JSON document still retains its receipt.
+                if hash.is_ok() {
+                    removed_entries += 1;
+                }
                 changed_categories.insert(category.to_string());
             }
             steps.push(step);
@@ -498,6 +523,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 );
             }
         }
-        Ok(())
+        Ok(removed_entries)
     }
 }

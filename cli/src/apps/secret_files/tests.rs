@@ -406,6 +406,128 @@ async fn secret_install_update_preserve_uninstall_and_redaction() {
 }
 
 #[tokio::test]
+async fn full_app_cleanup_keeps_schema_guard_for_modified_secret() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, provider) = setup().await;
+    let runtime = runtime(&root, provider.clone(), "original", true);
+    install(&runtime, false).await.unwrap();
+    let target = root.join("service/secrets/password");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&target, b"user edit").unwrap();
+    let receipt = provider.state("app-secret-manifest.json").unwrap();
+    let mut req = request(LifecycleOperation::Uninstall);
+    req.target = None;
+    req.purge = true;
+    for force in [false, true] {
+        req.force = force;
+        let plan = runtime.plan_apps(req.clone()).await.unwrap();
+        let preview = runtime
+            .preview_uninstall_apps(
+                AppUninstallLifecycleRequest {
+                    target: None,
+                    force,
+                    purge: true,
+                    dry_run: true,
+                },
+                &mut NullObserver,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            preview
+                .lifecycle
+                .outcomes
+                .iter()
+                .any(|row| row.resource.as_deref() == Some("purge")
+                    && row
+                        .effects
+                        .contains(&shine_core::lifecycle::LifecycleEffect::ReceiptRemovePreviewed)),
+            force
+        );
+        assert!(root.join(".shine/app-manifest.toml").exists());
+        assert_eq!(fs::read(&target).unwrap(), b"user edit");
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .uninstall_apps_approved(req.clone(), &approval, &mut NullObserver, &mut Interaction)
+            .await
+            .unwrap();
+        let guard = root.join(".shine/app-manifest.toml");
+        if !force {
+            assert_eq!(fs::read(&target).unwrap(), b"user edit");
+            assert_eq!(provider.state("app-secret-manifest.json").unwrap(), receipt);
+            assert!(
+                guard.exists(),
+                "missing v2 guard for retained secret receipt"
+            );
+            let manifest: shine_core::install::AppManifest =
+                toml::from_str(&fs::read_to_string(guard).unwrap()).unwrap();
+            assert_eq!(manifest.schema_version, 2);
+            assert!(manifest.entries.is_empty());
+        } else {
+            assert!(!guard.exists());
+            assert!(!target.exists());
+            assert!(runtime.secret_store().unwrap().entries.is_empty());
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn category_uninstall_rechecks_approval_and_keeps_guard_for_sibling_secret() {
+    let (root, provider) = setup().await;
+    let runtime = runtime(&root, provider.clone(), "original", true);
+    install(&runtime, false).await.unwrap();
+    let mut req = request(LifecycleOperation::Uninstall);
+    req.purge = true;
+    let plan = runtime.plan_apps(req.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    // Model an intervening receipt change: a retired sibling owns the only
+    // secret, while the selected category owns all ordinary App files.
+    let mut store = runtime.secret_store().unwrap();
+    store.entries[0].category = "retired".into();
+    let private = serde_json::to_vec(&store).unwrap();
+    provider
+        .save_state("app-secret-manifest.json", Some(&private))
+        .unwrap();
+    let guard = root.join(".shine/app-manifest.toml");
+    let before = fs::read(&guard).unwrap();
+    assert!(
+        runtime
+            .uninstall_apps_approved(req.clone(), &approval, &mut NullObserver, &mut Interaction)
+            .await
+            .is_err()
+    );
+    assert_eq!(fs::read(&guard).unwrap(), before);
+    assert!(root.join("service/compose.yml").exists());
+
+    let plan = runtime.plan_apps(req.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime
+        .uninstall_apps_approved(req, &approval, &mut NullObserver, &mut Interaction)
+        .await
+        .unwrap();
+    let manifest: shine_core::install::AppManifest =
+        toml::from_str(&fs::read_to_string(&guard).unwrap()).unwrap();
+    assert!(manifest.entries.is_empty());
+    assert_eq!(manifest.schema_version, 2);
+    assert!(!root.join("service/compose.yml").exists());
+    assert_eq!(
+        fs::read(root.join("service/secrets/password")).unwrap(),
+        b"original"
+    );
+    assert_eq!(
+        provider
+            .state("app-secret-manifest.json")
+            .unwrap()
+            .unwrap()
+            .as_slice(),
+        private
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn secret_adoption_conflict_and_decrypt_failure_do_not_write_configs() {
     let (root, provider) = setup().await;
     let runtime = runtime(&root, provider.clone(), "password", true);

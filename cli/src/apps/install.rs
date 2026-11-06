@@ -542,7 +542,8 @@ mod tests {
         let uninstall = handle_uninstall_with_result(&config, Some("sample"), false, false)
             .await
             .unwrap();
-        assert_eq!(uninstall.summary().changed, 1);
+        assert_eq!(uninstall.summary().changed, 2);
+        assert!(!config.shine_dir().join("app-manifest.toml").exists());
         assert!(
             uninstall.outcomes[0]
                 .effects

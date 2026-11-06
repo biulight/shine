@@ -10,7 +10,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         state: &mut StateCapture,
         permissions: &mut PermissionAccumulator,
         steps: &mut Vec<PlanStepV1>,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         let store = self.secret_store()?;
         state.bytes("secret-manifest", Some(&serde_json::to_vec(&store)?))?;
         state.bytes(
@@ -125,6 +125,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 );
             }
         }
+        let mut remaining = store.entries.len();
         for entry in &store.entries {
             if request
                 .target
@@ -150,6 +151,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 PlanActionV1::Remove
             };
             if action == PlanActionV1::Remove {
+                remaining -= 1;
                 self.secret_plan_permissions(permissions, &entry.category, &entry.target, true);
             }
             steps.push(
@@ -165,7 +167,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 }),
             );
         }
-        Ok(())
+        Ok(remaining)
     }
 
     fn secret_plan_permissions(

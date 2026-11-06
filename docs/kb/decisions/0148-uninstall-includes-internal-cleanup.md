@@ -10,9 +10,11 @@ App and Shell CLI handlers always request the existing Core cleanup behavior (`p
 including dry-run. Existing invocations containing `--purge` fail argument parsing before config
 initialization; callers should omit the option.
 
-App category removal includes the entire internal category cache, including extra files, and keeps
-the manifest file. Whole-App removal includes the entire internal App cache; its manifest is deleted
-only when no receipts remain. Protected and failed removals retain receipts for retry. Targeted
+App category removal includes the entire internal category cache, including extra files. Whole-App removal includes the
+entire internal App cache. For either scope, removal of an existing empty App manifest is an
+explicit Plan step when the selected removals exhaust both ordinary and private secret receipts.
+External sources follow the same receipt rule without purging the source. Pending recovery blocks
+the step; execution rechecks both stores under the App lock before removing the schema guard. Protected and failed removals retain receipts for retry. Targeted
 Shell removal preserves extra cache files and sibling dependencies; whole-Shell removal includes
 extra internal cache files. Empty managed directory cleanup is included. External sources remain
 preserved. This supersedes ADR 0136's distinction between ordinary CLI removal and explicit purge.
