@@ -2764,7 +2764,12 @@ fn verbose_generator_lint_hint_requires_a_complete_source_tree() {
     fixture.app(false);
     success(&fixture.run(&["app", "install", "demo", "--yes"]));
     fixture.app(true);
-    let base = fixture.0.join("state/presets/app/demo");
+    let base = fixture
+        .0
+        .join("state")
+        .join("presets")
+        .join("app")
+        .join("demo");
     let review = |target: Option<&str>| {
         let mut args = vec!["update"];
         args.extend(target);
