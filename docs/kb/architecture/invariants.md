@@ -975,6 +975,10 @@ bugs. Check this list before changing the modules named in each entry.
   cwd before installation and save the absolute path. Config-relative interpretation on reload must
   not redirect later upgrade synchronization to another binary.
 
+- **Self uninstall removes program copies last.** Keep pending recovery evidence and persistent
+  domain locks. Verify the self-install receipt, file identity and build digest before unlinking
+  a program. Treat other installation channels as a manual handoff ([ADR 0165](../decisions/0165-self-uninstall.md)).
+
 - **Trust store mutations serialize the entire read/modify/write cycle.** Grant and revoke acquire
   the persistent `trust.lock` OS lock before reading grants and retain it through private atomic
   persistence. Human review happens before locking; only the reviewed code identities are granted.

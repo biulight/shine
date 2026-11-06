@@ -281,8 +281,16 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                                 })?;
                         }
                         if let Some(desired) = &prepared.desired_bytes {
-                            self.host()
-                                .write_atomic(&file.destination, desired)
+                            let write = if file.previous.is_some() {
+                                self.host().write_profile_like(
+                                    &file.destination,
+                                    desired,
+                                    &file.rollback,
+                                )
+                            } else {
+                                self.host().write_atomic(&file.destination, desired)
+                            };
+                            write
                                 .await
                                 .map_err(|error| error.into_anyhow("writing Shell profile"))?;
                             if let Some(mode) = file

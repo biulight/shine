@@ -8455,3 +8455,133 @@ fn invalid_trust_store_notices_encode_paths_without_repairing_state() {
         );
     }
 }
+
+#[test]
+fn self_uninstall_pending_recovery_never_approves_or_removes_state() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    let journal = state.join("app-operation-journal.toml");
+    fs::write(&journal, "incomplete action").unwrap();
+    for flag in ["--dry-run", "--yes"] {
+        let result = fixture
+            .command()
+            .args(["self", "uninstall", flag])
+            .output()
+            .unwrap();
+        assert!(!result.status.success(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("shine app recover"),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(&journal).unwrap(), b"incomplete action");
+        assert!(!state.join("config.toml").exists());
+    }
+}
+
+#[test]
+fn self_uninstall_preserves_a_shell_loader_owned_by_another_configuration() {
+    let fixture = Fixture::new();
+    let home = fixture.0.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let profile = home.join(".bashrc");
+    let original = "before\r\n# >>> shine >>>\r\nsource \"$HOME/other/shell/profile.sh\"\r\n# <<< shine <<<\r\nafter\r\n";
+    fs::write(&profile, original).unwrap();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    for flag in ["--dry-run", "--yes"] {
+        let result = fixture
+            .command()
+            .env("SHELL", "bash")
+            .args(["self", "uninstall", flag])
+            .output()
+            .unwrap();
+        assert!(!result.status.success(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("Shell loader"),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(&profile).unwrap(), original.as_bytes());
+        assert!(!state.join("shell-operation-journal.toml").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn self_uninstall_reviews_owned_copy_and_stops_before_final_cleanup_on_conflict() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.0.join("tools");
+    fs::create_dir(&tools).unwrap();
+    let (name, answer) = if cfg!(target_os = "macos") {
+        ("launchctl", "")
+    } else {
+        (
+            "systemctl",
+            "LoadState=not-found\nActiveState=inactive\nUnitFileState=",
+        )
+    };
+    let manager = tools.join(name);
+    fs::write(&manager, format!("#!/bin/sh\nprintf '%s\\n' '{answer}'\n")).unwrap();
+    fs::set_permissions(manager, fs::Permissions::from_mode(0o755)).unwrap();
+    let paths = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let src = fixture.0.join("src");
+    let cat = src.join("app/demo");
+    fs::create_dir_all(&cat).unwrap();
+    fs::write(fixture.0.join("shine.config.toml"), "schema_version=2\n").unwrap();
+    fs::write(
+        cat.join("shine.toml"),
+        "metadata_schema_version=2\ndest='~/demo'\n[[files]]\nsource='config'\n",
+    )
+    .unwrap();
+    fs::write(cat.join("config"), "original").unwrap();
+    let state = fixture.0.join("state");
+    let run = |exe: &std::path::Path, args: &[&str]| {
+        fixture
+            .configure(Command::new(exe))
+            .env("PATH", &paths)
+            .env("SHINE_PRESETS", &src)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let source = std::path::Path::new(env!("CARGO_BIN_EXE_shine"));
+    let copy = fixture.0.join("installed/shine");
+    let preview = run(source, &["self", "uninstall", "--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(!state.exists());
+    let result = run(
+        source,
+        &["self", "install", "--dest", copy.to_str().unwrap()],
+    );
+    assert!(result.status.success(), "{result:?}");
+    let result = run(&copy, &["app", "install", "demo", "--yes"]);
+    assert!(result.status.success(), "{result:?}");
+    let owned = fixture.0.join("home/demo/config");
+    fs::write(&owned, "edit").unwrap();
+    fs::write(state.join("tasks.toml"), "personal tasks").unwrap();
+    let result = run(&copy, &["self", "uninstall", "--yes"]);
+    assert!(!result.status.success(), "{result:?}");
+    assert_eq!(fs::read(&owned).unwrap(), b"edit");
+    assert!(copy.is_file() && state.join("app-manifest.toml").is_file());
+    fs::write(&owned, "original").unwrap();
+    let preview = run(&copy, &["self", "uninstall", "--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    let denied = run(&copy, &["self", "uninstall"]);
+    assert!(
+        !denied.status.success() && owned.exists() && copy.exists(),
+        "{denied:?}"
+    );
+    let result = run(&copy, &["self", "uninstall", "--yes"]);
+    assert!(result.status.success(), "{result:?}");
+    assert!(!owned.exists() && !copy.exists() && !state.join("self-installed.json").exists());
+    assert_eq!(
+        fs::read(state.join("tasks.toml")).unwrap(),
+        b"personal tasks"
+    );
+    assert_eq!(fs::read(cat.join("config")).unwrap(), b"original");
+}

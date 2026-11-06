@@ -361,6 +361,7 @@ Shine 的转发与 broker 选项必须写在 SSH 目标之前。直接转发密�
 ```text
 shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
+shine self uninstall [--dry-run | --yes]
 ```
 
 `stable` 跟随正式发布，`preview` 跟随会被持续替换的预览构建。参见

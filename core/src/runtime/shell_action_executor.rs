@@ -722,11 +722,12 @@ async fn restore_shell_profile_sentinel(
     host: &impl FileSystemHost,
     file: &ShellProfileFileV1,
 ) -> Result<()> {
-    let current_mode = match host.metadata(&file.destination).await {
-        Ok(metadata) => metadata.unix_mode,
-        Err(error) if error.is_not_found() => {
-            file.previous.as_ref().and_then(|file| file.unix_mode)
-        }
+    let (current_mode, security_template) = match host.metadata(&file.destination).await {
+        Ok(metadata) => (metadata.unix_mode, Some(&file.destination)),
+        Err(error) if error.is_not_found() => (
+            file.previous.as_ref().and_then(|file| file.unix_mode),
+            file.previous.as_ref().map(|_| &file.rollback),
+        ),
         Err(error) => return Err(error.into_anyhow("reading Shell profile mode")),
     };
     let current = match host.read(&file.destination).await {
@@ -755,7 +756,12 @@ async fn restore_shell_profile_sentinel(
             Err(error) => return Err(error.into_anyhow("removing created Shell profile")),
         }
     } else {
-        host.write_atomic(&file.destination, restored.as_bytes())
+        let write = if let Some(template) = security_template {
+            host.write_profile_like(&file.destination, restored.as_bytes(), template)
+        } else {
+            host.write_atomic(&file.destination, restored.as_bytes())
+        };
+        write
             .await
             .map_err(|error| error.into_anyhow("restoring Shell profile sentinel"))?;
         if let Some(mode) = current_mode {

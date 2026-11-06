@@ -294,7 +294,7 @@ pub(super) async fn capture_sys_profile_state<H: FileSystemObservationHost>(
     Ok(())
 }
 
-pub(super) fn sys_profile_block_paths(
+pub fn sys_profile_block_paths(
     context: &crate::runtime::RuntimeContext,
     os_id: &str,
 ) -> Vec<PathBuf> {

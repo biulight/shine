@@ -2,7 +2,11 @@
 
 mod binary;
 mod config_upgrade;
+mod receipt;
 mod release;
+mod uninstall;
+pub(crate) use uninstall::confirm_removal;
+pub use uninstall::handle_self_uninstall;
 mod update;
 
 pub use binary::handle_self_install;

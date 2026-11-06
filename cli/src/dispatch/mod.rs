@@ -183,6 +183,9 @@ async fn run_command(cli: Cli) -> Result<()> {
             }
         }
         Commands::Self_ { command } => match command {
+            SelfCommands::Uninstall { .. } => {
+                unreachable!("self uninstall routes before initialization")
+            }
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
         },

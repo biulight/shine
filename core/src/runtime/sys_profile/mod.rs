@@ -27,6 +27,7 @@ pub(super) use three_way::fallback_three_way_merge;
 
 pub(crate) use blocks::{restore_sys_owned_blocks, sys_owned_blocks_hash};
 
+pub use blocks::detach_sys_loader;
 use blocks::update_sys_shell_profiles;
 use compose::ComposedSysProfiles;
 

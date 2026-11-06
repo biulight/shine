@@ -395,6 +395,7 @@ mod shell_removal;
 mod sys_managed_plan;
 mod sys_specialized;
 mod sys_support;
+pub use sys_support::sys_profile_block_paths;
 
 use app_code::*;
 use app_convergence::generated_relocation_blocker;

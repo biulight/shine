@@ -12,7 +12,14 @@ pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Pat
     let Some(dest) = &config.self_install_dest else {
         return;
     };
-    match sync_self_install_dest_from(src, dest).await {
+    let sync = async {
+        let outcome = sync_self_install_dest_from(src, dest).await?;
+        if matches!(outcome, SelfInstallSync::Synced) {
+            super::receipt::record(config, src, dest).await?;
+        }
+        Ok(outcome)
+    };
+    match sync.await {
         Ok(SelfInstallSync::Synced) => println!(
             "{}",
             colors::green(&format!(
@@ -101,9 +108,13 @@ pub async fn handle_self_install(
         }
     }
 
+    let _lock = super::receipt::lock(&config).await?;
+    super::receipt::load(&config)?;
     install_binary_with_elevation(&src, &dest)
         .await
         .with_context(|| self_install_failure_hint(&dest))?;
+
+    super::receipt::record(&config, &src, &dest).await?;
 
     // Remember where we installed so `shine self upgrade` can sync this copy automatically.
     config.self_install_dest = Some(dest.clone());

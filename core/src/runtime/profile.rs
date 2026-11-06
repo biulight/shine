@@ -209,6 +209,27 @@ pub(super) fn remove_shell_sentinel(content: &str) -> String {
     crate::sentinel::remove_block_bytewise(content, &sentinel())
 }
 
+/// A sentinel also occurs in other installations. Only the exact loader for this
+/// configuration can be detached from a user-owned startup file.
+pub(super) fn detach_shell_loader(content: &str, expected: &str) -> Result<Option<String>> {
+    if !content.contains(SHELL_SENTINEL_START) && !content.contains(SHELL_SENTINEL_END) {
+        return Ok(None);
+    }
+    let block = shell_sentinel_block(content).context("incomplete Shine Shell loader")?;
+    let (before, after) = content
+        .split_once(block)
+        .expect("block is a slice of content");
+    anyhow::ensure!(
+        content.matches(SHELL_SENTINEL_START).count() == 1
+            && content.matches(SHELL_SENTINEL_END).count() == 1
+            && (before.is_empty() || before == "\u{feff}" || before.ends_with('\n'))
+            && (after.is_empty() || after.starts_with('\n') || after.starts_with("\r\n"))
+            && block.replace("\r\n", "\n") == expected.trim_end_matches('\n'),
+        "Shell loader differs from this configuration; inspect the startup file before retrying"
+    );
+    Ok(Some(remove_shell_sentinel(content)))
+}
+
 pub(crate) fn shell_sentinel_block(content: &str) -> Option<&str> {
     crate::sentinel::find_block(content, &sentinel())
 }
@@ -306,16 +327,19 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         config_paths: &[PathBuf],
     ) -> Result<Vec<PathBuf>> {
         let mut removed = Vec::new();
+        let profile = managed_shell_profile_path(&self.context.shine_dir, self.context.shell);
+        let snippet = shell_config_snippet(self.context.shell, &profile, &self.context.home_dir);
         for path in config_paths {
             let content = match self.host.read(path).await {
                 Ok(bytes) => String::from_utf8(bytes).context("shell config is not UTF-8")?,
                 Err(error) if error.is_not_found() => continue,
                 Err(error) => return Err(error.into_anyhow("reading shell config")),
             };
-            if !content.contains(SHELL_SENTINEL_START) {
+            let Some(cleaned) = detach_shell_loader(&content, &snippet)
+                .with_context(|| format!("checking Shell loader in {path:?}"))?
+            else {
                 continue;
-            }
-            let cleaned = remove_shell_sentinel(&content);
+            };
             self.host
                 .write_atomic(path, cleaned.as_bytes())
                 .await
@@ -344,6 +368,27 @@ impl<H: FileSystemHost> CoreRuntime<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detach_shell_loader_requires_one_complete_owned_block() {
+        let expected = "# >>> shine >>>\nsource current\n# <<< shine <<<\n";
+        let crlf = expected.replace('\n', "\r\n");
+        assert_eq!(
+            detach_shell_loader(&format!("\u{feff}{crlf}user\r\n"), expected)
+                .unwrap()
+                .as_deref(),
+            Some("\u{feff}user\r\n")
+        );
+        for modified in [
+            expected.replace("current", "other"),
+            expected.replace(SHELL_SENTINEL_END, ""),
+            expected.replace('\n', "\r"),
+            format!("echo {expected}"),
+            format!("{expected}{expected}"),
+        ] {
+            assert!(detach_shell_loader(&modified, expected).is_err());
+        }
+    }
 
     #[test]
     fn managed_profile_uses_home_relative_bin_path() {

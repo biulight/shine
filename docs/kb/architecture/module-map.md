@@ -180,7 +180,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `preset migrate [PATH]` | `cli/src/preset_migration.rs` orchestrates `preset_migration/{discovery,assessment,render,apply}.rs`: read-only inputs, same-scope validation, report/diffs, source rechecks/private backup/atomic edits |
 | `preset pull`, `update --pull`, `upgrade --pull` | `cli/src/git_pull.rs` plus top-level routing |
 | `init` | `cli/src/init.rs` |
-| `self install/upgrade` | `cli/src/self_install.rs` facade → `self_install/{binary,release}.rs`, `cli/src/update_check/` |
+| `self install/upgrade/uninstall` | `cli/src/self_install.rs` facade → `self_install/{binary,release,receipt,uninstall}.rs`, `cli/src/update_check/` |
 | `update [TARGET]`, `upgrade [TARGET]` | `self_install/{update,config_upgrade}.rs`; untargeted upgrade retains Shell/App/managed Sys batch review |
 | `state migrate` | `cli/src/state.rs` |
 | `ssh ...` | `cli/src/ssh/mod.rs` |

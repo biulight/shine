@@ -50,6 +50,13 @@ pub(crate) use windows::{
 pub(crate) struct Identity(u64, u64);
 
 #[cfg(unix)]
+impl Identity {
+    pub(crate) fn binary_identity(&self) -> String {
+        format!("{}:{}", self.0, self.1)
+    }
+}
+
+#[cfg(unix)]
 pub(crate) fn is_link(metadata: &Metadata) -> bool {
     metadata.file_type().is_symlink()
 }

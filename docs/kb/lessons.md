@@ -1,5 +1,12 @@
 # Lessons Learned
 
+## 2026-11-07 — Verify Windows startup file security through the whole lifecycle
+
+Replacing a PowerShell profile can retain its bytes and still change its owner or inherit broader
+access rules. Shell moves the original into rollback before writing the reviewed result, so
+preserving security only on in-place edits misses this path. Compare owner, group, DACL and named
+streams across both paths and check that the rollback still contains its originals ([ADR 0165](decisions/0165-self-uninstall.md)).
+
 ## 2026-11-07 — App manifest cleanup depends on both receipt stores
 
 Coupling empty-manifest deletion to whole embedded-cache purge left empty schema 2 records after
