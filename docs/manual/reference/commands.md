@@ -23,10 +23,10 @@ Target names are matched literally. Quote names containing leading or trailing w
 Shine does not strip that whitespace. An entirely blank target is rejected.
 
 ```bash
-shine list --available  # List all available resource types
+shine list --available
 shine info app/starship
 shine install app/starship
-shine update            # Check for updates without applying them
+shine update
 shine upgrade app/starship
 ```
 

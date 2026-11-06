@@ -17,13 +17,13 @@ Shine 可以保存预设模板变量，也可以使用 GPG 或 age 封存项目�
 
 按需选择查看、设置或删除操作，不要将以下示例作为设置后立即删除的流程执行：
 
-```bash
-shine env list                      # 查看变量及其来源
-shine env get HTTP_PROXY_PORT       # 读取生效值
-shine env explain HTTP_PROXY_PORT   # 检查优先级和来源
-shine env set HTTP_PROXY_PORT 6152  # 保存变量值
-shine env delete HTTP_PROXY_PORT    # 删除所选位置保存的值
-```
+| 操作 | 命令 |
+| --- | --- |
+| 查看变量及其来源 | `shine env list` |
+| 读取生效值 | `shine env get HTTP_PROXY_PORT` |
+| 检查优先级和来源 | `shine env explain HTTP_PROXY_PORT` |
+| 保存变量值 | `shine env set HTTP_PROXY_PORT 6152` |
+| 删除所选位置保存的值 | `shine env delete HTTP_PROXY_PORT` |
 
 `PROXY_NO_PROXY` 控制 `setproxy` 设置的 `NO_PROXY` 和 `no_proxy`，默认为
 `localhost,127.0.0.1,::1`。修改它或其他代理变量后，`shine update` 会把已安装的
@@ -71,14 +71,16 @@ MY_API_TOKEN = { value = "<令牌>", description = "内部 API 的访问令牌" 
 
 按需选择操作和写入位置：
 
-```bash
-shine env set HTTP_PROXY_PORT 7890 --global              # 写入全局配置
-shine env set HTTP_PROXY_PORT 8080 --project             # 写入项目配置
-shine env set HTTP_PROXY_PORT 8081 --project --env-file  # 写入项目 env 文件
-shine env set HTTP_PROXY_PORT 6152 --overlay             # 写入手动 overlay
-shine env delete HTTP_PROXY_PORT --global --env-file     # 从全局 env 文件删除
-shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --project --env-file
-```
+| 操作 | 命令 |
+| --- | --- |
+| 写入全局配置 | `shine env set HTTP_PROXY_PORT 7890 --global` |
+| 写入项目配置 | `shine env set HTTP_PROXY_PORT 8080 --project` |
+| 写入项目 env 文件 | `shine env set HTTP_PROXY_PORT 8081 --project --env-file` |
+| 写入手动 overlay | `shine env set HTTP_PROXY_PORT 6152 --overlay` |
+| 从全局 env 文件删除 | `shine env delete HTTP_PROXY_PORT --global --env-file` |
+| 加密当前生效的 `MY_TOKEN`，将密文以 `MY_TOKEN_SECRET` 保存到项目 env 文件中 | `shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --project --env-file` |
+
+上述加密命令会保留原配置层中的明文 `MY_TOKEN`。
 
 `delete` 只删除目标文件实际存在的项，不删除其他层或同时删除 `KEY_SECRET`；不存在则报错。
 删除恢复继承，不表示禁用变量，空字符串仍是合法值。Git 托管 overlay 镜像禁止直接写入；
@@ -104,7 +106,7 @@ PROXY_HOST = { value = "127.0.0.1", description = "本地代理主机" }
 修改用于模板渲染的值后，运行：
 
 ```bash
-shine upgrade  # 更新已安装配置
+shine upgrade
 ```
 
 ## Env 分层变更的人工升级与回退
@@ -249,10 +251,10 @@ shine env secret seal --backend age -r age1tag1qexample... -r age1qteammate...
 旧版 Secure Enclave identity 可能使用 `age1se...` recipient，导致仅执行加密的电脑也必须
 安装 `age-plugin-se`。在 workspace 所在项目中预览并应用公开 recipient 转换：
 
-```bash
-shine state migrate --dry-run  # 预览旧状态迁移
-shine state migrate            # 审阅预览后应用迁移
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览旧状态迁移 | `shine state migrate --dry-run` |
+| 审阅预览后应用迁移 | `shine state migrate` |
 
 迁移将配置中的 `age1se...` 转为等价的 `age1tag...`，不会解密密钥。
 迁移后请重新封存，以使用新 recipient。已有密文保持不变，仍可解密。
@@ -417,12 +419,12 @@ recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一
 
 按需选择一种注入方式：
 
-```bash
-shine env run --with MY_TOKEN -- bun run build                            # 按原名称注入变量
-shine env run --with MY_TOKEN=API_TOKEN -- bun run build                  # 为子进程重命名变量
-shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build  # 注入多个变量
-shine env run --no-workspace --with MY_TOKEN -- bun run build             # 跳过工作区加载
-```
+| 操作 | 命令 |
+| --- | --- |
+| 按原名称注入变量 | `shine env run --with MY_TOKEN -- bun run build` |
+| 为子进程重命名变量 | `shine env run --with MY_TOKEN=API_TOKEN -- bun run build` |
+| 注入多个变量 | `shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build` |
+| 跳过工作区加载 | `shine env run --no-workspace --with MY_TOKEN -- bun run build` |
 
 每个 `KEY` 都优先解密 `<KEY>_SECRET`，不存在时才读取明文 `<KEY>`。等号右侧是子进程中
 的变量名。显式 `--with` 值优先于当前进程和 workspace 的同名变量。
@@ -511,11 +513,11 @@ shine env proxy list
 
 按需选择需要的状态和范围：
 
-```bash
-shine env proxy disable gh            # 禁用代理
-shine env proxy enable gh             # 启用代理
-shine env proxy disable gh --project  # 禁用项目代理
-```
+| 操作 | 命令 |
+| --- | --- |
+| 禁用代理 | `shine env proxy disable gh` |
+| 启用代理 | `shine env proxy enable gh` |
+| 禁用项目代理 | `shine env proxy disable gh --project` |
 
 不加 `--project` 时，启用/禁用只修改全局规则，项目规则仍可覆盖它。
 如果提示规则已保存但无法确认生效状态，请检查配置并再次运行 `shine env proxy list`。
@@ -549,10 +551,10 @@ shine env proxy uninstall gh
 
 已有 Vite 风格的 `.env` 文件时，可在项目根目录生成 Shine workspace 和对应的 TOML 环境源：
 
-```bash
-shine env workspace init --from-dotenv --dry-run  # 预览导入 dotenv 文件
-shine env workspace init --from-dotenv            # 执行已审阅的导入
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览导入 dotenv 文件 | `shine env workspace init --from-dotenv --dry-run` |
+| 执行已审阅的导入 | `shine env workspace init --from-dotenv` |
 
 它读取 `.env`、`.env.local`、`.env.<mode>` 与 `.env.<mode>.local`，自动发现 mode，并保持该覆盖顺序。原 dotenv 文件不会被修改；生成目标已存在时命令会拒绝覆盖，包括悬空符号链接和并发导入创建的文件，确认后才添加 `--force`。只导入指定 mode 时可重复使用 `--mode`：
 

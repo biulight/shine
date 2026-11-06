@@ -112,11 +112,11 @@ To build from the Shine source repository, run `cargo build --release`. The bina
 
 Choose one update command:
 
-```bash
-shine self upgrade                    # Upgrade to the latest stable release
-shine self upgrade --channel stable   # Reinstall latest stable; also return from preview
-shine self upgrade --channel preview  # Update to the rolling preview
-```
+| Operation | Command |
+| --- | --- |
+| Upgrade to the latest stable release | `shine self upgrade` |
+| Reinstall latest stable; also return from preview | `shine self upgrade --channel stable` |
+| Update to the rolling preview | `shine self upgrade --channel preview` |
 
 `--channel stable` reinstalls even when the installed version is the same or newer.
 

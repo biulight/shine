@@ -136,9 +136,9 @@ fn print_generator_errors(files: &[AppFileInspection]) {
             }
         }
         if trust && !target.chars().any(char::is_control) {
+            let argument = crate::shell_quote::command_arg(&target);
             eprintln!(
-                "\nReview the generator code before granting trust. If you trust it, run:\n  shine trust grant {}\n  shine update --run-generators",
-                crate::shell_quote::command_arg(&target)
+                "\nReview all capabilities for this category:\n  shine trust inspect {argument}\nIf you trust every listed generator, hook and artifact, grant trust for this snapshot and retry:\n  shine trust grant {argument}\n  shine update --run-generators"
             );
         }
     }

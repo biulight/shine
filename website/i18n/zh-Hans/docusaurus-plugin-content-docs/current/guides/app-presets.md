@@ -12,7 +12,7 @@ sidebar_position: 2
 ## 查看与预览
 
 ```bash
-shine app list  # 查看 App 预设
+shine app list
 shine app info starship
 shine app install starship --dry-run
 ```
@@ -26,9 +26,13 @@ shine app install starship --dry-run
 
 ```bash
 shine app install starship
-# 等价写法：shine install app/starship
-shine update   # 检查更新，不应用改动
-shine upgrade  # 更新已安装配置
+```
+
+等价写法：`shine install app/starship`
+
+```bash
+shine update
+shine upgrade
 ```
 
 `shine update` 比较当前安装结果与预设，只报告状态；`shine upgrade` 将受管 shell 和应用配置更新到当前预设内容。
@@ -67,10 +71,10 @@ metadata_schema_version = 2
 
 ## 卸载与恢复
 
-```bash
-shine app uninstall starship --dry-run  # 预览卸载
-shine app uninstall starship            # 审阅预览后再执行卸载
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览卸载 | `shine app uninstall starship --dry-run` |
+| 审阅预览后再执行卸载 | `shine app uninstall starship` |
 
 install、upgrade、uninstall、generator refresh 和 artifact apply/remove 都会在改动前显示 Plan，
 确认默认是 No。只有审阅过同一范围后，才应在有人值守的自动化中使用命令级 `--yes`；它不能绕过
@@ -139,12 +143,12 @@ shine app recover --yes
 
 按需选择一种检查范围；这些命令会执行生成器：
 
-```bash
-shine app info surge --run-generators           # 执行生成器并查看状态
-shine info app/surge --run-generators --diff    # 执行生成器并查看差异
-shine update app/surge --run-generators --diff  # 执行生成器并检查此 App 的更新
-shine update --run-generators                   # 执行所有已安装 App 类别的生成器
-```
+| 操作 | 命令 |
+| --- | --- |
+| 执行生成器并查看状态 | `shine app info surge --run-generators` |
+| 执行生成器并查看差异 | `shine info app/surge --run-generators --diff` |
+| 执行生成器并检查此 App 的更新 | `shine update app/surge --run-generators --diff` |
+| 执行所有已安装 App 类别的生成器 | `shine update --run-generators` |
 
 全局形式会评估所有已安装 App 类别；定向形式只评估选中的 App。由于该参数已经表达明确意图，自动
 generator 和 `auto = false` 的手动 generator 都会参与。外部或 overlay generator 仍需要匹配的
@@ -164,10 +168,10 @@ refresh 只处理已由 App manifest 记录的生成文件。新增带 generator
 
 按需选择刷新整个类别或单个文件：
 
-```bash
-shine app refresh <CATEGORY>                # 刷新类别中的手动生成输出
-shine app refresh <CATEGORY> <SOURCE_FILE>  # 仅刷新指定源文件
-```
+| 操作 | 命令 |
+| --- | --- |
+| 刷新类别中所有已跟踪的自动和手动生成文件 | `shine app refresh <CATEGORY>` |
+| 仅刷新指定源文件 | `shine app refresh <CATEGORY> <SOURCE_FILE>` |
 
 指定文件时，`SOURCE_FILE` 是预设 `[[files]].source` 的相对路径。刷新失败会保留上次成功内容；
 目标已被用户修改时也会保留，只有确认要覆盖时才添加 `--force`。安装和带
@@ -176,7 +180,8 @@ refresh 会显示并重新校验安全 Plan；自动化调用必须添加 `--yes
 
 当安全 Plan 列出来自外部预设或 overlay 的代码时，回答 `yes` 只授权本次 Plan 使用列出的代码。
 使用同一脚本且分析提示完全相同的条目会合并显示。加上 `--verbose` 可逐项查看。
-自动化与 `--run-generators` 检查需要先审阅并运行 `shine trust grant app/<CATEGORY>`。
+自动化或使用 `--run-generators` 时，先用 `shine trust inspect app/<CATEGORY>` 审阅该类别的每项能力。
+确认 `shine trust grant app/<CATEGORY>` 后，该快照中列出的所有生成器、hook 和 artifact 都会获得信任。
 生成器会收到声明的环境输入和固定 `SHINE_APP_*` 路径变量，并受执行时间、输出大小限制。
 请只运行你信任的预设。
 
@@ -318,11 +323,11 @@ network = [{ scope = "any" }]
 先检查目标，再选择快照信任或开发信任。
 开发信任也会授权未来的代码变更，仅在你明确接受此范围时使用。
 
-```bash
-shine trust inspect app/<CATEGORY>              # 仅检查，不授予信任
-shine trust grant app/<CATEGORY>                # 授予快照信任
-shine trust grant app/<CATEGORY> --development  # 信任未来的代码变更
-```
+| 操作 | 命令 |
+| --- | --- |
+| 仅检查，不授予信任 | `shine trust inspect app/<CATEGORY>` |
+| 授予快照信任 | `shine trust grant app/<CATEGORY>` |
+| 信任未来的代码变更 | `shine trust grant app/<CATEGORY> --development` |
 
 `trust inspect` 显示需要授权的内容，不会授予信任。Snapshot trust 会绑定完整有效 App 类别，包括辅助文件和数据文件。
 只有准备信任所显示本地来源中的后续代码修改时才使用 `--development`。

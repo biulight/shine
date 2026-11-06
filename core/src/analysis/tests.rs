@@ -1362,6 +1362,710 @@ fn object_alias_mutations_invalidate_shared_builtin_identity() {
 }
 
 #[test]
+fn review_erased_namespaces_leave_global_calls_visible() {
+    for body in [
+        "export type Options = {};",
+        "interface Options {} ; /* only a type */",
+        "export namespace Inner { export interface Options {} }",
+        "namespace Inner { type T = number }",
+        "declare const option: string;",
+        "function overload(): void;",
+        "export declare interface Options {}",
+        "'use strict'; export type Options = {};",
+    ] {
+        let source = format!("namespace fetch {{ {body} }} fetch('https://example.org')");
+        assert_eq!(differences(&report(&source, None)), 1, "{source}");
+    }
+    for body in [
+        "export const value = 1",
+        "export namespace Inner { export const x=1 }",
+    ] {
+        let source = format!("namespace fetch {{ {body} }} fetch('https://example.org')");
+        let result = report(&source, None);
+        assert!(
+            result.allowed && has(&result, "code_analysis_call_unknown"),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn review_namespaces_that_bun_materializes_keep_their_bindings() {
+    for declaration in [
+        "namespace Bun.Inner { export type T = number; }",
+        "namespace Bun { namespace Inner.Types {} }",
+        "namespace Bun { ; 'use strict'; }",
+        "namespace Bun { export declare const version: number; }",
+    ] {
+        let source = format!("{declaration} Bun.write('out','data');");
+        let result = report(&source, None);
+        assert!(
+            result.allowed && has(&result, "code_analysis_call_unknown"),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn review_escaped_class_names_shadow_builtin_calls() {
+    for source in [
+        r"class B\u0075n { static write() {} } B\u0075n.write('out','data');",
+        r"class B\u0075n { static write() {} } Bun.write('out','data');",
+        r"abstract class B\u0075n { static write() {} } Bun.write('out','data');",
+    ] {
+        let result = report(source, None);
+        assert!(
+            result.allowed && has(&result, "code_analysis_call_unknown"),
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
+fn review_calls_use_the_original_builtin_before_a_later_write() {
+    for code in [
+        "fetch('https://example.org'); Object.assign(globalThis,{fetch:other});",
+        "function run(){ globalThis.fetch('https://example.org'); globalThis.fetch=other; }",
+        "import fs from 'node:fs'; fs.readFileSync('in'); Object.assign(fs,{readFileSync:other});",
+        "Bun.file('in').text(); Object.assign(Bun,{file:other});",
+        "const f=Bun.file('in'); f.text(); Object.assign(f,{text:other});",
+    ] {
+        assert_eq!(differences(&report(code, None)), 1, "{code}");
+    }
+    for code in [
+        "Object.assign(globalThis,{fetch:other}); fetch('https://example.org');",
+        "function run(){fetch('https://example.org')} Object.assign(globalThis,{fetch:other}); run();",
+        "for (let i=0;i<2;i++){ if(i) fetch('https://example.org'); Object.assign(globalThis,{fetch:other}); }",
+    ] {
+        assert!(report(code, None).allowed, "{code}");
+    }
+}
+
+#[test]
+fn review_assign_aliases_observe_replacement_at_the_initializer() {
+    for (code, expected) in [
+        (
+            "Object.assign(Object,{assign:()=>{}}); const set=Object.assign; set(globalThis,{fetch:other});",
+            1,
+        ),
+        (
+            "Object.assign(globalThis,{Object:{assign(){}}}); const set=Object.assign; const alias=set; alias(globalThis,{fetch:other});",
+            1,
+        ),
+        (
+            "const set=Object.assign; Object.assign(Object,{assign:()=>{}}); set(globalThis,{fetch:other});",
+            0,
+        ),
+    ] {
+        let result = report(&format!("{code} fetch('https://example.org');"), None);
+        assert_eq!(differences(&result), expected, "{code}: {result:?}");
+    }
+}
+
+#[test]
+fn review_assign_scope_work_is_budgeted_and_shared_between_siblings() {
+    let analyze = |count, nodes| {
+        let source =
+            "{".repeat(128) + &"Object.assign(globalThis, {x:0});".repeat(count) + &"}".repeat(128);
+        Session::new(
+            Limits {
+                nodes,
+                ..Limits::default()
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+        .analyze(
+            &sources(&source),
+            "main.ts",
+            None,
+            &EnvironmentContract::default(),
+        )
+    };
+    assert_eq!(analyze(1, 470), Err(TerminalFailure::Budget));
+    assert!(analyze(100, 3500).unwrap().allowed);
+}
+
+#[test]
+fn followup_ambient_namespaces_only_shadow_values_they_declare() {
+    for (body, expected) in [
+        ("export type Options = {};", 1),
+        ("export interface Options {}", 1),
+        ("namespace Nested { interface Options {} }", 1),
+        ("export const version: string;", 0),
+        ("export function request(): void;", 0),
+        ("namespace Nested { const version: string; }", 0),
+    ] {
+        let code = format!(
+            "export {{}}; declare namespace fetch {{ {body} }} fetch('https://example.org')"
+        );
+        let r = report(&code, None);
+        assert_eq!(differences(&r), expected, "{code}: {r:?}");
+        assert_eq!(has(&r, "code_analysis_call_unknown"), expected == 0);
+    }
+}
+
+#[test]
+fn followup_result_property_reads_preserve_eager_receiver_order() {
+    for result in [
+        "(await fetch('https://example.org')).ok",
+        "fetch('https://example.org')['ok']",
+        "fetch('https://example.org')?.ok",
+    ] {
+        let code = format!("const ok = {result}; Object.assign(globalThis,{{fetch:other}});");
+        assert_eq!(differences(&report(&code, None)), 1, "{code}");
+    }
+    let conditional =
+        "const o=null; o?.[fetch('https://example.org')]; Object.assign(globalThis,{fetch:other});";
+    assert!(report(conditional, None).allowed);
+}
+
+#[test]
+fn review_eager_comparisons_and_subscripts_keep_network_identity() {
+    for expression in [
+        "(await fetch('https://example.org')).status === 200",
+        "200 !== (await fetch('https://example.org')).status",
+        "table[(await fetch('https://example.org')).status]",
+        "(table?.values)[(await fetch('https://example.org')).status]",
+        "fetch('https://example.org') && other",
+    ] {
+        let code = format!("const ok={expression}; Object.assign(globalThis,{{fetch:other}});");
+        assert_eq!(differences(&report(&code, None)), 1, "{code}");
+    }
+    for expression in [
+        "flag && fetch('https://example.org')",
+        "flag ?? fetch('https://example.org')",
+        "table?.values[fetch('https://example.org')]",
+    ] {
+        let code = format!("const ok={expression}; Object.assign(globalThis,{{fetch:other}});");
+        assert!(report(&code, None).allowed, "{code}");
+    }
+}
+
+#[test]
+fn review_optional_call_arguments_remain_conditional() {
+    for (call, expected) in [
+        ("cb?.(fetch('https://example.org'))", 0),
+        ("cb?.method(fetch('https://example.org'))", 0),
+        ("cb?.method.next(fetch('https://example.org'))", 0),
+        ("(cb?.method)(fetch('https://example.org'))", 1),
+        ("cb(fetch('https://example.org'))", 1),
+    ] {
+        let code = format!(
+            "function run(cb){{{call}; Object.assign(globalThis,{{fetch:other}});}} run(null); run(other);"
+        );
+        for file in ["main.js", "main.ts"] {
+            let input = BTreeMap::from([(file.into(), code.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert_eq!(r.allowed, expected == 0, "{file}: {code}: {r:?}");
+            assert_eq!(differences(&r), expected, "{file}: {code}");
+        }
+    }
+}
+
+#[test]
+fn review_ambient_export_lists_follow_local_name_kinds() {
+    for (outer, body, expected) in [
+        ("", "export {};", 1),
+        ("", "type Options={}; export {Options} from 'external';", 0),
+        ("", "const Options: number; export {};", 0),
+        (
+            "declare namespace Types { type T=number; }",
+            "export {Types};",
+            1,
+        ),
+        (
+            "declare namespace Values { const n: number; }",
+            "export {Values};",
+            0,
+        ),
+        ("", "export {Options}; type Options={};", 1),
+        ("", "type Options={}; export {Options as Config};", 1),
+        ("interface Options {}", "export {Options};", 1),
+        ("const Options=1;", "type Options={}; export {Options};", 1),
+        (
+            "type Options=string;",
+            "export const Options=1; export {Options as Config};",
+            0,
+        ),
+        ("const Options=1;", "export {Options as Config};", 0),
+        ("", "export {Unknown};", 0),
+        ("", "namespace Types { type T=number; } export {Types};", 1),
+        ("", "type T=number; const x=1; export {T,x};", 0),
+        (
+            "import type {Options} from 'some-module';",
+            "export {Options};",
+            1,
+        ),
+    ] {
+        let code = format!(
+            "export {{}}; {outer} declare namespace fetch {{ {body} }} fetch('https://example.org');"
+        );
+        let r = report(&code, None);
+        assert_eq!(r.allowed, expected == 0, "{code}: {r:?}");
+        assert_eq!(differences(&r), expected, "{code}");
+    }
+}
+
+#[test]
+fn review_destructuring_defaults_see_prior_stores_and_the_original_input() {
+    for (code, expected) in [
+        ("let x; [require,x=require('./dep')]=[()=>42];", 0),
+        ("let x; [x=require('./dep'),require]=[undefined,()=>42];", 1),
+        ("let x; ({a:require,b:x=require('./dep')}={a:()=>42});", 0),
+        ("let x; [require,[x=require('./dep')]=[]]=[()=>42];", 0),
+        ("let x; [require,x]=[()=>42,require('./dep')];", 1),
+        ("let x; [require=require('./dep')]=[];", 1),
+        ("[[require]=[require('./dep')]]=[];", 1),
+        (
+            "function run(cb){cb?.(require('./dep')); require=()=>{};} run(null); run(()=>{});",
+            0,
+        ),
+        (
+            "function run(src){let x; [x=require('./dep'),require]=src;} run([1,()=>{}]); run([]);",
+            0,
+        ),
+    ] {
+        let input = BTreeMap::from([
+            ("main.ts".into(), code.as_bytes()),
+            ("dep.ts".into(), b"fetch('https://example.org')".as_slice()),
+        ]);
+        let r = Session::default()
+            .analyze(&input, "main.ts", None, &EnvironmentContract::default())
+            .unwrap();
+        assert_eq!(r.allowed, expected == 0, "{code}: {r:?}");
+        assert_eq!(differences(&r), expected, "{code}");
+    }
+    for (targets, expected) in [
+        ("globalThis.fetch,globalThis", 0),
+        ("globalThis,globalThis.fetch", 1),
+    ] {
+        let input = if expected == 0 {
+            "[()=>42,{}]"
+        } else {
+            "[{},()=>42]"
+        };
+        let code = format!("[{targets}]={input}; fetch('https://example.org');");
+        assert_eq!(differences(&report(&code, None)), expected, "{code}");
+    }
+}
+
+#[test]
+fn condition_loads_analyze_dependencies_before_loader_replacement() {
+    for (statement, expected) in [
+        ("if (require('./dep')) {}", 1),
+        ("switch (require('./dep')) {}", 1),
+        ("while (require('./dep')) { break; }", 1),
+        ("for (let d=require('./dep'); false;) {}", 1),
+        ("for (;require('./dep');) {break;}", 1),
+        ("let n=0; n+=require('./dep');", 1),
+        ("try { /* first */ require('./dep'); } catch {}", 1),
+        ("do {require('./dep');} while(false);", 1),
+        ("load: require('./dep');", 1),
+        ("for (;false;require('./dep')) {}", 0),
+        ("for (;false;) {require('./dep');}", 0),
+        ("let n=1; n ||= require('./dep');", 0),
+        ("try {} catch { require('./dep'); }", 0),
+        ("try { throw 1; require('./dep'); } catch {}", 0),
+        ("try { missing(),require('./dep'); } catch {}", 0),
+        ("try { const dep=require('./dep'); } catch {}", 1),
+        ("try { { throw 1; require('./dep'); } } catch {}", 0),
+        ("try { { require('./dep'); } } finally {}", 1),
+        ("try {} finally { require('./dep'); }", 1),
+        ("try {} finally { setup(); require('./dep'); }", 1),
+        ("try { setup(); require('./dep'); } finally {}", 1),
+        ("try { const n=1,d=require('./dep'); } catch {}", 1),
+        ("try { const n=1; require('./dep'); } finally {}", 1),
+        ("try { ; require('./dep'); } catch {}", 1),
+        ("try { const opts={a:[1]}; require('./dep'); } catch {}", 1),
+        (
+            "try { const opts={a:missing()}; require('./dep'); } catch {}",
+            0,
+        ),
+        ("try { 0,require('./dep'); } catch {}", 1),
+        ("try { const v=`ok${1+2}`; require('./dep'); } catch {}", 1),
+        ("try { const v=1n/0n; require('./dep'); } catch {}", 0),
+        (
+            "try { const opts={get x(){throw 1;}}; require('./dep'); } catch {}",
+            1,
+        ),
+        (
+            "try { const opts={[missing()]:0}; require('./dep'); } catch {}",
+            0,
+        ),
+        ("try { throw require('./dep'); } catch {}", 1),
+        ("try { throw 1; } finally { require('./dep'); }", 1),
+        ("try { throw 1; require('./dep'); } finally {}", 0),
+        ("if (false) { require('./dep'); }", 0),
+        ("switch (1) { case 2: require('./dep'); }", 0),
+        ("while (false) { require('./dep'); }", 0),
+    ] {
+        for file in ["main.ts", "main.js"] {
+            let statement = if file == "main.ts" {
+                statement.replace("try {", "try { type Erased = string;")
+            } else {
+                statement.to_owned()
+            };
+            let code = format!("{statement} require = () => {{}};");
+            let input = BTreeMap::from([
+                (file.into(), code.as_bytes()),
+                ("dep.js".into(), b"fetch('https://example.org');".as_slice()),
+            ]);
+            let r = Session::default()
+                .analyze(&input, file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert_eq!(r.allowed, expected == 0, "{code}: {r:?}");
+            assert_eq!(differences(&r), expected, "{code}: {r:?}");
+            assert_eq!(
+                r.diagnostics
+                    .iter()
+                    .any(|d| d.file == "dep.js" && d.blocking()),
+                expected == 1
+            );
+        }
+    }
+}
+
+#[test]
+fn possible_receiver_and_helper_replacements_keep_dependent_writes_advisory() {
+    for (writes, expected) in [
+        (
+            "function unused(){globalThis.globalThis={};} globalThis.fetch=()=>{};",
+            0,
+        ),
+        (
+            "if (flag) globalThis.globalThis={}; globalThis.fetch=()=>{};",
+            0,
+        ),
+        (
+            "if (flag) globalThis={}; const g=globalThis; g.fetch=()=>{};",
+            0,
+        ),
+        (
+            "function unused(){Object.assign=()=>{};} Object.assign(globalThis,{fetch:()=>{}});",
+            0,
+        ),
+        (
+            "if (flag) Object.assign=()=>{}; const set=Object.assign; set(globalThis,{fetch:()=>{}});",
+            0,
+        ),
+        ("globalThis.globalThis ||= {}; globalThis.fetch=()=>{};", 0),
+        ("globalThis ??= {}; globalThis.fetch=()=>{};", 0),
+        ("for(globalThis of []) {} globalThis.fetch=()=>{};", 0),
+        (
+            "function unused(){globalThis.globalThis={};} globalThis.globalThis={}; globalThis.fetch=()=>{};",
+            1,
+        ),
+        (
+            "function unused(){globalThis.globalThis={};} Object.assign(globalThis,{globalThis:{}}); globalThis.fetch=()=>{};",
+            1,
+        ),
+        (
+            "function unused(){globalThis.globalThis={};} globalThis={}; globalThis.fetch=()=>{};",
+            1,
+        ),
+        ("globalThis.globalThis={}; globalThis.fetch=()=>{};", 1),
+        (
+            "Object.assign=()=>{}; Object.assign(globalThis,{fetch:()=>{}});",
+            1,
+        ),
+        (
+            "function unused(){globalThis.globalThis={};} globalThis.other=()=>{};",
+            1,
+        ),
+    ] {
+        let code = format!("{writes} fetch('https://example.org');");
+        let r = report(&code, None);
+        assert_eq!(r.allowed, expected == 0, "{code}: {r:?}");
+        assert_eq!(differences(&r), expected, "{code}: {r:?}");
+    }
+}
+
+#[test]
+fn restored_receivers_and_helpers_keep_later_writes_visible() {
+    for (writes, expected) in [
+        (
+            "globalThis.globalThis=globalThis; globalThis.fetch=()=>{};",
+            0,
+        ),
+        (
+            "const root=globalThis; globalThis={}; globalThis=root; globalThis.fetch=()=>{};",
+            0,
+        ),
+        (
+            "const root=globalThis; root.globalThis={}; root.globalThis=root; globalThis.fetch=()=>{};",
+            0,
+        ),
+        (
+            "Object.assign(globalThis,{globalThis}); globalThis.fetch=()=>{};",
+            0,
+        ),
+        (
+            "const root=globalThis; root.globalThis={}; Object.assign(root,{globalThis:root}); globalThis.fetch=()=>{};",
+            0,
+        ),
+        (
+            "const set=Object.assign; Object.assign=()=>{}; Object.assign=set; Object.assign(globalThis,{fetch:()=>{}});",
+            0,
+        ),
+        (
+            "const root=globalThis; globalThis=pick(root); globalThis.fetch=()=>{};",
+            0,
+        ),
+        (
+            "const root=globalThis; globalThis={}; globalThis.fetch=()=>{}; globalThis=root;",
+            1,
+        ),
+        (
+            "const root=globalThis; globalThis=root; globalThis={}; globalThis.fetch=()=>{};",
+            1,
+        ),
+        (
+            "const different={}; const alias=different; globalThis=alias; globalThis.fetch=()=>{};",
+            1,
+        ),
+        (
+            "const set=Object.assign; Object.assign=()=>{}; Object.assign(Object,{assign:set}); Object.assign(globalThis,{fetch:()=>{}});",
+            1,
+        ),
+        (
+            "const set=Object.assign; Object.assign=()=>{}; Object[key]=set; Object.assign(globalThis,{fetch:()=>{}});",
+            0,
+        ),
+        (
+            "try { missing(globalThis={}); } catch {} globalThis.fetch=()=>{};",
+            0,
+        ),
+    ] {
+        let code = format!("{writes} fetch('https://example.org');");
+        let r = report(&code, None);
+        assert_eq!(differences(&r), expected, "{code}: {r:?}");
+        assert_eq!(r.allowed, expected == 0, "{code}: {r:?}");
+    }
+}
+
+#[test]
+fn literal_patterns_and_known_functions_preserve_original_calls() {
+    for (setup, expected) in [
+        ("function noop() {} Object.assign=noop;", 1),
+        (
+            "function noop() {} const alias=noop; Object.assign=alias;",
+            1,
+        ),
+        (
+            "function noop() {} noop=Object.assign; Object.assign=noop;",
+            0,
+        ),
+        ("Object.assign=Object.is;", 1),
+        (
+            "const same=Object.assign; Object.is=same; Object.assign=Object.is;",
+            0,
+        ),
+        ("Object.assign(globalThis,{globalThis:Object});", 1),
+        ("({root:globalThis}={root:{}});", 1),
+        ("({root:globalThis}={root:globalThis});", 0),
+        ("({root:globalThis}={root:{},...{root:globalThis}});", 0),
+        (
+            "({root:globalThis}={root:{},get root(){return globalThis;}});",
+            0,
+        ),
+        ("({root:globalThis}={...{},root:{}});", 1),
+        ("({nested:[globalThis]}={nested:[{}]});", 1),
+        ("try{globalThis={};}finally{}", 1),
+        ("try{}finally{globalThis={};}", 1),
+        ("({1:globalThis}={1:{},1.0:globalThis});", 0),
+        ("({1:globalThis}={1e0:{}});", 1),
+        ("Object.assign=Object.keys;", 1),
+        ("({['__proto__']:globalThis}={['__proto__']:{}});", 1),
+        ("({root:globalThis}={get root(){return globalThis;}});", 0),
+    ] {
+        let code = format!(
+            "{setup} Object.assign(globalThis,{{fetch:()=>{{}}}}); fetch('https://example.org');"
+        );
+        let r = report(&code, None);
+        assert_eq!(r.allowed, expected == 0, "{code}: {r:?}");
+        assert_eq!(differences(&r), expected, "{code}: {r:?}");
+    }
+}
+
+fn assert_pattern_fetch_admission(setup: &str, blocked: bool) {
+    let code = format!(
+        "{setup} Object.assign(globalThis,{{fetch:()=>{{}}}}); fetch('https://example.org');"
+    );
+    let r = report(&code, None);
+    assert_eq!(r.allowed, !blocked, "{code}: {r:?}");
+    assert_eq!(differences(&r), usize::from(blocked), "{code}: {r:?}");
+}
+
+#[test]
+fn pattern_admission_numeric_keys_only_invalidate_possible_collisions() {
+    for key in ["0x10", "1.5", "[0x10]", "[-1.5]", "16n", "0b10000"] {
+        assert_pattern_fetch_admission(
+            &format!("({{root:globalThis}}={{root:{{}},{key}:0}});"),
+            true,
+        );
+    }
+    for key in ["0x10", "1.5", "16n", "[-1.5]"] {
+        assert_pattern_fetch_admission(
+            &format!("({{1:globalThis}}={{1:{{}},{key}:globalThis}});"),
+            true,
+        );
+    }
+    for (field, key) in [
+        ("16", "0x10"),
+        ("1.5", "1.5"),
+        ("-1.5", "[-1.5]"),
+        ("16", "16n"),
+        ("Infinity", "1e999"),
+    ] {
+        assert_pattern_fetch_admission(
+            &format!("({{'{field}':globalThis}}={{'{field}':{{}},{key}:globalThis}});"),
+            false,
+        );
+    }
+    assert_pattern_fetch_admission(
+        "const key='root'; ({root:globalThis}={root:{},[key]:globalThis});",
+        false,
+    );
+}
+
+#[test]
+fn pattern_admission_rest_targets_receive_a_fresh_object() {
+    for setup in [
+        "({...globalThis}={});",
+        "const source=globalThis; ({...globalThis}=source);",
+        "({root:{...globalThis}}={root:globalThis});",
+        "({other:globalThis,...globalThis}={other:globalThis});",
+        "([...globalThis]=[globalThis]);",
+    ] {
+        assert_pattern_fetch_admission(setup, true);
+    }
+    assert_pattern_fetch_admission(
+        "const saved=globalThis; ({...globalThis}=saved); globalThis=saved;",
+        false,
+    );
+}
+
+#[test]
+fn pattern_admission_defaults_use_definitely_defined_literal_inputs() {
+    for setup in [
+        "({root:globalThis=globalThis}={root:{}});",
+        "({root:globalThis=Object.assign(globalThis,{fetch:()=>{}})}={root:{}});",
+        "([globalThis=Object.assign(globalThis,{fetch:()=>{}})]=[{}]);",
+        "({globalThis=globalThis}={globalThis:{}});",
+        "([globalThis=globalThis]=[{}]);",
+        "({root:[globalThis]=[globalThis]}={root:[{}]});",
+    ] {
+        assert_pattern_fetch_admission(setup, true);
+    }
+    for setup in [
+        "({root:globalThis=globalThis}={});",
+        "({root:globalThis=Object.assign(globalThis,{fetch:()=>{}})}={});",
+        "([globalThis=globalThis]=[undefined]);",
+        "({globalThis={}}={globalThis:globalThis});",
+    ] {
+        assert_pattern_fetch_admission(setup, false);
+    }
+}
+
+#[test]
+fn pattern_admission_default_effects_follow_the_literal_input() {
+    for (input, expected) in [("{}", 1), ("{root: 0}", 0), ("{root: undefined}", 1)] {
+        let src = format!("let value; ({{root:value=fetch('https://example.org')}}={input});");
+        assert_eq!(differences(&report(&src, None)), expected, "{src}");
+    }
+}
+
+#[test]
+fn followup_ordinary_and_assign_writes_share_receiver_capture() {
+    for write in [
+        "shim.fetch=other",
+        "Object.assign(shim,{fetch:other})",
+        "delete shim.fetch",
+        "({value:shim.fetch}=input)",
+    ] {
+        for (setup, expected) in [
+            (
+                "Object.assign(globalThis,{globalThis:{}}); const shim=globalThis;",
+                1,
+            ),
+            (
+                "const shim=globalThis; Object.assign(globalThis,{globalThis:{}});",
+                0,
+            ),
+        ] {
+            let code = format!("{setup} {write}; fetch('https://example.org');");
+            assert_eq!(differences(&report(&code, None)), expected, "{code}");
+        }
+    }
+}
+
+#[test]
+fn followup_write_receivers_in_closures_use_their_initializer_snapshot() {
+    for write in ["shim.fetch=other", "Object.assign(shim,{fetch:other})"] {
+        let code = format!(
+            "function patch(){{{write}}} Object.assign(globalThis,{{globalThis:{{}}}}); const shim=globalThis; patch(); fetch('https://example.org');"
+        );
+        assert_eq!(differences(&report(&code, None)), 1, "{code}");
+    }
+    // Cross-function order is uncertain. Retain both possible writes but still
+    // diagnose independent definite effects.
+    let code = "const saved=globalThis; function patch(){ saved.globalThis={}; saved.fetch=other } patch(); fetch('https://example.org'); Bun.write('out','data');";
+    let r = report(code, None);
+    assert_eq!(differences(&r), 1);
+    assert!(
+        r.diagnostics
+            .iter()
+            .any(|d| d.blocking() && d.behavior == "filesystem")
+    );
+}
+
+#[test]
+fn followup_loader_result_members_are_read_after_loader_arguments() {
+    for access in [
+        "require('node:fs', patch).readFileSync('in')",
+        "const read=require('node:fs', patch).readFileSync; read('in')",
+    ] {
+        for (key, expected) in [("readFileSync", 0), ("other", 1)] {
+            let code = access.replace(
+                "patch",
+                &format!("Object.assign(require('node:fs'),{{{key}:()=>0}})"),
+            );
+            assert_eq!(differences(&report(&code, None)), expected, "{code}");
+        }
+    }
+}
+
+#[test]
+fn followup_unrelated_member_writes_do_not_exhaust_the_alias_budget() {
+    let mut src = "import fs from 'node:fs'; const alias=fs;".to_owned();
+    for i in 0..100 {
+        src.push_str(&format!("const value{i}={i};"));
+    }
+    for i in 0..100 {
+        src.push_str(&format!("Object.assign(alias,{{key{i}:0}});"));
+    }
+    src.push_str("alias.readFileSync('in');");
+    let mut session = Session::new(
+        Limits {
+            nodes: 10_000,
+            ..Limits::default()
+        },
+        Arc::new(AtomicBool::new(false)),
+    );
+    let r = session
+        .analyze(
+            &sources(&src),
+            "main.ts",
+            None,
+            &EnvironmentContract::default(),
+        )
+        .unwrap();
+    assert_eq!(differences(&r), 1);
+}
+
+#[test]
 fn object_assign_tracks_replaced_members_without_erasing_other_evidence() {
     for (setup, expected_read, expected_write) in [
         ("Object.assign(fs, {readFileSync: () => 0});", false, true),
@@ -1378,7 +2082,7 @@ fn object_assign_tracks_replaced_members_without_erasing_other_evidence() {
             true,
         ),
         (
-            "Object.assign(Object, {assign: noop}); Object.assign(fs, patch);",
+            "const noop=()=>{}; Object.assign(Object, {assign: noop}); Object.assign(fs, patch);",
             true,
             true,
         ),
@@ -1390,7 +2094,7 @@ fn object_assign_tracks_replaced_members_without_erasing_other_evidence() {
             true,
         ),
         (
-            "Object.assign = noop; Object.assign(fs, patch);",
+            "const noop=()=>{}; Object.assign = noop; Object.assign(fs, patch);",
             true,
             true,
         ),

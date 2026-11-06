@@ -74,15 +74,15 @@ command 都使用 target-scoped grant，并保存在仅所有者可读写的
 先检查目标，再按需选择一种授权或撤销操作。
 开发信任也会授权未来的代码变更，仅在你明确接受此范围时使用。
 
-```bash
-shine trust inspect app/example              # 仅检查，不授予信任
-shine trust grant app/example                # 授予快照信任
-shine trust list                             # 查看授权
-shine trust revoke app/example               # 撤销信任
-shine trust inspect shell/tools/my-command   # 仅检查，不授予信任
-shine trust grant preset                     # 授予快照信任
-shine trust grant app/example --development  # 信任未来的代码变更
-```
+| 操作 | 命令 |
+| --- | --- |
+| 仅检查，不授予信任 | `shine trust inspect app/example` |
+| 授予快照信任 | `shine trust grant app/example` |
+| 查看授权 | `shine trust list` |
+| 撤销信任 | `shine trust revoke app/example` |
+| 仅检查，不授予信任 | `shine trust inspect shell/tools/my-command` |
+| 授予快照信任 | `shine trust grant preset` |
+| 信任未来的代码变更 | `shine trust grant app/example --development` |
 
 快照 Grant 只适用于已经审阅的 target、capability、来源层与完整有效类别快照。显式使用
 `--development` 建立的开发信任允许所显示本地来源中的代码继续修改，但 target、capability、

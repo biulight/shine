@@ -20,10 +20,10 @@ Development trust; explicit `--run-generators` inspection also requires a grant.
 ## Inspect before applying
 
 ```bash
-shine sys list                 # List items for this platform
-shine sys list --all           # Include other platforms
+shine sys list
+shine sys list --all
 shine sys info split-dns
-shine sys bootstrap --dry-run  # Preview initialization without changes
+shine sys bootstrap --dry-run
 ```
 
 `--dry-run` shows selection results, provider/script invocations, and each persistent item-owned
@@ -37,15 +37,15 @@ For item IDs beginning with `-`, put options before `--`, then the item name, fo
 
 Choose one initialization method; review the Plan before using `--yes`:
 
-```bash
-shine sys bootstrap                                # Choose items interactively
-shine sys bootstrap mise                           # Initialize only mise
-shine sys bootstrap rust mise                      # Initialize these items in order
-shine sys bootstrap --item rust --item mise --yes  # Explicit items; approve non-interactively
-shine sys bootstrap --preset recommended           # Use the recommended profile
-shine sys bootstrap --preset minimal               # Use the minimal profile
-shine sys bootstrap --proxy --dry-run              # Preview with proxy settings
-```
+| Operation | Command |
+| --- | --- |
+| Choose items interactively | `shine sys bootstrap` |
+| Initialize only mise | `shine sys bootstrap mise` |
+| Initialize these items in order | `shine sys bootstrap rust mise` |
+| Explicit items; approve non-interactively | `shine sys bootstrap --item rust --item mise --yes` |
+| Use the recommended profile | `shine sys bootstrap --preset recommended` |
+| Use the minimal profile | `shine sys bootstrap --preset minimal` |
+| Preview with proxy settings | `shine sys bootstrap --proxy --dry-run` |
 
 - Positional item IDs bootstrap only those items, preserving their order and ignoring duplicates.
 - Repeated `--item` is the explicit equivalent for scripts and setup orchestrators.
@@ -161,11 +161,11 @@ replacement for software or shell configuration.
 
 Preview before disabling; re-enable only when needed:
 
-```bash
-shine sys profile disable mise --dry-run  # Preview disabling the integration
-shine sys profile disable mise            # Disable the shell integration
-shine sys profile enable mise             # Re-enable the shell integration
-```
+| Operation | Command |
+| --- | --- |
+| Preview disabling the integration | `shine sys profile disable mise --dry-run` |
+| Disable the shell integration | `shine sys profile disable mise` |
+| Re-enable the shell integration | `shine sys profile enable mise` |
 
 Declared PATH integrations add a directory only when it is absent; reloading the generated profile
 does not add duplicate entries, including paths containing spaces or shell pattern characters.
@@ -196,15 +196,15 @@ Some system configuration is managed declaratively and can be reapplied or safel
 Choose the operation you need; preview before applying or removing. Use `--yes` only after
 reviewing the same Plan, and run recovery only for an interrupted operation.
 
-```bash
-shine sys apply --dry-run
-shine sys apply split-dns
-shine sys apply split-dns --yes  # Non-interactive approval
-shine sys uninstall split-dns --dry-run
-shine sys uninstall split-dns
-shine sys recover                # Review an interrupted managed operation
-shine sys recover --yes          # Non-interactive approval
-```
+| Operation | Command |
+| --- | --- |
+| Preview changes | `shine sys apply --dry-run` |
+| Apply split-dns | `shine sys apply split-dns` |
+| Non-interactive approval | `shine sys apply split-dns --yes` |
+| Preview removal | `shine sys uninstall split-dns --dry-run` |
+| Remove after review | `shine sys uninstall split-dns` |
+| Review an interrupted managed operation | `shine sys recover` |
+| Non-interactive approval | `shine sys recover --yes` |
 
 For managed system items, `shine update` compares the desired configuration with the installation
 record; `shine upgrade` also checks the actual system resource. On Windows, a split-DNS NRPT rule

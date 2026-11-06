@@ -19,7 +19,7 @@ source ~/.zshrc
 然后检查：
 
 ```bash
-shine list  # 查看已安装资源
+shine list
 shine info proxy
 ```
 
@@ -53,10 +53,10 @@ SHINE_CONFIG_DIR=/tmp/shine-check shine app list
 
 `shine env set` 更新变量，但已安装模板不会自动重写。运行：
 
-```bash
-shine update --verbose   # 详细检查待更新内容
-shine upgrade --verbose  # 更新配置并显示详细输出
-```
+| 操作 | 命令 |
+| --- | --- |
+| 详细检查待更新内容 | `shine update --verbose` |
+| 更新配置并显示详细输出 | `shine upgrade --verbose` |
 
 如果使用项目 `shine.config.toml`、项目 `shine.env.toml` 或 overlay，请确认当前工作目录和覆盖优先级。
 
@@ -75,7 +75,7 @@ shine upgrade --verbose  # 更新配置并显示详细输出
 
 ```bash
 shine app info surge
-shine env list  # 查看变量及其来源
+shine env list
 shine app refresh surge subscription-proxies.conf
 ```
 
@@ -98,7 +98,7 @@ git pull --ff-only
 
 ```bash
 shine sys info <ITEM>
-shine sys bootstrap --dry-run  # 预览初始化，不修改系统
+shine sys bootstrap --dry-run
 shine sys uninstall <ITEM> --dry-run
 ```
 

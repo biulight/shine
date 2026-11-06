@@ -11,11 +11,11 @@ Shine 只能支持表中的工具。Shell 与 App 预设管理声明的命令和
 预览，确认目标路径、备份和权限范围：
 
 ```bash
-shine shell list      # 查看 Shell 预设
-shine app list        # 查看 App 预设
+shine shell list
+shine app list
 shine app info ghostty
 shine app install ghostty --dry-run
-shine sys list --all  # 包括其他平台的项目
+shine sys list --all
 shine sys info split-dns
 ```
 

@@ -22,10 +22,10 @@ sidebar_position: 1
 完全由空白组成的目标会被拒绝。
 
 ```bash
-shine list --available  # 查看所有类型的可用资源
+shine list --available
 shine info app/starship
 shine install app/starship
-shine update            # 检查更新，不应用改动
+shine update
 shine upgrade app/starship
 ```
 

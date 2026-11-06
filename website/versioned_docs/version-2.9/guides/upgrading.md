@@ -28,12 +28,12 @@ artifacts require structured `env` entries containing `source`, optional `target
 `sensitivity`. Legacy string arrays are rejected. Use Shine 2.7 or later to preview the conversion
 before applying it; the migrator automatically backs up the metadata it changes:
 
-```bash
-shine preset migrate ./my-presets --dry-run  # Preview this source's migration
-shine preset migrate ./my-presets            # Apply after reviewing the preview
-shine preset validate ./my-presets           # Validate the migrated metadata
-shine preset lint ./my-presets               # Check authoring issues
-```
+| Operation | Command |
+| --- | --- |
+| Preview this source's migration | `shine preset migrate ./my-presets --dry-run` |
+| Apply after reviewing the preview | `shine preset migrate ./my-presets` |
+| Validate the migrated metadata | `shine preset validate ./my-presets` |
+| Check authoring issues | `shine preset lint ./my-presets` |
 
 The migrator needs explicit sensitivity from the old declarations; missing or conflicting
 classifications require manual correction. Migrate Git-managed overlays in their upstream

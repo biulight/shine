@@ -26,12 +26,12 @@ slug: /upgrading
 `env`，包含 `source`、可选 `target` 和 `sensitivity`；旧字符串数组会被拒绝。
 使用 Shine 2.7 或更高版本预览并应用转换；迁移命令会自动备份修改的元数据：
 
-```bash
-shine preset migrate ./my-presets --dry-run  # 预览指定预设源的迁移
-shine preset migrate ./my-presets            # 审阅预览后应用迁移
-shine preset validate ./my-presets           # 验证迁移后的元数据
-shine preset lint ./my-presets               # 检查预设编写问题
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览指定预设源的迁移 | `shine preset migrate ./my-presets --dry-run` |
+| 审阅预览后应用迁移 | `shine preset migrate ./my-presets` |
+| 验证迁移后的元数据 | `shine preset validate ./my-presets` |
+| 检查预设编写问题 | `shine preset lint ./my-presets` |
 
 迁移需要旧声明中的显式敏感性；缺失或冲突时须人工修正。Git 管理的 overlay 要在上游
 checkout 中迁移，再重新 pull。迁移会备份元数据，但不会执行脚本、解密值或更新信任。

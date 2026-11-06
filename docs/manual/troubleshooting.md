@@ -21,7 +21,7 @@ source ~/.zshrc
 Then inspect the preset:
 
 ```bash
-shine list  # List installed resources
+shine list
 shine info proxy
 ```
 
@@ -60,10 +60,10 @@ Shine uses this directory for configuration and runtime state and does not read 
 
 `shine env set` updates the value but does not automatically rewrite installed templates. Run:
 
-```bash
-shine update --verbose   # Inspect pending changes
-shine upgrade --verbose  # Apply updates with detailed output
-```
+| Operation | Command |
+| --- | --- |
+| Inspect pending changes | `shine update --verbose` |
+| Apply updates with detailed output | `shine upgrade --verbose` |
 
 If you use a project `shine.config.toml`, project `shine.env.toml`, or overlay, confirm the current
 working directory and override precedence.
@@ -89,7 +89,7 @@ the generator's environment prerequisites are present:
 
 ```bash
 shine app info surge
-shine env list  # List variables and their sources
+shine env list
 shine app refresh surge subscription-proxies.conf
 ```
 
@@ -123,7 +123,7 @@ make sure `git` is in `PATH`. Non-Git preset directories are skipped normally.
 
 ```bash
 shine sys info <ITEM>
-shine sys bootstrap --dry-run  # Preview initialization without changes
+shine sys bootstrap --dry-run
 shine sys uninstall <ITEM> --dry-run
 ```
 

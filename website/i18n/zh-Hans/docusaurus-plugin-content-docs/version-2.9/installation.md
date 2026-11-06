@@ -108,11 +108,11 @@ cargo install shine-cli
 
 按需选择一条更新命令：
 
-```bash
-shine self upgrade                    # 升级到最新稳定版
-shine self upgrade --channel stable   # 重新安装最新稳定版，也可从 preview 切回
-shine self upgrade --channel preview  # 更新到滚动预览版
-```
+| 操作 | 命令 |
+| --- | --- |
+| 升级到最新稳定版 | `shine self upgrade` |
+| 重新安装最新稳定版，也可从 preview 切回 | `shine self upgrade --channel stable` |
+| 更新到滚动预览版 | `shine self upgrade --channel preview` |
 
 `--channel stable` 即使在当前版本相同或更新时也会执行重新安装。
 
