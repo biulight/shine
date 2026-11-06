@@ -539,6 +539,7 @@ mod tests {
         let security = |script: &str| {
             let out = std::process::Command::new("powershell.exe")
                 .args(["-NoProfile", "-NonInteractive", "-Command", script])
+                .env_remove("PSModulePath")
                 .env("SHINE_FIXTURE_PROFILE", &path)
                 .output()
                 .unwrap();
