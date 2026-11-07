@@ -50,6 +50,12 @@ pub fn bold_stderr(s: &str) -> String {
         .to_string()
 }
 
+pub(crate) fn bold_red_stderr(s: &str) -> String {
+    use owo_colors::Style;
+    s.if_supports_color(Stream::Stderr, |t| t.style(Style::new().bold().red()))
+        .to_string()
+}
+
 /// Bold warning emphasis for sensitive actions rendered on stderr.
 pub fn bold_yellow_stderr(s: &str) -> String {
     use owo_colors::Style;

@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-11-07 — Top-level errors need stderr-aware emphasis
+
+- **Symptom**: upgrade failures used the same visual weight as ordinary progress output.
+- **Cause**: the binary printed anyhow diagnostics directly, bypassing CLI color helpers.
+- **Fix**: style the first summary line bold red and the cause heading bold using stderr support;
+  retain the diagnostic text, error chain, backtrace, failure exit and already-reported marker.
+- **Coverage**: process tests compare complete diagnostics with stderr attached to a terminal,
+  redirected while stdout is a terminal, and with `NO_COLOR` set.
+
 ## 2026-11-07 — Verify Windows startup file security through the whole lifecycle
 
 Replacing a PowerShell profile can retain its bytes and still change its owner or inherit broader

@@ -8,6 +8,10 @@ sidebar_position: 1
 This page reflects Shine 2.10.0. Run `shine <COMMAND> --help` for every option supported by the
 installed version. The task guides explain complete workflows; this page is a compact command index.
 
+Command failures are reported on stderr. When stderr supports color, the top-level `Error:`
+summary is bold red and `Caused by:` is bold; diagnostic details keep the default text color.
+Set `NO_COLOR=1` to disable color. Redirected stderr is plain unless color is explicitly forced.
+
 ## Targets
 
 Use complete targets in scripts and documentation:

@@ -8,7 +8,7 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             if !error.is::<cli::output::ReportedCommandFailure>() {
-                eprintln!("Error: {error:?}");
+                eprintln!("{}", cli::output::command_error(&error));
             }
             std::process::ExitCode::FAILURE
         }
