@@ -91,7 +91,7 @@ shine sys info split-dns
 | `git` | `~/.gitconfig` | Git 常用别名和默认配置。安装前会按普通 app 预设规则备份不受管文件。 |
 | `JetBrains` | `~/.ideavimrc` | JetBrains 的 IdeaVim 配置；需要已在 IDE 中启用 IdeaVim 插件。普通模式下，Ctrl + H/J/K/L 分别切换到左/下/上/右编辑器分屏，与 Ghostty 预设保持一致。 |
 | `starship` | `~/.config/starship.toml` | Starship prompt 配置；需要另行安装并在 shell 中启用 Starship。 |
-| `surge` | macOS；`~/Library/Application Support/Surge/Profiles/` | 本地代理、策略组和规则文件，以及可选的 URI 订阅生成文件。需已安装 Surge；生成、刷新和 `app artifact apply/remove` 的 profile `#!include` 流程见[应用配置指南](../guides/app-presets.md#生成式文件与-surge-uri-订阅)。 |
+| `surge` | macOS；`~/Library/Application Support/Surge/Profiles/` | 本地代理、策略组、规则、General 设置模块，以及可选的 URI 订阅生成文件。Artifact apply/remove 需要 Bun，以及正在运行且 CLI 支持模块管理的 Surge；生成、刷新和 artifact 流程见[应用配置指南](../guides/app-presets.md#生成式文件与-surge-uri-订阅)。 |
 | `vim` | `~/.vim/` | Vim 基础配置和机器本地覆盖文件。 |
 
 `docker-desktop` 的 JSON 合并保留其它 Docker Desktop 设置；所有其它 app 预设只管理其各自声明的文件。安装应用预设不会下载、安装或启动 Ghostty、Docker、Surge、Starship 等应用。

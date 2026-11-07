@@ -70,5 +70,5 @@ fn builtin_bun_samples_parse_deterministically_with_explicit_coverage_gaps() {
             sample_count += 1;
         }
     }
-    assert_eq!(sample_count, 6);
+    assert_eq!(sample_count, 7);
 }

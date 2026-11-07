@@ -10,29 +10,16 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { applyProfileArtifact } from "./profile-artifact";
 
-const buildScript = join(import.meta.dir, "build.ts");
-const unbuildScript = join(import.meta.dir, "unbuild.ts");
+const buildScript = "build";
+const unbuildScript = "unbuild";
 
 async function runArtifact(
-  script: string,
+  action: "build" | "unbuild",
   profile: string,
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  const child = Bun.spawn([process.execPath, script], {
-    env: {
-      ...Bun.env,
-      SHINE_SURGE_SKIP_RELOAD: "1",
-      SURGE_PROFILE: profile,
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  return { code, stdout, stderr };
+) {
+  return applyProfileArtifact(action, profile);
 }
 
 async function makeFixture(profileContent: string): Promise<{
@@ -53,6 +40,18 @@ async function makeFixture(profileContent: string): Promise<{
 }
 
 describe("Surge profile artifact", () => {
+  test("include apply/remove preserves a BOM and leaves General unchanged", async () => {
+    const original = "\uFEFF[General]\r\nskip-proxy = localhost\r\n[Proxy]\r\n#!include proxies.conf\r\n[Proxy Group]\r\n#!include groups.conf\r\n[Rule]\r\n#!include rules.conf\r\n";
+    const fixture = await makeFixture(original);
+    try {
+      await runArtifact("build", fixture.profile);
+      const applied = await readFile(fixture.profile, "utf8");
+      expect(applied.startsWith("\uFEFF[General]\r\nskip-proxy = localhost\r\n")).toBe(true);
+      expect((await runArtifact("build", fixture.profile)).changed).toBe(false);
+      await runArtifact("unbuild", fixture.profile);
+      expect(await readFile(fixture.profile, "utf8")).toBe(original);
+    } finally { await rm(fixture.dir, { recursive: true, force: true }); }
+  });
   for (const [name, markers] of [
     ["missing closing marker", "# >>> shine local proxy groups >>>\nOld = select, DIRECT\n"],
     ["missing opening marker", "# <<< shine local proxy groups <<<\n"],
@@ -64,10 +63,8 @@ describe("Surge profile artifact", () => {
       const fixture = await makeFixture(original);
       try {
         await chmod(fixture.profile, 0o600);
-        for (const script of [buildScript, unbuildScript]) {
-          const result = await runArtifact(script, fixture.profile);
-          expect(result.code).not.toBe(0);
-          expect(result.stderr).toContain("legacy Shine proxy-group block");
+        for (const script of [buildScript, unbuildScript] as const) {
+          await expect(runArtifact(script, fixture.profile)).rejects.toThrow("legacy Shine proxy-group block");
           expect(await readFile(fixture.profile, "utf8")).toBe(original);
           expect((await stat(fixture.profile)).mode & 0o777).toBe(0o600);
         }
@@ -95,7 +92,7 @@ describe("Surge profile artifact", () => {
     try {
       await chmod(fixture.profile, 0o640);
       const first = await runArtifact(buildScript, fixture.profile);
-      expect(first.code).toBe(0);
+      expect(first.changed).toBe(true);
 
       const patched = await readFile(fixture.profile, "utf8");
       expect(patched).toContain(
@@ -112,8 +109,7 @@ describe("Surge profile artifact", () => {
       expect((await stat(fixture.profile)).mode & 0o777).toBe(0o640);
 
       const second = await runArtifact(buildScript, fixture.profile);
-      expect(second.code).toBe(0);
-      expect(second.stdout).toContain("already patched");
+      expect(second.changed).toBe(false);
       expect(await readFile(fixture.profile, "utf8")).toBe(patched);
     } finally {
       await rm(fixture.dir, { recursive: true, force: true });
@@ -126,9 +122,7 @@ describe("Surge profile artifact", () => {
     );
     try {
       const before = await readFile(fixture.profile, "utf8");
-      const result = await runArtifact(buildScript, fixture.profile);
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain(
+      await expect(runArtifact(buildScript, fixture.profile)).rejects.toThrow(
         "[Proxy] has no #!include directive to patch",
       );
       expect(await readFile(fixture.profile, "utf8")).toBe(before);
@@ -151,7 +145,7 @@ describe("Surge profile artifact", () => {
     );
     try {
       const result = await runArtifact(unbuildScript, fixture.profile);
-      expect(result.code).toBe(0);
+      expect(result.changed).toBe(true);
       expect(await readFile(fixture.profile, "utf8")).toBe(
         [
           "[Proxy]",
@@ -164,8 +158,7 @@ describe("Surge profile artifact", () => {
       );
 
       const second = await runArtifact(unbuildScript, fixture.profile);
-      expect(second.code).toBe(0);
-      expect(second.stdout).toContain("already unpatched");
+      expect(second.changed).toBe(false);
     } finally {
       await rm(fixture.dir, { recursive: true, force: true });
     }
@@ -178,9 +171,7 @@ describe("Surge profile artifact", () => {
     const link = join(fixture.dir, "Linked.conf");
     try {
       await symlink(fixture.profile, link);
-      const result = await runArtifact(buildScript, link);
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain("must not be a symbolic link");
+      await expect(runArtifact(buildScript, link)).rejects.toThrow("must not be a symbolic link");
     } finally {
       await rm(fixture.dir, { recursive: true, force: true });
     }

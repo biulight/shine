@@ -1150,6 +1150,13 @@ bugs. Check this list before changing the modules named in each entry.
   behavior shared by build and teardown; do not duplicate it in an overlay.
   Missing, unmatched, or nested legacy proxy-group markers fail before any write; an unterminated
   block must never turn the remaining user content into deletion material.
+- **Surge General settings belong to a fixed native module.** `shine-general.sgmodule` is an
+ordinary managed file with a fixed native Profiles destination and identity. Apply validates its
+installed bytes against the reviewed snapshot before enabling; remove disables/reloads before
+include cleanup and Core file deletion. Only that module is changed. Native command failures
+fail explicit artifacts; retries observe native state rather than using a second ownership journal.
+General values are never rewritten in the user Profile. Device-wide enable state, remembered
+reinstall behavior and non-deduplicating `%APPEND%` are part of the documented contract (ADR 0166).
 - **App persistent output uses state and cache directories.** Artifact Plans and execution create
   the per-category state/cache directories; the fixed App environment exposes those paths without
   an HTTP publishing directory. Legacy published files and native service registrations are not

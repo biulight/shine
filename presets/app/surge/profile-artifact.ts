@@ -1,5 +1,4 @@
 import {
-  access,
   chmod,
   lstat,
   readFile,
@@ -8,9 +7,12 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import {
+  generalModuleState, moduleFile, runSurgeCommand, setGeneralModule, validateGeneralModule,
+} from "./surge-module";
+import type { SurgeCommand } from "./surge-module";
 
 type Line = {
   text: string;
@@ -48,6 +50,7 @@ function joinLines(lines: Line[]): string {
 }
 
 function sectionName(line: string): string | undefined {
+  line = line.replace(/^\uFEFF/, "");
   if (!line.startsWith("[")) return undefined;
   return line.trimEnd();
 }
@@ -174,16 +177,16 @@ async function isRegularFile(path: string): Promise<boolean> {
 async function readUtf8(path: string): Promise<string> {
   const bytes = await readFile(path);
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     throw new Error(`Surge profile is not valid UTF-8: ${path}`);
   }
 }
 
-export async function applyProfileArtifact(
+async function prepareProfileArtifact(
   action: "build" | "unbuild",
   configuredPath: string,
-): Promise<{ changed: boolean; profile: string }> {
+) {
   const profile = expandProfilePath(configuredPath);
   const metadata = await lstat(profile).catch(() => undefined);
   if (!metadata) throw new Error(`SURGE_PROFILE is not a file: ${profile}`);
@@ -213,56 +216,73 @@ export async function applyProfileArtifact(
     desired = unpatchProfile(original);
   }
 
-  if (desired === original) return { changed: false, profile };
-
-  const temporary = join(
-    profileDir,
-    `.surge-${action}.${basename(profile)}.${crypto.randomUUID()}.tmp`,
-  );
-  try {
-    await writeFile(temporary, desired, { flag: "wx", mode: metadata.mode });
-    await chmod(temporary, metadata.mode & 0o7777);
-    await rename(temporary, profile);
-  } finally {
-    await unlink(temporary).catch(() => undefined);
-  }
-  return { changed: true, profile };
+  return async (): Promise<{ changed: boolean; profile: string }> => {
+    const verifyUnchanged = async () => {
+      const current = await lstat(profile);
+      if (!current.isFile() || current.isSymbolicLink() || current.ino !== metadata.ino
+        || current.dev !== metadata.dev || current.mode !== metadata.mode || await readUtf8(profile) !== original) {
+        throw new Error("Surge profile changed during preparation; review and retry");
+      }
+    };
+    await verifyUnchanged();
+    if (desired === original) return { changed: false, profile };
+    const temporary = join(profileDir, `.surge-${action}.${basename(profile)}.${crypto.randomUUID()}.tmp`);
+    try {
+      await writeFile(temporary, desired, { flag: "wx", mode: metadata.mode });
+      await chmod(temporary, metadata.mode & 0o7777);
+      await verifyUnchanged();
+      await rename(temporary, profile);
+    } finally {
+      await unlink(temporary).catch(() => undefined);
+    }
+    return { changed: true, profile };
+  };
 }
 
-export async function reloadSurge(): Promise<void> {
-  if (Bun.env.SHINE_SURGE_SKIP_RELOAD === "1") return;
-  const surgeCli =
-    "/Applications/Surge.app/Contents/Applications/surge-cli";
-  try {
-    await access(surgeCli, constants.X_OK);
-  } catch {
-    return;
-  }
-  const process = Bun.spawn([surgeCli, "reload"], {
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  if ((await process.exited) !== 0) {
-    console.error("surge: surge-cli reload failed (is Surge running?)");
-  }
+export async function applyProfileArtifact(action: "build" | "unbuild", configuredPath: string) {
+  return (await prepareProfileArtifact(action, configuredPath))();
 }
 
 export async function runProfileArtifact(
   action: "build" | "unbuild",
+  options: { profile?: string; installedModule?: string; command?: SurgeCommand } = {},
 ): Promise<void> {
-  const configuredPath = Bun.env.SURGE_PROFILE;
+  const command = options.command ?? runSurgeCommand;
+  // Uninstall calls teardown before file removal. Disable first even if the
+  // profile is missing/malformed, so include cleanup cannot strand an enabled module.
+  if (action === "unbuild") {
+    await setGeneralModule(false, command);
+    await command(["reload"]);
+  }
+  const configuredPath = options.profile ?? Bun.env.SURGE_PROFILE;
   if (!configuredPath) {
     throw new Error(
       "SURGE_PROFILE is not set — run: shine env set SURGE_PROFILE /absolute/path/to/Profile.conf",
     );
   }
-  const result = await applyProfileArtifact(action, configuredPath);
+  const apply = await prepareProfileArtifact(action, configuredPath);
+  let installedModule: string | undefined;
+  let reviewedModule: Buffer | undefined;
+  if (action === "build") {
+    installedModule = options.installedModule ?? join(homedir(), "Library/Application Support/Surge/Profiles", moduleFile);
+    reviewedModule = await readFile(join(import.meta.dir, moduleFile));
+    await validateGeneralModule(installedModule, reviewedModule);
+    if (generalModuleState(await command(["module", "list"])) === undefined) {
+      throw new Error(`Surge has not discovered ${moduleFile}; run: shine app install surge`);
+    }
+  }
+  const result = await apply();
+  if (action === "build") {
+    await validateGeneralModule(installedModule!, reviewedModule!);
+    await setGeneralModule(true, command);
+    await command(["reload"]);
+  } else if (result.changed) {
+    await command(["reload"]);
+  }
   const verb = action === "build" ? "patched" : "unpatched";
   console.log(
     result.changed
       ? `surge: ${verb} ${result.profile}`
       : `surge: profile already ${verb} — no change (${result.profile})`,
   );
-  await reloadSurge();
 }

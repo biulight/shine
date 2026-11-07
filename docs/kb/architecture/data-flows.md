@@ -1127,6 +1127,14 @@ patchable include. Subscription nodes are not added to `[Proxy]`;
 `local-proxy-groups.conf` loads the generated bare policy file through
 `policy-path`.
 
+Surge also installs an inert `shine-general.sgmodule` at a fixed per-file native Profiles
+destination. Apply prepares includes, validates the installed module against its reviewed source
+and native discovery, writes includes, then enables only `shine-general`, verifies state and
+reloads. General properties remain untouched in the original Profile. Remove disables/reloads
+the module before include cleanup and Core's managed-file removal. Native errors propagate;
+retries reconcile current state without introducing property receipts. See
+[ADR 0166](../decisions/0166-surge-native-general-module.md).
+
 **Teardown (`shine app artifact remove <app-id>`, ADR 0012).** An `[artifact].teardown` script reverses
 `build`, sharing the *identical* resolution and env contract above (steps 1–4). Explicit removal
 reviews an `app-artifact-remove` Plan and propagates failure. Uninstall includes available teardown
