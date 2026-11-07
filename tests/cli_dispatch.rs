@@ -8585,3 +8585,69 @@ fn self_uninstall_reviews_owned_copy_and_stops_before_final_cleanup_on_conflict(
     );
     assert_eq!(fs::read(cat.join("config")).unwrap(), b"original");
 }
+
+#[cfg(unix)]
+#[test]
+fn top_level_error_colors_follow_stderr_and_preserve_diagnostics() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    let blocked = fixture.0.join("parent-file");
+    fs::write(&blocked, "retain").unwrap();
+    for chained in [false, true] {
+        let mut baseline = None;
+        for (terminal_stderr, no_color) in [(false, false), (true, false), (true, true)] {
+            let mut command = fixture.command();
+            if chained {
+                command
+                    .args(["self", "install", "--dest"])
+                    .arg(blocked.join("shine"));
+            } else {
+                command.args(["--config-dir", "", "list"]);
+            }
+            command
+                .env("TERM", "xterm-256color")
+                .env("RUST_BACKTRACE", "0")
+                .env("RUST_LIB_BACKTRACE", "0")
+                .env_remove("NO_COLOR")
+                .env_remove("FORCE_COLOR")
+                .env_remove("CLICOLOR_FORCE")
+                .env_remove("CLICOLOR")
+                .env_remove("IGNORE_IS_TERMINAL");
+            if no_color {
+                command.env("NO_COLOR", "1");
+            }
+            let (output, terminal) = output_with_terminal(command, !terminal_stderr);
+            assert_eq!(output.status.code(), Some(1));
+            assert!(output.stdout.is_empty());
+            let text = String::from_utf8_lossy(if terminal_stderr {
+                &terminal
+            } else {
+                &output.stderr
+            })
+            .replace("\r\n", "\n");
+            let plain = console::strip_ansi_codes(&text).into_owned();
+            assert!(plain.starts_with("Error: "), "{plain}");
+            assert_eq!(plain.contains("\nCaused by:\n"), chained, "{plain}");
+            if terminal_stderr && !no_color {
+                let first = text.lines().next().unwrap();
+                assert!(first.contains("\x1b[31;1m"), "{text:?}");
+                assert!(first.ends_with("\x1b[0m"), "{text:?}");
+                if chained {
+                    assert!(text.contains("\n\x1b[1mCaused by:\x1b[0m\n"), "{text:?}");
+                    let details = text.split_once("Caused by:\x1b[0m\n").unwrap().1;
+                    assert!(!details.contains("\x1b["), "{text:?}");
+                }
+            } else {
+                assert!(!text.contains("\x1b["), "{text:?}");
+            }
+            if let Some(expected) = &baseline {
+                assert_eq!(&plain, expected);
+            } else {
+                baseline = Some(plain);
+            }
+        }
+    }
+    assert_eq!(fs::read_to_string(blocked).unwrap(), "retain");
+}
