@@ -2,6 +2,53 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 
+#[test]
+fn surge_deploys_an_inert_general_module_to_its_native_profiles_directory() {
+    let runtime = super::support::runtime(shine_core::runtime::RuntimePlatform::Macos);
+    let categories = runtime.app_categories(Some("surge")).unwrap();
+    let surge = categories.first().unwrap();
+    let module = surge
+        .files
+        .iter()
+        .find(|file| file.source_rel == Path::new("shine-general.sgmodule"))
+        .expect("the General module is an ordinary managed App file");
+    assert_eq!(
+        runtime.app_destination(surge, module).unwrap(),
+        runtime
+            .context()
+            .home_dir
+            .join("Library/Application Support/Surge/Profiles/shine-general.sgmodule")
+    );
+    assert!(module.generator.is_none());
+    let mut relocated = surge.clone();
+    relocated.destination_root = Some(
+        runtime
+            .context()
+            .home_dir
+            .join("other-profiles")
+            .display()
+            .to_string(),
+    );
+    assert_eq!(
+        runtime.app_destination(&relocated, module).unwrap(),
+        runtime.app_destination(surge, module).unwrap()
+    );
+    let content =
+        String::from_utf8_lossy(&runtime.presets().files()["app/surge/shine-general.sgmodule"]);
+    assert!(content.contains("#!name=shine-general"));
+    assert!(
+        content
+            .lines()
+            .all(|line| { line.trim().is_empty() || line.starts_with('#') || line == "[General]" })
+    );
+    let metadata = String::from_utf8_lossy(&runtime.presets().files()["app/surge/shine.toml"]);
+    assert!(!metadata.contains("\"module\", \"enable\""));
+    assert_eq!(
+        surge.artifact.as_ref().unwrap().teardown.as_deref(),
+        Some("unbuild.ts")
+    );
+}
+
 fn embedded_destination_runtime(
     home: &Path,
 ) -> shine_core::runtime::CoreRuntime<shine_core::runtime::InMemoryHost> {

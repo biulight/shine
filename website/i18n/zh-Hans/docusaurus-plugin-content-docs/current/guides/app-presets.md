@@ -239,10 +239,41 @@ Shine 不会隐式运行 artifact 命令。每次手动 apply/remove 都会显�
 
 需要保留的脚本输出请写入 `SHINE_STATE_DIR` 或 `SHINE_CACHE_DIR`；临时源文件副本会在执行后删除。
 
-内置 `surge` app 预设会把 `local-proxies.conf`、`local-proxy-groups.conf`、`local-rules.conf` 和可选的订阅生成文件安装到 Surge Profiles 目录。设置 `[env]` 中的 `SURGE_PROFILE` 后，`shine app artifact apply surge` 使用内置 Bun artifact 幂等修补活动配置文件的 `[Proxy]`、`[Proxy Group]` 与 `[Rule]` `#!include` 行。Overlay 只需覆盖自己的策略文件，无需提供构建脚本。
+内置 `surge` app 预设会把 `local-proxies.conf`、`local-proxy-groups.conf`、`local-rules.conf`、`shine-general.sgmodule` 和可选的订阅生成文件安装到 Surge Profiles 目录。设置 `[env]` 中的 `SURGE_PROFILE` 后，`shine app artifact apply surge` 使用内置 Bun artifact 幂等修补 `[Proxy]`、`[Proxy Group]` 与 `[Rule]` 的 `#!include` 行，启用 `shine-general` 模块，再 reload Surge。Overlay 只需覆盖自己的策略文件，无需提供构建脚本。
+
+要添加本地 `[General]` 设置，在当前 overlay 中创建 `app/surge/shine-general.sgmodule`：
+
+```ini
+#!name=shine-general
+#!desc=Local General settings managed by Shine.
+#!system=mac
+
+[General]
+skip-proxy = %APPEND% *.internal
+```
+
+请保留文件名、`#!name` 和原生模块安装目录 `~/Library/Application Support/Surge/Profiles/`
+不变。内置模块只有注释示例。修改 overlay 源文件，不要修改已安装的副本，然后运行：
+
+```bash
+shine app install surge
+shine env set SURGE_PROFILE "/absolute/path/to/Profile.conf"
+shine app artifact apply surge
+```
+
+Apply 和 remove 需要 Bun，以及正在运行且 CLI 支持模块管理的 Surge Mac。Apply 会先检查安装的
+模块与本次审核过的预设内容是否一致；不一致时，请核对修改并先安装或升级预设。Install 和 upgrade
+只部署文件并 reload Surge，不发送模块启用命令。新模块默认关闭，但 Surge 会记住以前的启用状态，
+删除后重新安装也可能直接生效。
+
+模块只改变生效配置，不改写原 Profile 的 `[General]`。启用状态属于当前设备，不局限于
+`SURGE_PROFILE` 指定的文件。后续可在同一行追加值、新增属性行，或用 `key = value` 覆盖标量设置。
+`%APPEND%` 不会对已有值去重，但重复启用或 reload 不会继续累积副本。模块已启用时，安装后的内容
+更新会在 reload 时生效。`skip-proxy` 控制系统代理绕过设置，不等同于 `DIRECT` 路由规则；增强模式
+仍可能接管相关流量。
 
 如果旧版 Shine proxy-group 块的标记缺失或嵌套，应用和撤销修补都会报错，并保留配置文件不变。
-请先修复配置文件中的异常标记，再重试。
+Remove 此时可能已停用模块。请先修复配置文件中的异常标记，再重试。
 
 预设还安装默认注释、不立即生效的 `LAN Network`、`LAN PROXY` 和 `Other Direct` 规则示例。每类规则在 `local-rules.conf` 中提供三种互斥来源：随 Profile 安装的相对 `rules/*.list`、同设备 loopback HTTP 地址，或自行替换域名的远程 HTTPS 地址。每类只启用一种；相对文件通常最简单。`localhost` 始终指运行 Surge 的设备，在 iOS 上不会指向另一台局域网主机。
 
@@ -253,6 +284,11 @@ shine app artifact remove surge
 ```
 
 `artifact remove` 只运行预设声明的 `teardown` 脚本。卸载带有 teardown 的 app 时，Shine 也会尽力执行清理；清理失败只会警告，仍会继续安全卸载受管文件。
+Surge 的 teardown 会先停用 `shine-general` 并 reload，再撤销 include；`artifact remove` 保留
+已安装文件，uninstall 随后才删除受管文件。不要先删除模块文件：删除后效果可能持续到下次 reload，
+且不会清除记住的启用状态。若已删除，请恢复模块文件并再次运行 remove，以清除该状态。CLI 操作
+失败会使 artifact 命令失败。中断的 apply 可能已经更新 include，中断的 remove 可能已经停用模块；
+修复提示的问题后，重复原命令即可继续完成。其他模块不会被修改。
 
 ### Clash Verge Rev
 

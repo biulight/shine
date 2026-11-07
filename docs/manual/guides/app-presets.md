@@ -289,13 +289,49 @@ Keep script output that must survive execution in `SHINE_STATE_DIR` or `SHINE_CA
 Temporary source copies are removed afterward.
 
 The built-in `surge` preset installs `local-proxies.conf`, `local-proxy-groups.conf`,
-`local-rules.conf`, and the optional subscription file in the Surge Profiles directory. After setting
+`local-rules.conf`, `shine-general.sgmodule`, and the optional subscription file in the Surge Profiles directory. After setting
 `SURGE_PROFILE` in `[env]`, `shine app artifact apply surge` uses a built-in Bun artifact to
-idempotently patch `[Proxy]`, `[Proxy Group]`, and `[Rule]` `#!include` lines in the active profile.
+idempotently patch `[Proxy]`, `[Proxy Group]`, and `[Rule]` `#!include` lines, enable the
+`shine-general` module, and reload Surge.
 An overlay supplies only its policy files and does not need its own build script.
 
+For local `[General]` settings, create `app/surge/shine-general.sgmodule` in your active overlay:
+
+```ini
+#!name=shine-general
+#!desc=Local General settings managed by Shine.
+#!system=mac
+
+[General]
+skip-proxy = %APPEND% *.internal
+```
+
+Keep the filename, `#!name`, and native module destination
+`~/Library/Application Support/Surge/Profiles/` unchanged. The built-in module contains only
+commented examples. Edit the overlay source, not its installed copy, then run:
+
+```bash
+shine app install surge
+shine env set SURGE_PROFILE "/absolute/path/to/Profile.conf"
+shine app artifact apply surge
+```
+
+Apply and remove require Bun and a running Surge Mac with CLI module support. Apply checks that
+the installed module matches the reviewed preset before enabling it. If they differ, review your
+edits and install or upgrade the preset first. Install and upgrade deploy files and reload Surge;
+they do not issue a module-enable command. A new module starts disabled, but Surge remembers a
+previously enabled module across deletion and reinstallation.
+
+Modules change the effective configuration without rewriting `[General]` in the original Profile.
+Their enable state is device-wide, not limited to the path in `SURGE_PROFILE`. Add more values on
+the same line, another property line, or use `key = value` to override a scalar setting. `%APPEND%`
+does not deduplicate existing values; repeated enable/reload does not accumulate additional copies.
+An already enabled local module picks up installed changes on reload. `skip-proxy` configures system
+proxy bypass, not a `DIRECT` routing rule; Enhanced Mode can still handle that traffic.
+
 If a legacy Shine proxy-group block has a missing or nested marker, both applying and undoing the
-patch fail without changing the profile. Repair the malformed markers in your profile before retrying.
+patch fail without changing the profile. Remove may already have disabled the module. Repair the
+malformed markers in your profile before retrying.
 
 The preset includes commented, inert examples for `LAN Network`, `LAN PROXY`, and `Other Direct`.
 Each traffic class has three mutually exclusive rule sources in `local-rules.conf`: relative
@@ -311,6 +347,13 @@ shine app artifact remove surge
 
 `artifact remove` runs only the declared teardown script. Uninstall also attempts teardown when one
 is declared; a cleanup failure warns but does not stop safe removal of managed files.
+Surge teardown disables `shine-general` and reloads before undoing includes; `artifact remove`
+keeps the installed files, while uninstall removes managed files afterward. Do not delete the module
+file first: deletion alone can leave its effect active until reload and does not clear remembered
+enable state. If already deleted, restore the module file and run remove again to clear that state.
+CLI failures fail the artifact command. An interrupted apply may have updated includes, or an
+interrupted remove may have disabled the module; fix the reported issue and repeat the command to
+finish. Other modules are not changed.
 
 ### Clash Verge Rev
 

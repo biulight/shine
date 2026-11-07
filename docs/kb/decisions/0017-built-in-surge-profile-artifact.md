@@ -1,6 +1,7 @@
 # 0017 — Surge profile include management is a built-in Bun artifact
 
 - **Status**: accepted
+- **Extended by**: [ADR 0166](0166-surge-native-general-module.md) for native General-module lifecycle.
 - **Evidence**: `presets/app/surge/profile-artifact.ts`,
   `presets/app/surge/build.ts`, `presets/app/surge/unbuild.ts`,
   `presets/app/surge/profile-artifact.test.ts`

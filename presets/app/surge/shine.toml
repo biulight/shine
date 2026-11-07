@@ -17,6 +17,7 @@ post_install = [
 # here. `teardown` (via `shine app artifact remove surge`, and best-effort on
 # `shine app uninstall surge`) reverses that patch. The implementation is
 # generic; overlays provide only their local policy files and profile path.
+# Apply also enables shine-general; teardown disables it before undoing includes.
 [artifact]
 script = "build.ts"
 teardown = "unbuild.ts"
@@ -26,6 +27,12 @@ env = [{ source = "SURGE_PROFILE", sensitivity = "plain" }]
 [permissions]
 schema_version = 1
 network = [{ scope = "any" }]
+
+[[files]]
+source = "shine-general.sgmodule"
+target = "shine-general.sgmodule"
+dest = "~/Library/Application Support/Surge/Profiles"
+description = "Local General settings; enabled by artifact apply, disabled by artifact remove."
 
 [[files]]
 source = "local-proxies.conf"

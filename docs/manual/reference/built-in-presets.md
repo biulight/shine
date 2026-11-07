@@ -101,7 +101,7 @@ commands to connect those files to the active application configuration; follow 
 | `git` | `~/.gitconfig` | Common aliases and defaults; an unmanaged existing file is backed up by normal app rules. |
 | `JetBrains` | `~/.ideavimrc` | IdeaVim configuration; enable the IdeaVim plugin in the IDE. In Normal mode, Ctrl + H/J/K/L focuses the left/down/up/right editor split, matching the Ghostty preset. |
 | `starship` | `~/.config/starship.toml` | Starship prompt configuration; install and enable Starship separately. |
-| `surge` | macOS; `~/Library/Application Support/Surge/Profiles/` | Local proxies, groups, rules, and an optional generated URI subscription. See the [generated-file and artifact workflow](../guides/app-presets.md#generated-files-and-surge-uri-subscriptions). |
+| `surge` | macOS; `~/Library/Application Support/Surge/Profiles/` | Local proxies, groups, rules, a General-settings module, and an optional generated URI subscription. Artifact apply/remove requires Bun and running Surge with CLI module support. See the [generated-file and artifact workflow](../guides/app-presets.md#generated-files-and-surge-uri-subscriptions). |
 | `vim` | `~/.vim/` | Basic Vim configuration and a machine-local override. |
 
 Docker Desktop JSON merge preserves every other setting. Other application presets manage only

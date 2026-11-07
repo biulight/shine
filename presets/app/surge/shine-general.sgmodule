@@ -1,0 +1,11 @@
+#!name=shine-general
+#!desc=Local General settings managed by Shine.
+#!system=mac
+
+# Keep the filename and #!name unchanged. Customize this file in your overlay.
+# Install deploys the file; `shine app artifact apply surge` enables the module.
+# Module state is device-wide, not scoped to SURGE_PROFILE.
+[General]
+# skip-proxy = %APPEND% *.internal
+# always-real-ip = %APPEND% *.corp.example
+# exclude-simple-hostnames = true

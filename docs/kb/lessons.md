@@ -3234,6 +3234,17 @@ local rule files beside the profile rather than into the old publishing director
   third-party CLI's subcommand actually covers (e.g. via its own `list`/`--help` output) before
   assuming it refreshes the specific resource an app preset just changed.
 
+## 2026-11-07 — Deleting a local Surge module does not disable its remembered state
+
+- **Observation**: on Surge Mac 6.10, deleting an enabled local module left its effect active
+  until reload; restoring the same file retained its enabled setting. Native `module disable`
+  rejects a name whose file is already missing. Repeated reload did not accumulate `%APPEND%`
+  values, but duplicate inputs and values already present in the base profile were not deduplicated.
+- **Rule**: disable and reload while the managed module file is still installed, before Core's
+  file-removal loop. A missing file can have its cached effect cleared by reload, but must be
+  restored to explicitly clear remembered enable state. Keep enable/disable state owned by Surge;
+  do not infer it from file presence or edit private preference files. See ADR 0166.
+
 ## 2026-07-11 — CRLF↔LF differences made `shine sys` re-install report spurious updates
 
 - **Symptom**: tracing a user question — *install via `shine sys init`, edit config on a Windows
