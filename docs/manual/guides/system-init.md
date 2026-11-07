@@ -35,20 +35,20 @@ For item IDs beginning with `-`, put options before `--`, then the item name, fo
 
 ## Select interactively or apply a profile
 
-```bash
-shine sys bootstrap
-shine sys bootstrap mise
-shine sys bootstrap rust mise
-shine sys bootstrap --item rust --item mise --yes
-shine sys bootstrap --preset recommended
-shine sys bootstrap --preset minimal
-shine sys bootstrap --proxy --dry-run
-```
+Choose one initialization method; review the Plan before using `--yes`:
 
-- In an interactive terminal, `shine sys bootstrap` opens a multi-select interface.
+| Operation | Command |
+| --- | --- |
+| Choose items interactively | `shine sys bootstrap` |
+| Initialize only mise | `shine sys bootstrap mise` |
+| Initialize these items in order | `shine sys bootstrap rust mise` |
+| Explicit items; approve non-interactively | `shine sys bootstrap --item rust --item mise --yes` |
+| Use the recommended profile | `shine sys bootstrap --preset recommended` |
+| Use the minimal profile | `shine sys bootstrap --preset minimal` |
+| Preview with proxy settings | `shine sys bootstrap --proxy --dry-run` |
+
 - Positional item IDs bootstrap only those items, preserving their order and ignoring duplicates.
 - Repeated `--item` is the explicit equivalent for scripts and setup orchestrators.
-- `--preset` applies the named profile directly.
 - Positional items, repeated `--item`, and `--preset` cannot be combined. Managed resources use `sys apply`, not
   `sys bootstrap`.
 - In a non-interactive environment without an explicit profile, Shine uses the configured default.
@@ -159,11 +159,13 @@ A successful bootstrap enables only the selected items' declared shell integrati
 disable integrations enabled by an earlier run, and a named selection profile is not a desired-state
 replacement for software or shell configuration.
 
-```bash
-shine sys profile disable mise --dry-run
-shine sys profile disable mise
-shine sys profile enable mise
-```
+Preview before disabling; re-enable only when needed:
+
+| Operation | Command |
+| --- | --- |
+| Preview disabling the integration | `shine sys profile disable mise --dry-run` |
+| Disable the shell integration | `shine sys profile disable mise` |
+| Re-enable the shell integration | `shine sys profile enable mise` |
 
 Declared PATH integrations add a directory only when it is absent; reloading the generated profile
 does not add duplicate entries, including paths containing spaces or shell pattern characters.
@@ -191,15 +193,18 @@ system. Use `shine sys status` and `shine sys info <ITEM>` for details. `update 
 
 Some system configuration is managed declaratively and can be reapplied or safely removed:
 
-```bash
-shine sys apply --dry-run
-shine sys apply split-dns
-shine sys apply split-dns --yes # Non-interactive approval
-shine sys uninstall split-dns --dry-run
-shine sys uninstall split-dns
-shine sys recover              # Review an interrupted managed operation
-shine sys recover --yes        # Non-interactive approval
-```
+Choose the operation you need; preview before applying or removing. Use `--yes` only after
+reviewing the same Plan, and run recovery only for an interrupted operation.
+
+| Operation | Command |
+| --- | --- |
+| Preview changes | `shine sys apply --dry-run` |
+| Apply split-dns | `shine sys apply split-dns` |
+| Non-interactive approval | `shine sys apply split-dns --yes` |
+| Preview removal | `shine sys uninstall split-dns --dry-run` |
+| Remove after review | `shine sys uninstall split-dns` |
+| Review an interrupted managed operation | `shine sys recover` |
+| Non-interactive approval | `shine sys recover --yes` |
 
 For managed system items, `shine update` compares the desired configuration with the installation
 record; `shine upgrade` also checks the actual system resource. On Windows, a split-DNS NRPT rule
@@ -239,3 +244,23 @@ conflicting profile.
 - Windows system presets and profile integration use PowerShell.
 - Ubuntu and macOS can detect the terminal background and set `SHINE_TERMINAL_THEME`; set
   `SHINE_SYNC_TERMINAL_THEME=0` to disable it.
+
+## Retire an older local HTTP service {#retire-legacy-http-service}
+
+Version 2.4.0 removes HTTP serving and the `SHINE_APP_HTTP_DIR` script variable. Use local
+files for Surge and Clash Verge rules; application artifacts can keep persistent output in
+`SHINE_STATE_DIR` or `SHINE_CACHE_DIR`.
+
+If you installed the old background service, remove it after upgrading to 2.4.0:
+
+```bash
+shine clear serve
+```
+
+Run this command as the user who installed the service. It stops the old service and removes
+its user service registration, even if the old configuration can no longer be loaded.
+
+Before upgrading, the old binary's `shine serve uninstall` can also remove the service.
+
+Upgrading does not remove existing files under the old runtime directory's `http/`. Keep any files
+you still need and update application references before deleting them.

@@ -1,8 +1,49 @@
 //! Safe, display-only projection shared by runtime review and authoring tools.
-use shine_core::analysis::{DiagnosticKind, Scope};
+use shine_core::analysis::{Diagnostic, DiagnosticKind, Scope};
 use std::collections::BTreeMap;
 
+pub(crate) fn same_advisory_report(left: &Scope, right: &Scope) -> bool {
+    left.script.is_some()
+        && left.script == right.script
+        && left.target == right.target
+        && left.report == right.report
+        && !left.report.diagnostics.iter().any(Diagnostic::blocking)
+}
+
+pub(crate) fn plan_lines<'a>(
+    scopes: impl Iterator<Item = &'a Scope>,
+    detailed: bool,
+) -> Vec<String> {
+    if detailed {
+        return scopes.flat_map(|scope| lines(scope, true)).collect();
+    }
+    let mut groups: Vec<(&Scope, Vec<&str>)> = Vec::new();
+    for scope in scopes {
+        if let Some((_, entries)) = groups
+            .iter_mut()
+            .find(|(first, _)| same_advisory_report(first, scope))
+        {
+            entries.push(&scope.entry);
+        } else {
+            groups.push((scope, vec![&scope.entry]));
+        }
+    }
+    groups
+        .into_iter()
+        .flat_map(|(scope, entries)| entry_lines(scope, false, &entries, "--verbose"))
+        .collect()
+}
+
 pub(crate) fn lines(scope: &Scope, detailed: bool) -> Vec<String> {
+    entry_lines(scope, detailed, &[&scope.entry], "--verbose")
+}
+
+fn entry_lines(
+    scope: &Scope,
+    detailed: bool,
+    entries: &[&str],
+    full_location_flags: &str,
+) -> Vec<String> {
     let diagnostics = scope
         .report
         .diagnostics
@@ -16,7 +57,11 @@ pub(crate) fn lines(scope: &Scope, detailed: bool) -> Vec<String> {
     let mut lines = vec![format!(
         "  Code analysis: {} · {} · {}",
         encode(&scope.target),
-        encode(&scope.entry),
+        entries
+            .iter()
+            .map(|entry| encode(entry))
+            .collect::<Vec<_>>()
+            .join(", "),
         encode(scope.script.as_deref().unwrap_or("native command"))
     )];
     if detailed {
@@ -24,6 +69,12 @@ pub(crate) fn lines(scope: &Scope, detailed: bool) -> Vec<String> {
             "    Scope: {} source files; this is not a runtime sandbox.",
             scope.report.files.len()
         ));
+    }
+    if diagnostics
+        .iter()
+        .any(|d| d.kind == DiagnosticKind::CoverageGap)
+    {
+        lines.push("    Coverage notes show behavior static analysis could not verify.".into());
     }
     let mut gaps = BTreeMap::new();
     if !detailed {
@@ -52,7 +103,6 @@ pub(crate) fn lines(scope: &Scope, detailed: bool) -> Vec<String> {
                     diagnostic.line,
                     diagnostic.column,
                 ));
-                lines.push(format!("      {}", diagnostic.explanation()));
                 summarized = true;
                 continue;
             }
@@ -70,15 +120,118 @@ pub(crate) fn lines(scope: &Scope, detailed: bool) -> Vec<String> {
             diagnostic.column,
             encode(&diagnostic.behavior)
         ));
-        lines.push(format!("      {}", diagnostic.explanation()));
+        if diagnostic.kind != DiagnosticKind::CoverageGap {
+            lines.push(format!("      {}", diagnostic.explanation()));
+        }
         if detailed && let Some(identity) = &diagnostic.identity {
             lines.push(format!("      Target identity: {}", encode(identity)));
         }
     }
     if summarized {
-        lines.push("    Full locations: re-run with --verbose. A separate `shine preset lint <PATH> --format json` checks all source entries.".into());
+        lines.push(format!("    Full locations: re-run with {full_location_flags}. A separate `shine preset lint <PATH> --format json` checks all source entries."));
     }
     lines
+}
+
+/// Short explanation for an already identified generator. Keep blocking diagnostics individual.
+pub(crate) fn update_summary(scope: &Scope) -> Vec<String> {
+    if scope.report.diagnostics.iter().any(|d| d.blocking()) {
+        return entry_lines(scope, false, &[&scope.entry], "--verbose --diff");
+    }
+    let mut counts = [0usize; 3];
+    for diagnostic in &scope.report.diagnostics {
+        if diagnostic.kind != DiagnosticKind::CoverageGap {
+            continue;
+        }
+        let index = match (diagnostic.code.as_str(), diagnostic.behavior.as_str()) {
+            ("code_analysis_builtin_unsupported", "dependency") => 0,
+            ("code_analysis_call_unknown", "code") => 1,
+            ("code_analysis_dynamic_target", "network") => 2,
+            _ => return entry_lines(scope, false, &[&scope.entry], "--verbose --diff"),
+        };
+        counts[index] += 1;
+    }
+    let mut items = Vec::new();
+    for (count, (singular, plural)) in counts.into_iter().zip([
+        ("a dependency", "dependencies"),
+        ("a call", "calls"),
+        ("a network target", "network targets"),
+    ]) {
+        match count {
+            0 => (),
+            1 => items.push(singular.to_owned()),
+            _ => items.push(format!("{count} {plural}")),
+        }
+    }
+    let description = match items.as_slice() {
+        [] => return Vec::new(),
+        [item] => item.clone(),
+        [a, b] => format!("{a} and {b}"),
+        _ => format!("{}, {}, and {}", items[0], items[1], items[2]),
+    };
+    vec![
+        format!("  Static analysis could not verify {description}."),
+        "  Run `shine update --run-generators --verbose` for a summary with example locations."
+            .into(),
+    ]
+}
+
+/// Summarize advisory evidence already captured for this invocation. For a blocking
+/// report, keep every diagnostic and its entry identity available for repair.
+pub(crate) fn verbose_generator_summary(scope: &Scope, entries: usize) -> Vec<String> {
+    if scope.report.diagnostics.iter().any(Diagnostic::blocking) {
+        return lines(scope, true);
+    }
+    let shared = if entries > 1 {
+        " · same report for these files"
+    } else {
+        ""
+    };
+    let mut result = vec![format!("  Static analysis{shared} · 0 blocking findings")];
+    let mut groups = BTreeMap::new();
+    for diagnostic in &scope.report.diagnostics {
+        let (order, label, singular, plural, detail) =
+            match (diagnostic.code.as_str(), diagnostic.behavior.as_str()) {
+                ("code_analysis_dynamic_target", "network") => {
+                    (0, "Network", "target", "targets", "determined at runtime")
+                }
+                ("code_analysis_call_unknown", "code") => {
+                    (1, "Calls", "call", "calls", "outside verified coverage")
+                }
+                ("code_analysis_builtin_unsupported", "dependency") => (
+                    2,
+                    "Dependency",
+                    "dependency",
+                    "dependencies",
+                    "outside verified coverage",
+                ),
+                ("code_analysis_declaration_uncorroborated", _) => (
+                    3,
+                    "Declaration",
+                    "permission declaration",
+                    "permission declarations",
+                    "unconfirmed",
+                ),
+                (code, behavior) => (4, behavior, "location", "locations", code),
+            };
+        let (count, _) = groups
+            .entry((order, label, singular, plural, detail))
+            .or_insert((0usize, diagnostic));
+        *count += 1;
+    }
+    let encode = crate::output::escape_controls;
+    for ((_, label, singular, plural, detail), (count, first)) in groups {
+        result.push(format!(
+            "    {:<12} {count} {} {} · {}:{}:{}",
+            encode(label),
+            if count == 1 { singular } else { plural },
+            encode(detail),
+            encode(&first.file),
+            first.line,
+            first.column
+        ));
+    }
+    result
 }
 
 #[cfg(test)]
@@ -118,6 +271,55 @@ mod tests {
         let text = rendered.join("\n");
         assert!(text.contains("gen.ts:2:3"));
         assert!(text.contains("add an accurate declaration or change the script"));
+    }
+
+    #[test]
+    fn plan_groups_identical_advisories_but_keeps_entry_specific_evidence() {
+        use shine_core::analysis::Report;
+        let first = Scope {
+            target: "app/demo".into(),
+            entry: "generator:first".into(),
+            script: Some("gen.ts".into()),
+            report: Report {
+                analyzer_version: shine_core::analysis::ANALYZER_VERSION.into(),
+                schema_version: 1,
+                rule_version: shine_core::analysis::RULE_VERSION,
+                files: vec!["gen.ts".into()],
+                allowed: true,
+                diagnostics: vec![Diagnostic {
+                    kind: DiagnosticKind::CoverageGap,
+                    code: "code_analysis_call_unknown".into(),
+                    file: "gen.ts".into(),
+                    line: 2,
+                    column: 3,
+                    behavior: "code".into(),
+                    identity: None,
+                }],
+            },
+        };
+        let mut second = first.clone();
+        second.entry = "generator:second\nFORGED".into();
+        let mut distinct = first.clone();
+        distinct.report.diagnostics[0].line = 8;
+        let scopes = [&first, &distinct, &second];
+        let compact = plan_lines(scopes.into_iter(), false).join("\n");
+        assert!(compact.contains(r"generator:first, generator:second\nFORGED"));
+        assert_eq!(
+            compact.matches("note[code_analysis_call_unknown]").count(),
+            2
+        );
+        assert!(compact.contains("gen.ts:2:3") && compact.contains("gen.ts:8:3"));
+        assert!(!compact.contains("trust"));
+        let verbose = plan_lines(scopes.into_iter(), true).join("\n");
+        assert_eq!(
+            verbose.matches("note[code_analysis_call_unknown]").count(),
+            3
+        );
+
+        distinct.report.diagnostics[0].kind = DiagnosticKind::Failure;
+        assert!(!same_advisory_report(&distinct, &distinct));
+        second.target = "app/other".into();
+        assert!(!same_advisory_report(&first, &second));
     }
 
     #[test]
@@ -208,7 +410,11 @@ mod tests {
             2
         );
         assert!(text.contains("error[code_analysis_parse_failure]"));
-        assert!(text.contains("existing code trust is still required"));
+        assert_eq!(
+            text.matches("behavior static analysis could not verify")
+                .count(),
+            1
+        );
         assert!(text.contains("--format json"));
         assert!(!text.contains("opaque-identity"));
         assert!(!text.contains("code_analysis_declaration_uncorroborated"));

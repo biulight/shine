@@ -17,15 +17,15 @@ shine sys list
 shine list --available
 ```
 
-The first three commands list shell commands, application configuration, and initialization items
-for the current operating system. `list --available` shows all three resource types; append `app`, `shell`, or `sys` to filter it.
+`list --available` also accepts `app`, `shell`, or `sys` to filter it.
 
 ## 2. Install the proxy commands
 
 ```bash
 shine shell install proxy
-# Equivalent canonical target: shine install shell/proxy
 ```
+
+The equivalent target form is `shine install shell/proxy`.
 
 Shine makes the commands available through `~/.shine/bin/` and adds that directory to supported
 shell profiles.
@@ -38,8 +38,9 @@ Open a new terminal or reload the current shell configuration:
 
 ```bash
 source ~/.zshrc
-# For bash: source ~/.bashrc
 ```
+
+For Bash, run `source ~/.bashrc`.
 
 PowerShell users can reopen the terminal to load the updated profile.
 
@@ -51,8 +52,7 @@ shine list
 shine info shell/proxy
 ```
 
-`shine list` shows the installed `proxy` category; `shine info shell/proxy` expands it into
-the managed commands, links, and source details. Use the full target `shell/proxy` in scripts. A bare
+Use the full target `shell/proxy` in scripts. A bare
 name is accepted only when it is unique across application and shell categories.
 
 Disable the proxy in the current terminal session:

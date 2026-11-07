@@ -35,7 +35,11 @@ You can use the same flow without an AI client:
 mkdir -p my-presets/app/my-editor
 cd my-presets/app/my-editor
 shine preset new app
-# Add config files and edit shine.toml.
+```
+
+Add config files and edit shine.toml.
+
+```bash
 shine preset validate . --format json
 shine preset lint . --format json
 shine preset plan . --platform macos --format json
@@ -45,11 +49,13 @@ shine preset test . --format json
 The default scaffold does not add an empty permission table. Use the option below to add the
 unrestricted author statement:
 
-```bash
-shine preset new app --unrestricted
-shine preset new shell --unrestricted
-shine preset new sys --unrestricted
-```
+Choose the category type; run only its command:
+
+| Operation | Command |
+| --- | --- |
+| Create an App template with the author statement | `shine preset new app --unrestricted` |
+| Create a Shell template with the author statement | `shine preset new shell --unrestricted` |
+| Create a Sys template with the author statement | `shine preset new sys --unrestricted` |
 
 All arbitrary code is unisolated whether this option is present or absent. The option does not skip
 trust, Plan review, administrator authorization, ownership checks, or explicit environment inputs.
@@ -119,6 +125,56 @@ languages, are advisory. Declarations not corroborated by the analyzed source ar
 and appear in detailed review. Neither means the code is safe or fully analyzed. Reports without
 diagnostics add no ordinary output; existing trust and approval checks still apply.
 
+For `globalThis.fetch('https://example.org/data')`, declare the network host `example.org`,
+just as for `fetch`. The same host declaration covers `https.get('https://example.org/data')`
+from `node:https`, with or without an inline callback. Dynamic URLs and `https.get` calls with
+an options object produce a coverage gap because the target host cannot be confirmed.
+
+Equivalent spellings use the same permission checks: supported identifier/URL escapes, quoted
+import names, parentheses, TypeScript type assertions and generic instantiations preserve recognized
+calls. For example, `(fetch)(('https://example.org'))` is checked like `fetch('https://example.org')`.
+Unsupported escapes (including legacy numeric escapes), unpaired surrogates, URLs containing
+control characters and dynamic values retain coverage gaps.
+
+An ambient namespace containing only types or just `export {}` leaves a global of the same
+name visible. For example, `declare namespace fetch { type Options = {}; export { Options } }`
+leaves calls to the global `fetch` subject to network checks. A class or a namespace that declares
+a value can shadow a builtin, including when the name uses Unicode escapes.
+
+A script that checks `(await fetch('https://example.org')).status === 200` must declare
+`example.org`, even if it replaces `fetch` afterward. The same applies when the response property
+is used as a computed index. An optional call such as `cb?.(fetch(url))` skips its arguments if
+`cb` is null or undefined. If Shine cannot establish which function an argument will call after a
+replacement, it reports a coverage gap. For example, `for (let dep = require('./dep'); false;) {}`
+loads the dependency before the loop tests its condition. Shine checks that dependency even if the
+script later replaces `require`. The same rule applies to an `if` condition, a `switch` expression,
+or a dependency loaded when a `finally` block runs.
+
+If a script saves the original global object and assigns it back, a later write to `globalThis.fetch`
+can replace the global function. Shine reports a coverage gap when it cannot confirm that a call
+still uses the builtin. Conversely, if an object or array assignment puts a new object into
+`globalThis`, changing that object's `fetch` property leaves the original bare `fetch` subject to
+network checks. For example, after `({...globalThis} = source)`, `globalThis` refers to a new
+object. Declare the network host for a subsequent bare `fetch(url)` call.
+
+Runtime initializers, enum and namespace bodies, and expressions such as `typeof process.env.NAME`
+are checked for effects. An unsupported module path retains its dependency gap and local import names.
+
+Environment-read checks distinguish reads from plain assignment, destructuring assignment and
+deletion. Shine checks reads in computed keys, evaluated defaults, compound assignments, and
+updates. This does not change the contract for declared environment inputs.
+
+For `const f = Bun.file('in'); await f.text()`, declare `read` on `in`. Saving the handle alone
+requires no read permission. Shine checks the path when the script calls the method.
+
+For Node `copyFile`, declare `read` on the source and `write` on the destination. For `rename`,
+declare `remove` on the source and `write` on the destination. These rules also cover the sync
+and promise forms. When one path is dynamic, Shine still checks the other path if it is a literal.
+
+If a script replaces a built-in method with `Object.assign`, calls through the replaced member
+produce a coverage gap. Calls through a function saved before replacement can still require its
+original permission.
+
 Use `--verbose` for detailed review or `shine preset lint <PATH> --format json` for all diagnostics.
 `--deny-warnings` makes lint warnings fail CI. More detailed output does not execute generators;
 that still requires `--run-generators` and trust. Lint checks all supported entries, so it can
@@ -129,6 +185,14 @@ For structured `env` mappings, declare `source`, optional `target`, and `plain`/
 arbitrary names beginning with `SHINE_`. Never put environment values or URL credentials in a
 capability declaration. Source locations use one-based lines and UTF-8 byte columns.
 
+## Tool compatibility {#tool-compatibility}
+
+If an integration saves reports or approvals, regenerate them with the upgraded tool and review
+again. Shine rejects approvals with an incompatible schema or a changed Plan; an old approval
+does not silently authorize a new operation. Ordinary interactive use does not require preparing
+approvals before upgrading. For unattended integrations, validate report consumers and external
+App declarations before deployment to avoid interrupted jobs.
+
 Tool consumers should read `preset schema` again after upgrading: lint reports use schema 2,
 author Plan reports schema 3, and fixture reports schema 2. Fixture input schema 1 is unchanged;
 `expect.analysis_diagnostic_codes` can assert diagnostic codes alongside `ready`. A correctly
@@ -137,15 +201,18 @@ a successful negative test. `complete = false` identifies incomplete author repo
 reports list `unfinished_cases`. Lifecycle Plan/approval/review contracts use schema 4; obtain a
 new review instead of reusing an older approval.
 
+When upgrading to Shine 2.8, Rust integrations using `shine-core` must adapt to the changed public
+types and recompile. Regenerate lifecycle reports and approvals with the upgraded integration.
+
 ## Migrate a 1.x source
 
 Preview the active external source and overlay, or name a repository, category, or manifest:
 
-```bash
-shine preset migrate --dry-run
-shine preset migrate ./my-presets --dry-run
-shine preset migrate ./my-presets
-```
+| Operation | Command |
+| --- | --- |
+| Preview active external sources | `shine preset migrate --dry-run` |
+| Preview this source's migration | `shine preset migrate ./my-presets --dry-run` |
+| Apply after reviewing the preview | `shine preset migrate ./my-presets` |
 
 Review the metadata diff before confirming; the default answer is No. Migration changes only
 `shine.toml` and backs it up before writing. It does not change scripts, data files, environment
@@ -233,11 +300,14 @@ Explicit `info`/`update --run-generators` evaluation also requires a grant; use 
 
 For persistent authorization, inspect and grant the target:
 
-```bash
-shine trust inspect <TARGET>
-shine trust grant <TARGET>
-shine trust grant <TARGET> --development
-```
+Inspect the target first, then choose snapshot or development trust.
+Development trust also authorizes future code changes; use it only when you intend that scope.
+
+| Operation | Command |
+| --- | --- |
+| Inspect without granting trust | `shine trust inspect <TARGET>` |
+| Grant snapshot trust | `shine trust grant <TARGET>` |
+| Trust future changes | `shine trust grant <TARGET> --development` |
 
 Snapshot trust covers the reviewed target and effective category content. Changes to files,
 metadata, source layers, or executable permissions require renewed review. Dependencies such as
@@ -259,12 +329,15 @@ Every external Shell command uses the canonical `shell/<CATEGORY>/<COMMAND>` tru
 `preset` to inspect or trust every executable target
 in the current active Preset. Revoking `preset` clears every stored Preset trust grant:
 
-```bash
-shine trust inspect preset
-shine trust grant preset
-shine trust grant preset --development
-shine trust revoke preset
-```
+Inspect the target first, then choose only the required grant or revoke operation.
+Development trust also authorizes future code changes; use it only when you intend that scope.
+
+| Operation | Command |
+| --- | --- |
+| Inspect without granting trust | `shine trust inspect preset` |
+| Grant snapshot trust | `shine trust grant preset` |
+| Trust future changes | `shine trust grant preset --development` |
+| Revoke trust | `shine trust revoke preset` |
 
 Older grants marked as needing review cannot authorize new operations. Review and grant them again.
 
@@ -352,6 +425,11 @@ An overlay replaces base-preset files at the same relative path and can add new 
 ```bash
 shine preset overlay link ~/dotfiles/shine-overlay --create
 shine preset overlay info
+```
+
+When you want to stop using this overlay:
+
+```bash
 shine preset overlay unlink
 ```
 
@@ -518,11 +596,13 @@ subdirectories. Use `shine init --yes` in non-interactive scripts.
 When the external preset directory or a manually linked overlay is a Git worktree, pull sources alone
 or pull before inspecting or applying configuration:
 
-```bash
-shine preset pull
-shine update --pull
-shine upgrade --pull
-```
+Choose one pull/update operation:
+
+| Operation | Command |
+| --- | --- |
+| Pull preset sources only | `shine preset pull` |
+| Pull, then check for updates | `shine update --pull` |
+| Pull, then apply configuration updates | `shine upgrade --pull` |
 
 Shine locates the repositories containing the base presets and active overlay. If both sources are in
 one repository it pulls only once; non-Git sources are skipped. `update --pull`
@@ -542,11 +622,13 @@ managed with `--git`, which is intentionally disposable. Git must be available i
 
 Generate a `shine.toml` template in an application, shell, or sys category directory:
 
-```bash
-shine preset new app
-shine preset new shell
-shine preset new sys
-```
+Choose the category type; run only its command:
+
+| Operation | Command |
+| --- | --- |
+| Create an App template | `shine preset new app` |
+| Create a Shell template | `shine preset new shell` |
+| Create a Sys template | `shine preset new sys` |
 
 Existing files require `--force`. Without it, existing entries, including dangling symbolic links,
 are refused, and concurrent creations cannot overwrite each other.
@@ -612,10 +694,10 @@ Legacy string arrays such as `env = ["SOURCE=TARGET"]` are no longer accepted in
 Relevant commands report a migration hint; unrelated commands do not automatically migrate files.
 Review and apply the conversion explicitly:
 
-```bash
-shine preset migrate ./my-presets --dry-run
-shine preset migrate ./my-presets
-```
+| Operation | Command |
+| --- | --- |
+| Preview this source's migration | `shine preset migrate ./my-presets --dry-run` |
+| Apply after reviewing the preview | `shine preset migrate ./my-presets` |
 
 Migration reads the old explicit sensitivity declarations, preserves aliases and conditions, and
 backs up metadata before applying changes. Missing or conflicting sensitivity requires manual

@@ -233,6 +233,14 @@ impl GithubRateLimit {
     }
 }
 
+pub(crate) fn rate_limit_http_status(err: &anyhow::Error) -> Option<reqwest::StatusCode> {
+    let err = err.downcast_ref::<GithubApiError>()?;
+    (err.status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || (err.status == reqwest::StatusCode::FORBIDDEN
+            && err.rate_limit.remaining.as_deref() == Some("0")))
+    .then_some(err.status)
+}
+
 fn rate_limit_reset_from_error(err: &anyhow::Error, now_secs: u64) -> Option<u64> {
     let err = err.downcast_ref::<GithubApiError>()?;
     if !matches!(
@@ -414,6 +422,10 @@ mod tests {
         ));
 
         assert_eq!(
+            rate_limit_http_status(&err),
+            Some(reqwest::StatusCode::FORBIDDEN)
+        );
+        assert_eq!(
             rate_limit_reset_from_error(&err, 1_780_000_000),
             Some(1_780_937_643)
         );
@@ -430,6 +442,7 @@ mod tests {
             &headers,
             r#"{"message":"forbidden"}"#,
         ));
+        assert_eq!(rate_limit_http_status(&err), None);
         assert_eq!(rate_limit_reset_from_error(&err, 1_780_000_000), None);
 
         headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));

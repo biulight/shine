@@ -1,0 +1,82 @@
+---
+title: Quick start
+sidebar_position: 3
+---
+
+# Quick start
+
+This walkthrough uses the proxy shell preset to complete one browse, install, use, inspect, and
+uninstall-preview cycle.
+
+## 1. Browse available presets
+
+```bash
+shine shell list
+shine app list
+shine sys list
+shine list --available
+```
+
+`list --available` also accepts `app`, `shell`, or `sys` to filter it.
+
+## 2. Install the proxy commands
+
+```bash
+shine shell install proxy
+```
+
+The equivalent target form is `shine install shell/proxy`.
+
+Shine makes the commands available through `~/.shine/bin/` and adds that directory to supported
+shell profiles.
+
+Before writing anything, Shine shows the intended changes and required permissions. Confirm
+explicitly; the prompt defaults to No. In automation, add `--yes` only after reviewing the same
+operation—Shine still shows and validates the Plan before applying it.
+
+Open a new terminal or reload the current shell configuration:
+
+```bash
+source ~/.zshrc
+```
+
+For Bash, run `source ~/.bashrc`.
+
+PowerShell users can reopen the terminal to load the updated profile.
+
+## 3. Use and inspect the preset
+
+```bash
+setproxy
+shine list
+shine info shell/proxy
+```
+
+Use the full target `shell/proxy` in scripts. A bare
+name is accepted only when it is unique across application and shell categories.
+
+Disable the proxy in the current terminal session:
+
+```bash
+usetproxy
+```
+
+## 4. Preview a safe uninstall
+
+```bash
+shine shell uninstall proxy --dry-run
+```
+
+After reviewing the output, remove `--dry-run` to apply the uninstall. Shine removes only the
+scripts, command entries, and profile fragments it manages.
+
+Next, choose the workflow that matters to you:
+
+- turn a personal script or application configuration into a [custom
+  preset](./guides/custom-presets.md);
+- install [application configuration](./guides/app-presets.md), including the opinionated Surge and
+  Clash Verge Rev artifact workflows;
+- initialize a machine with the deliberately scoped [system bootstrap](./guides/system-init.md);
+- save [repeatable tasks](./guides/tasks-and-serve.md); or
+- continue work through [SSH environment forwarding, file transfer, and the local secret
+  broker](./guides/ssh-transfer.md).

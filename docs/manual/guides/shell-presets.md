@@ -15,12 +15,14 @@ limits, commands available in the current session, and required environment vari
 
 ## Browse and install
 
-```bash
-shine shell list
-shine shell install proxy
-shine shell install utils/shine-env-export # Install only this command
-shine shell install            # Install every category available on this platform
-```
+List the presets first, then choose one installation scope:
+
+| Operation | Command |
+| --- | --- |
+| List Shell presets | `shine shell list` |
+| Install the proxy category | `shine shell install proxy` |
+| Install only this command | `shine shell install utils/shine-env-export` |
+| Install every category available on this platform | `shine shell install` |
 
 You can also let Shine identify whether a category is a shell or application preset:
 
@@ -69,13 +71,13 @@ shine completions install
 
 Rebuild managed scripts, command entries, and the `PATH` fragment from the active preset:
 
+First inspect `shine info shell/proxy --diff`: `--replace-managed` overwrites managed content.
+The two commands are equivalent; choose one:
+
 ```bash
 shine shell install proxy --replace-managed
 shine install shell/proxy --replace-managed
 ```
-
-`--replace-managed` overwrites the corresponding Shine-managed content. Inspect
-`shine info shell/proxy --diff` first so that intentional local changes are not mistaken for damage.
 
 If a command conflicts with an existing file, inspect the reported path before removing or
 replacing it. After switching preset sources or updating Shine, run
@@ -108,11 +110,11 @@ still apply.
 
 ## Uninstall
 
-```bash
-shine shell uninstall proxy --dry-run
-shine shell uninstall proxy
-shine shell uninstall utils/shine-env-export
-```
+| Operation | Command |
+| --- | --- |
+| Preview category removal | `shine shell uninstall proxy --dry-run` |
+| Apply after review | `shine shell uninstall proxy` |
+| Alternative: remove only this command | `shine shell uninstall utils/shine-env-export` |
 
 Uninstall and `shine upgrade` also show their planned changes.
 Confirmation defaults to No; automation must pass `--yes`, while the Plan and safety checks still

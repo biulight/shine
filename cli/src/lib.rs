@@ -9,6 +9,7 @@ pub mod config;
 pub(crate) mod core_runtime;
 pub mod dispatch;
 pub mod env;
+mod generator_review;
 pub mod git_pull;
 pub mod home;
 pub mod info;

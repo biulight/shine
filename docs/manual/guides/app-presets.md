@@ -25,9 +25,15 @@ confirm destinations and scope without writing application files.
 
 ## Install and update
 
+Install once, then check and apply updates when needed:
+
 ```bash
 shine app install starship
-shine install app/starship
+```
+
+The equivalent target form is `shine install app/starship`.
+
+```bash
 shine update
 shine upgrade
 ```
@@ -72,10 +78,10 @@ for the complete author workflow.
 
 ## Uninstall and restore
 
-```bash
-shine app uninstall starship --dry-run
-shine app uninstall starship
-```
+| Operation | Command |
+| --- | --- |
+| Preview removal | `shine app uninstall starship --dry-run` |
+| Apply only after reviewing the preview | `shine app uninstall starship` |
 
 Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a Plan before making
 changes. The prompt defaults to No. Use command-level `--yes` only after reviewing the same scope in
@@ -91,6 +97,7 @@ the move. Missing or changed backups can require manual repair; generated-file m
 by `shine app recover`.
 
 `app uninstall --force` permits deleting user-modified managed content; preview it with `--dry-run`.
+Uninstall uses the strategy recorded at installation, even if the preset now declares a different one.
 Uninstall also deletes the selected category's entire Shine cache, including any extra files there.
 Without a category, it clears all App caches. External preset sources are preserved. Keep personal
 files outside these caches and review the removal Plan before approval.
@@ -102,6 +109,20 @@ records or backups manually.
 During upgrade,
 obsolete managed entries are removed only when `--prune-stale` is part of the approved command;
 modified entries remain preserved.
+
+## Upgrade and downgrade {#upgrade-and-downgrade}
+
+Shine 2.8 and later write App installation state that Shine 2.7.x and earlier cannot read.
+If you intend to downgrade, reinstalling the old binary or resealing encrypted sources does not convert App installation
+records. An older client rejects incompatible records; `app install --replace-managed` also needs to read
+them and cannot bypass this limit. Do not delete records or edit their version number to bypass
+that check. With this version, preview and complete App uninstall before replacing the binary.
+Once the last ordinary and secret App receipts are removed, Shine removes the empty installation record,
+including after category-by-category removal or when using external presets. Resolve protected files
+or pending recovery with the newer binary first. The older version can then install from a preset it
+supports and create its own App record. If category removal was interrupted after clearing its last
+receipt, rerun the same category uninstall. This retry reviews and removes only the empty record
+and leaves category caches in place.
 
 ## Recover an interrupted App operation
 
@@ -145,12 +166,14 @@ Generators can be automatic or manual. Neither kind runs during ordinary `list`,
 a prominent `generator not evaluated` warning and does not claim that the installed file is
 current. Use `--run-generators` to execute the selected generators explicitly and inspect the resulting status or diff without installing the files:
 
-```bash
-shine app info surge --run-generators
-shine info app/surge --run-generators --diff
-shine update app/surge --run-generators --diff
-shine update --run-generators
-```
+Choose one inspection scope; these commands execute generators:
+
+| Operation | Command |
+| --- | --- |
+| Evaluate generators and inspect status | `shine app info surge --run-generators` |
+| Evaluate and inspect differences | `shine info app/surge --run-generators --diff` |
+| Check this App with generator evaluation | `shine update app/surge --run-generators --diff` |
+| Evaluate all installed App categories | `shine update --run-generators` |
 
 The global form evaluates generators for every installed App category; the targeted forms evaluate
 only the selected App. Both automatic and `auto = false` manual generators participate because the
@@ -159,6 +182,8 @@ interactive lifecycle operations can obtain one-time code consent. Generator
 failures do not stop evaluation of the remaining selection, but the command returns nonzero after
 reporting incomplete results. Cancellation, command-wide analysis budget exhaustion, or an analyzer
 failure that prevents safe continuation stops the remaining work.
+The analysis budget includes declaration scope lookup; deeply nested code can exhaust it even in a
+small source file.
 
 Before execution, supported App Bun code is checked against its declarations. A definite difference
 or parse failure prevents that script from starting; existing trust does not override it. Other
@@ -172,10 +197,12 @@ generated `[[files]]` entry, run `shine install app/<CATEGORY>` once before refr
 Automatic generators may also run during an approved install or upgrade. A manual generator with
 `auto = false` runs during installation, explicit evaluation, or explicit refresh:
 
-```bash
-shine app refresh <CATEGORY>
-shine app refresh <CATEGORY> <SOURCE_FILE>
-```
+Choose a category-wide or single-file refresh:
+
+| Operation | Command |
+| --- | --- |
+| Refresh all tracked automatic and manual outputs | `shine app refresh <CATEGORY>` |
+| Refresh only the selected source | `shine app refresh <CATEGORY> <SOURCE_FILE>` |
 
 `SOURCE_FILE` is the relative `[[files]].source` path. A failed refresh preserves the last successful
 content. A user-modified destination is also preserved unless you explicitly add `--force`.
@@ -183,10 +210,13 @@ Installation, including a repair with `--replace-managed`, runs generators enabl
 regardless of their `auto` setting. Refresh displays and revalidates a security Plan; automation
 must add `--yes`.
 
-For external or overlay generators, interactive lifecycle confirmation can authorize one operation.
-Automation and `--run-generators` inspection require a matching `shine trust grant app/<CATEGORY>`
-after review. Generators receive declared environment inputs and fixed `SHINE_APP_*` path variables;
-execution time and output size are limited. Run only presets you trust.
+When a Security Plan lists external or overlay code, answering `yes` authorizes the listed code
+for this Plan only. The compact analysis lists entries together when they share a script and
+identical advisory findings. Use `--verbose` to inspect each entry separately.
+For automation or `--run-generators`, review every capability listed by
+`shine trust inspect app/<CATEGORY>`. Confirming `shine trust grant app/<CATEGORY>` trusts all
+listed generators, hooks, and artifacts for that snapshot. Generators receive declared environment
+inputs and fixed `SHINE_APP_*` path variables. Execution time and output size are limited. Run only presets you trust.
 
 Permission declarations help you review a preset; they do not sandbox its code. Never include
 secret values or credentials in those declarations. See
@@ -387,11 +417,14 @@ network = [{ scope = "any" }]
 For persistent authorization of external hooks and generators, use target-scoped trust.
 Interactive lifecycle confirmation can instead authorize only the current operation:
 
-```bash
-shine trust inspect app/<CATEGORY>
-shine trust grant app/<CATEGORY>
-shine trust grant app/<CATEGORY> --development
-```
+Inspect the target first, then choose snapshot or development trust.
+Development trust also authorizes future code changes; use it only when you intend that scope.
+
+| Operation | Command |
+| --- | --- |
+| Inspect without granting trust | `shine trust inspect app/<CATEGORY>` |
+| Grant snapshot trust | `shine trust grant app/<CATEGORY>` |
+| Trust future changes | `shine trust grant app/<CATEGORY> --development` |
 
 `trust inspect` shows what needs authorization without granting trust. Snapshot trust binds the complete
 effective App category, including helper and data files. Use `--development` only when you intend
@@ -473,5 +506,7 @@ Containers still need runtime plaintext. Configuration installation does not sta
 explicitly recreate containers whose file bind mounts must pick up a replaced password file, and
 stop dependent services before uninstalling their required configuration.
 
-Upgrade both SSH peers before using these presets. Older clients reject App metadata v3 and the
-new App manifest format rather than treating ciphertext as an ordinary password file.
+Preset authors must use `metadata_schema_version = 3` for `secret_files`. App writes use manifest
+version 2, including writes for ordinary App files; older clients reject the new format. When using
+these presets over SSH, upgrade both peers first. See [upgrade and downgrade](#upgrade-and-downgrade)
+for compatibility limits.

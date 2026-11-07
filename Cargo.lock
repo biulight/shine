@@ -1708,7 +1708,7 @@ dependencies = [
 
 [[package]]
 name = "shine-cli"
-version = "2.9.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1745,7 +1745,7 @@ dependencies = [
 
 [[package]]
 name = "shine-core"
-version = "2.9.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -1769,6 +1769,7 @@ dependencies = [
  "unicode-normalization",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

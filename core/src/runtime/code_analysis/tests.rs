@@ -65,8 +65,13 @@ async fn plan_prepares_once_and_locked_planning_only_consumes() {
 #[tokio::test]
 async fn shadowed_and_replaced_builtins_do_not_block_lifecycle_approval() {
     for code in [
+        "function run(cb){cb?.(fetch('https://fake.invalid')); globalThis.fetch=()=>{};} run(null); run(()=>{});",
         "export {}; function* fetch(url) { yield url; } fetch('https://fake.invalid');",
         "import fs from 'node:fs'; const alias = fs; alias.readFileSync = () => 'ok'; fs.readFileSync('config');",
+        "namespace Bun { export function write(...args:unknown[]){} } Bun.write('out','data');",
+        "import Bun = require('unknown-package'); Bun.write('out','data');",
+        r"class B\u0075n { static write() {} } Bun.write('out','data');",
+        "require('node:fs', Object.assign(require('node:fs'),{readFileSync:()=>0})).readFileSync('in');",
     ] {
         let runtime = runtime(code, "", true);
         let plan = runtime
@@ -91,6 +96,18 @@ async fn preserved_builtin_calls_still_block_lifecycle_approval() {
         "import fs from 'node:fs'; const read = fs.readFileSync; const alias = fs; alias.readFileSync = () => 'ok'; read('private');",
         "import fs from 'node:fs'; const alias = fs; alias.custom = 1; fs.readFileSync('private');",
         "import fs from 'node:fs'; function run() { const read = original; read('private'); } const original = fs.readFileSync; run();",
+        "const invoke = fetch<unknown>; invoke('https://example.org');",
+        "namespace fetch { export type Options = {}; } fetch('https://example.org');",
+        "declare namespace fetch { export type Options = {}; } fetch('https://example.org');",
+        "declare namespace fetch { export {}; } fetch('https://example.org');",
+        "declare namespace fetch { type T=string; export {T}; } fetch('https://example.org');",
+        "const ok=(await fetch('https://example.org')).status===200; globalThis.fetch=()=>{};",
+        "const table={}; table[(await fetch('https://example.org')).status]; globalThis.fetch=()=>{};",
+        "const ok=(await fetch('https://example.org')).ok; Object.assign(globalThis,{fetch:other});",
+        "Object.assign(globalThis,{globalThis:{}}); const shim=globalThis; shim.fetch=other; fetch('https://example.org');",
+        "fetch('https://example.org'); Object.assign(globalThis,{fetch:other});",
+        "Object.assign(Object,{assign:()=>{}}); const set=Object.assign; set(globalThis,{fetch:other}); fetch('https://example.org');",
+        "declare class Typed { [Object.assign(globalThis,{fetch:other})]: unknown } fetch('https://example.org');",
     ] {
         let runtime = runtime(code, "", true);
         let plan = runtime
@@ -485,6 +502,61 @@ async fn p1_rule_fixes_preserve_author_readiness_trust_and_approval_boundaries()
             false,
         ),
         ("for (require of [require('./dep')]) {}", "", false, false),
+        ("if(require('./dep')) {} require=()=>{};", "", false, false),
+        (
+            "try {} finally { require('./dep'); } require=()=>{};",
+            "",
+            false,
+            false,
+        ),
+        (
+            "function noop(){} Object.assign=noop; Object.assign(globalThis,{fetch:()=>{}}); fetch('https://example.org');",
+            "",
+            false,
+            true,
+        ),
+        (
+            "({root:globalThis}={root:{}}); Object.assign(globalThis,{fetch:()=>{}}); fetch('https://example.org');",
+            "",
+            false,
+            true,
+        ),
+        (
+            "for(let x=require('./dep');false;){} require=()=>{};",
+            "",
+            false,
+            false,
+        ),
+        (
+            "globalThis.globalThis=globalThis; globalThis.fetch=()=>{}; fetch('https://example.org');",
+            "",
+            true,
+            true,
+        ),
+        (
+            "switch(require('./dep')) {} require=()=>{};",
+            "",
+            false,
+            false,
+        ),
+        (
+            "function unused(){globalThis.globalThis={};} globalThis.fetch=()=>{}; fetch('https://example.org');",
+            "",
+            true,
+            true,
+        ),
+        (
+            "let x; [require,x=require('./dep')]=[()=>42];",
+            "",
+            true,
+            true,
+        ),
+        (
+            "let x; [x=require('./dep'),require]=[undefined,()=>42];",
+            "",
+            false,
+            false,
+        ),
         (
             "require = other; const dep = require('./dep');",
             "",

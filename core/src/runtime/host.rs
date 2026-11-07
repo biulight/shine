@@ -106,6 +106,16 @@ pub trait FileSystemHost: FileSystemObservationHost {
         bytes: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>>;
 
+    /// Retain the security of a previous profile that the lifecycle moved to rollback.
+    fn write_profile_like<'a>(
+        &'a self,
+        path: &'a Path,
+        bytes: &'a [u8],
+        _previous: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
+        self.write_atomic(path, bytes)
+    }
+
     fn write<'a>(
         &'a self,
         path: &'a Path,
@@ -502,6 +512,20 @@ impl FileSystemHost for RealHost {
                         .map_or(std::io::ErrorKind::Other, std::io::Error::kind);
                     HostError::new(kind, error)
                 })
+        })
+    }
+
+    #[cfg(windows)]
+    fn write_profile_like<'a>(
+        &'a self,
+        path: &'a Path,
+        bytes: &'a [u8],
+        previous: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            crate::persist::write_profile_like(path, bytes, previous)
+                .await
+                .map_err(|err| HostError::new(std::io::ErrorKind::Other, err))
         })
     }
 

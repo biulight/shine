@@ -60,10 +60,10 @@ Shine uses this directory for configuration and runtime state and does not read 
 
 `shine env set` updates the value but does not automatically rewrite installed templates. Run:
 
-```bash
-shine update --verbose
-shine upgrade --verbose
-```
+| Operation | Command |
+| --- | --- |
+| Inspect pending changes | `shine update --verbose` |
+| Apply updates with detailed output | `shine upgrade --verbose` |
 
 If you use a project `shine.config.toml`, project `shine.env.toml`, or overlay, confirm the current
 working directory and override precedence.

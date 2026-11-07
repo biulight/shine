@@ -29,20 +29,20 @@ shine sys bootstrap --dry-run
 
 ## 交互选择或应用 Profile
 
-```bash
-shine sys bootstrap
-shine sys bootstrap mise
-shine sys bootstrap rust mise
-shine sys bootstrap --item rust --item mise --yes
-shine sys bootstrap --preset recommended
-shine sys bootstrap --preset minimal
-shine sys bootstrap --proxy --dry-run
-```
+按需选择一种初始化方式；使用 `--yes` 前先审阅 Plan：
 
-- 在交互式终端中，`shine sys bootstrap` 会打开多选界面。
+| 操作 | 命令 |
+| --- | --- |
+| 交互选择项目 | `shine sys bootstrap` |
+| 仅初始化 mise | `shine sys bootstrap mise` |
+| 按顺序初始化这两个项目 | `shine sys bootstrap rust mise` |
+| 显式指定项目并非交互批准 | `shine sys bootstrap --item rust --item mise --yes` |
+| 使用 recommended 配置组合 | `shine sys bootstrap --preset recommended` |
+| 使用 minimal 配置组合 | `shine sys bootstrap --preset minimal` |
+| 使用代理设置预览 | `shine sys bootstrap --proxy --dry-run` |
+
 - 位置参数 item ID 只引导这些项目，保留输入顺序，并忽略重复项。
 - 重复使用 `--item` 是供脚本与 setup orchestrator 使用的等价显式写法。
-- 指定 `--preset` 时直接应用命名 profile。
 - 位置参数、重复的 `--item` 与 `--preset` 不能组合；受管资源使用 `sys apply`，而不是 `sys bootstrap`。
 - 非交互环境没有指定 profile 时使用预设的默认 profile。
 
@@ -130,11 +130,13 @@ Rust bootstrap 会在 Ubuntu Bash/Zsh、macOS Zsh 和 Windows PowerShell 的 pro
 成功的 bootstrap 只启用本次选中 item 声明的 shell 集成，不会禁用之前运行已启用的集成。命名
 selection profile 也不是软件或 shell 配置的 desired-state 替换集合。
 
-```bash
-shine sys profile disable mise --dry-run
-shine sys profile disable mise
-shine sys profile enable mise
-```
+禁用前先预览，仅在需要时重新启用：
+
+| 操作 | 命令 |
+| --- | --- |
+| 预览禁用集成 | `shine sys profile disable mise --dry-run` |
+| 禁用 shell 集成 | `shine sys profile disable mise` |
+| 重新启用 shell 集成 | `shine sys profile enable mise` |
 
 声明式 PATH 集成只会添加尚不存在的目录；重复加载生成的 profile 不会追加相同条目，
 包含空格或 shell 模式字符的路径也按字面值匹配。
@@ -157,15 +159,18 @@ profile 命令会区分改动完成、已经启用或禁用，以及 `needs acti
 
 部分系统配置是可重复应用和安全移除的受管项目：
 
-```bash
-shine sys apply --dry-run
-shine sys apply split-dns
-shine sys apply split-dns --yes # 非交互批准
-shine sys uninstall split-dns --dry-run
-shine sys uninstall split-dns
-shine sys recover              # 审阅中断的受管操作
-shine sys recover --yes        # 非交互批准
-```
+按需选择操作，应用或移除前先预览。只有审阅同一 Plan 后才使用 `--yes`；
+恢复命令仅用于处理中断的操作。
+
+| 操作 | 命令 |
+| --- | --- |
+| 预览改动 | `shine sys apply --dry-run` |
+| 应用 split-dns | `shine sys apply split-dns` |
+| 非交互批准 | `shine sys apply split-dns --yes` |
+| 预览移除 | `shine sys uninstall split-dns --dry-run` |
+| 审阅后移除 | `shine sys uninstall split-dns` |
+| 审阅中断的受管操作 | `shine sys recover` |
+| 非交互批准 | `shine sys recover --yes` |
 
 对于受管系统项目，`shine update` 比较期望配置与安装记录，`shine upgrade` 还会检查实际系统资源。
 在 Windows 上，如果 split-DNS 的 NRPT 规则与安装记录、期望配置都一致，就不需要更新或管理员权限。
@@ -195,3 +200,21 @@ bootstrap script 与包管理器操作不会由 `sys recover` 撤销；如果它
 - Ubuntu 支持 bash 和 zsh。
 - Windows 系统预设和 profile 集成使用 PowerShell。
 - Ubuntu 与 macOS 可自动识别终端明暗背景并设置 `SHINE_TERMINAL_THEME`；设置 `SHINE_SYNC_TERMINAL_THEME=0` 可关闭。
+
+## 清理旧版本的本地 HTTP 服务 {#retire-legacy-http-service}
+
+2.4.0 版本移除了 HTTP 服务能力和脚本变量 `SHINE_APP_HTTP_DIR`。Surge 和 Clash Verge 规则可使用
+本地文件；应用 artifact 的持久输出可写入 `SHINE_STATE_DIR` 或 `SHINE_CACHE_DIR`。
+
+如果曾安装旧版后台服务，升级到 2.4.0 后可执行以下命令清理：
+
+```bash
+shine clear serve
+```
+
+请以安装服务的用户运行。此命令会停止旧服务并删除其用户服务注册，
+即使旧版配置无法加载也可运行。
+
+升级前，也可使用旧二进制的 `shine serve uninstall` 移除服务。
+
+升级不会删除旧运行时目录 `http/` 下的文件。请保留仍需使用的文件，并先更新应用中的引用再删除。

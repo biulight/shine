@@ -1394,10 +1394,12 @@ pub(super) async fn prepare_shell_profile_files(
             let previous_block_hash = super::profile::shell_sentinel_block(&existing)
                 .map(|block| crate::install::hash_content(block.as_bytes()));
             let desired = if remove_all {
-                if previous_block_hash.is_none() {
+                let Some(cleaned) = super::profile::detach_shell_loader(&existing, &snippet)
+                    .with_context(|| format!("checking Shell loader in {path:?}"))?
+                else {
                     continue;
-                }
-                super::profile::remove_shell_sentinel(&existing)
+                };
+                cleaned
             } else {
                 if super::profile::shell_sentinel_block(&existing)
                     == Some(snippet.trim_end_matches('\n'))

@@ -330,7 +330,8 @@ regressions use `read_minimal_config_file`; global-only initialization uses the 
 `load_global_runtime(true)` owner (ADR 0136).
 
 The CLI list facade delegates ordered observations to `list/query.rs`, pure grouping and action
-selection to `list/projection.rs`, and output to `list/render.rs`. Local query results retain App
+selection to `list/projection.rs`, and output to `list/render.rs`. Global and targeted update share
+`generator_review.rs` to present the captured App generator assessments. Local query results retain App
 inspections for diff collection without re-evaluation. Simple Shell inventory projects only
 available/installed targets; a receipt can establish installation even when its launcher is missing.
 Managed Sys inventory uses the frontend's OS/managed receipt filter; its former test-only runtime
@@ -365,6 +366,27 @@ sink. Events convey progress, not approval, a durable replay cursor or recovery 
 ADR 0079.
 
 ## Frontend authority and execution
+
+For an App install request, the read-only facade can explain the proposed operation.
+The interactive `shine app install` path can also obtain approval and carry it to execution.
+
+```mermaid
+flowchart TD
+    request["App install request for a selected target"]
+    request -->|Read-only facade| report["Return a safe Plan review report"]
+    request -->|Interactive CLI| review["Review the Plan against captured Preset, configuration and target state"]
+    review --> ready{"User confirms a ready Plan, including any one-operation code consent?"}
+    ready -->|No| stop["Stop before installation"]
+    ready -->|Yes| approved["Bind one approval to the reviewed request and Plan"]
+    approved --> fresh["Recapture inputs and regenerate the Plan for that request"]
+    fresh --> matchPlan{"Configuration revision, Plan fingerprint and permissions match?"}
+    matchPlan -->|No| stale["Reject before installation; a new review is required"]
+    matchPlan -->|Yes| apply["Core rechecks approval and executes the App install"]
+```
+
+For eligible external code, the interactive confirmation can include consent for that exact
+code in this operation. A later `shine update --run-generators` evaluation of an external or
+overlay generator still requires matching persistent trust.
 
 `FrontendService::capture` accepts distribution-resolved context and source settings and delegates
 effective snapshot capture to the shared host-backed bootstrap. Trusted distribution code supplies
@@ -766,6 +788,10 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
    receipt-declared top-level keys for JSON merge.
 3. Restore `<name>.shine.bak` if one exists.
 4. Remove the manifest entry.
+
+CLI cleanup also plans removal of the existing App manifest if it will exhaust both ordinary and
+secret receipts. Under the App lock, execution checks the remaining receipts and journals after
+resource and cache reconciliation. Preserving an external source does not preserve an empty guard.
 
 CLI App and Shell uninstall share a completion policy over typed lifecycle outcomes. Preserved,
 conflicting, or failed outcomes produce an incomplete summary and a nonzero actual-command exit,
@@ -1706,3 +1732,12 @@ preparation/review. Explicit evaluation has the same preparation and launch gate
 lifecycle approval. The final script launcher rejects absent/stale/blocking evidence before writing
 its UUID invocation snapshot. Cancellation uses parser checks and existing Host process supervision;
 normal cleanup and forced-abort residue retain ADR 0092 semantics. See [code analysis](code-analysis.md).
+
+## Self uninstall
+
+Read-only dispatch loads the current configuration without starting initialization or update
+workers. Preview builds domain uninstall plans and inventories program receipts, service state
+and final cleanup candidates. Apply uses each domain's approval, lock and recovery path.
+After all domains converge, it captures a new final review, acquires domain and config locks,
+rechecks that review, clears only the listed state and removes verified program copies last.
+A retry re-inventories the remaining resources. See [ADR 0165](../decisions/0165-self-uninstall.md).

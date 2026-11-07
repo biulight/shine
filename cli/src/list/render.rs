@@ -1,8 +1,10 @@
 //! Terminal presentation; diff reads remain at their original output boundaries.
 use super::*;
+use crate::generator_review::{GeneratorView, file_unit, generator_failed, print_generator_review};
 use query::{InventoryInputs, StatusInputs, UpdateInputs};
+use shine_core::runtime::AppFileInspection;
 
-fn print_app_analysis(files: &[shine_core::runtime::AppFileInspection], detailed: bool) {
+fn print_app_analysis<'a>(files: impl IntoIterator<Item = &'a AppFileInspection>, detailed: bool) {
     for file in files {
         if let Some(scope) = &file.code_analysis {
             for line in crate::code_analysis::lines(scope, detailed) {
@@ -204,7 +206,16 @@ pub(super) async fn update(
         !update_sys.is_empty(),
     );
     let attention = GeneratorAttention::from_rows(&app_rows);
+    let mut skipped = BTreeMap::new();
+    if !diff && !run_generators {
+        for file in &app_inspections {
+            if file.status == FileStatus::GeneratorNotEvaluated {
+                *skipped.entry(&file.category.name).or_insert(0usize) += 1;
+            }
+        }
+    }
     if !any_update
+        && skipped.is_empty()
         && !attention.has_attention()
         && shell_attention.is_empty()
         && missing_sources.is_empty()
@@ -216,7 +227,12 @@ pub(super) async fn update(
     crate::config::print_presets_note(config);
     print_shell_attention(&shell_attention);
     print_missing_app_sources(&missing_sources);
-    print_app_analysis(&app_inspections, diff);
+    print_app_analysis(
+        app_inspections
+            .iter()
+            .filter(|file| diff || !attention.has_failures() || !generator_failed(file)),
+        diff,
+    );
 
     if !diff {
         let shell_names = shell_categories(&update_shell);
@@ -230,7 +246,20 @@ pub(super) async fn update(
         print_name_section(&mut separator, "Shell Presets", &shell_names);
         print_name_section(&mut separator, "App Configs", &app_names);
         print_name_section(&mut separator, "System Configs", &sys_names);
-        print_generator_notice(&attention, run_generators);
+        if !skipped.is_empty() {
+            separator.begin();
+            for (category, count) in skipped {
+                println!(
+                    "Skipped {count} generated {} in app/{}.",
+                    file_unit(count),
+                    output::escape_controls(category)
+                );
+            }
+            println!(
+                "{}",
+                colors::dim("Run `shine update --run-generators` to check them.")
+            );
+        }
         let upgrade_app_names = update_app
             .keys()
             .map(|category| (*category).to_string())
@@ -240,7 +269,8 @@ pub(super) async fn update(
             &refresh_commands,
         );
         if attention.has_failures() {
-            anyhow::bail!("one or more App generators could not be evaluated");
+            print_generator_review(config, &app_inspections, GeneratorView::CompactList);
+            return Err(output::ReportedCommandFailure.into());
         }
         return Ok(true);
     }
@@ -389,7 +419,17 @@ pub(super) async fn status(
         return Ok(());
     }
 
-    print_app_analysis(&app_inspections, true);
+    let summarize = run_generators && !diff;
+    let failure = if summarize {
+        Some(print_generator_review(
+            config,
+            &app_inspections,
+            GeneratorView::VerboseList,
+        ))
+    } else {
+        print_app_analysis(&app_inspections, true);
+        None
+    };
     let update_diffs = if diff {
         Some(query::collect_diffs(config, app_inspections).await?)
     } else {
@@ -530,6 +570,16 @@ pub(super) async fn status(
             };
 
             let run_hint = app_status_run_hint(row);
+            let unchecked = failure
+                .as_ref()
+                .and_then(|counts| counts.files_by_category.get(&row.category));
+            let status_text = match (row.file_status, unchecked) {
+                (
+                    FileStatus::GeneratorTrustRequired | FileStatus::GeneratorEvaluationFailed,
+                    Some(&count),
+                ) => format!("{count} generated {} unchecked", file_unit(count)),
+                _ => row.status_text.to_owned(),
+            };
 
             println!(
                 "  {}  {}{}{}  {}{}",
@@ -537,7 +587,7 @@ pub(super) async fn status(
                 label,
                 pad,
                 dest_part,
-                colors::status_label(row.status_text, row.sym),
+                colors::status_label(&status_text, row.sym),
                 run_hint,
             );
 
@@ -662,6 +712,13 @@ pub(super) async fn status(
     }
 
     let attention = GeneratorAttention::from_rows(&app_rows);
+    if let Some(failure) = failure {
+        return if attention.has_failures() {
+            Err(failure.into())
+        } else {
+            Ok(())
+        };
+    }
     print_generator_notice(&attention, run_generators);
     if attention.has_failures() {
         anyhow::bail!("one or more App generators could not be evaluated");

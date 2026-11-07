@@ -2,6 +2,14 @@
 use super::*;
 
 pub(super) async fn dispatch(cli: &Cli) -> Result<std::ops::ControlFlow<()>> {
+    if let Commands::Self_ {
+        command: SelfCommands::Uninstall { dry_run, yes },
+    } = &cli.command
+    {
+        Box::pin(cli::self_install::handle_self_uninstall(*dry_run, *yes)).await?;
+        return Ok(std::ops::ControlFlow::Break(()));
+    }
+
     // A converged upgrade must finish before initialization, advisory workers,
     // release-cache writes, approval construction or lifecycle execution.
     // Only positive convergence can return early; failed observations retain the

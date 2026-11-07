@@ -897,6 +897,7 @@ impl<H> CoreRuntime<H> {
                         Vec::new()
                     },
                     code_analysis: None,
+                    generator_trust_sources: Default::default(),
                     assessment_error: None,
                     assessment_diagnostic: Some("app_secret_content_redacted"),
                 });

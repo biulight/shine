@@ -10,14 +10,23 @@ secret decryption for remote commands, and a file-transfer channel between local
 See [Manage environment variables and secrets](./environment.md#provide-variables-and-secrets-to-remote-commands)
 for local value management.
 
+## Version compatibility {#version-compatibility}
+
+When a Shine channel reports a protocol version mismatch, upgrade the older local or remote
+Shine and reconnect. The handshake rejects incompatible peers and identifies the mismatch.
+If automation must remain available during
+an upgrade, coordinate both peers before running it.
+
 ## Open a session
 
-```bash
-shine ssh user@example.com
-shine ssh -p 2222 user@example.com
-shine ssh user@2001:db8::1
-shine ssh user@example.com uname -a
-```
+Choose one connection example:
+
+| Operation | Command |
+| --- | --- |
+| Open an interactive remote shell | `shine ssh user@example.com` |
+| Use a custom SSH port | `shine ssh -p 2222 user@example.com` |
+| Connect to an IPv6 address | `shine ssh user@2001:db8::1` |
+| Run one remote command | `shine ssh user@example.com uname -a` |
 
 Shine forwards the supplied SSH arguments to the system `ssh`. In a remote shell it sets variables
 needed by the session; transfer commands must run inside that shell.
@@ -34,11 +43,13 @@ and Linux, it also stops that process's descendants. Files already copied are no
 
 Place forwarding options before the SSH target:
 
-```bash
-shine ssh --with API_URL dev
-shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'
-shine ssh --with-secret API_TOKEN dev
-```
+Choose one forwarding method:
+
+| Operation | Command |
+| --- | --- |
+| Forward a plain variable | `shine ssh --with API_URL dev` |
+| Rename the forwarded variable | `shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'` |
+| Forward a decrypted secret | `shine ssh --with-secret API_TOKEN dev` |
 
 `--with` reads only the exact plaintext `[env]` key and never decrypts `KEY_SECRET` automatically.
 Use `--with-secret KEY[=ALIAS]` explicitly for decryption. Values exist only in the remote process
@@ -241,13 +252,15 @@ unavailable. Use system `scp`, `sftp`, or another transfer tool.
 
 Inside a remote shell opened by `shine ssh`:
 
-```bash
-shine local download ./logs/app.log
-shine local download ./logs/app.log ./downloaded/app.log --dry-run
-shine local download ./logs/app.log ./downloaded/app.log --force
-shine local download ./logs/app.log --scp
-shine local download ./dist ./dist-copy
-```
+Choose one download example. Preview the destination before allowing replacement; SCP may overwrite existing files even without `--force`.
+
+| Operation | Command |
+| --- | --- |
+| Download to the local starting directory | `shine local download ./logs/app.log` |
+| Preview destination | `shine local download ./logs/app.log ./downloaded/app.log --dry-run` |
+| Allow replacement at the destination | `shine local download ./logs/app.log ./downloaded/app.log --force` |
+| Use SCP directly | `shine local download ./logs/app.log --scp` |
+| Download a directory | `shine local download ./dist ./dist-copy` |
 
 The remote side resolves the source; the local side resolves the destination. Without a destination,
 the item is placed in the local directory from which `shine ssh` started, using the source name.
@@ -271,11 +284,13 @@ select matching remote files.
 
 Still inside the remote shell:
 
-```bash
-shine local upload ./release.tar.gz /tmp/release.tar.gz --dry-run
-shine local upload ./release.tar.gz /tmp/release.tar.gz --force
-shine local upload ./site /tmp/site
-```
+Preview first; choose a file or directory transfer as needed. Use `--force` only when replacement is intended.
+
+| Operation | Command |
+| --- | --- |
+| Preview upload | `shine local upload ./release.tar.gz /tmp/release.tar.gz --dry-run` |
+| Allow replacement at the destination | `shine local upload ./release.tar.gz /tmp/release.tar.gz --force` |
+| Upload a directory | `shine local upload ./site /tmp/site` |
 
 The local side resolves the source and the remote side resolves the destination. Without a
 destination, Shine places it in the remote current directory using the source name. Directory upload
@@ -325,6 +340,8 @@ shine app install example
 
 Create a separate policy with `--operation upgrade` for upgrades. `--migrate-file-policy` explicitly
 allows upgrading the local policy store to version 2; old environment policies remain readable.
+Downgrading the Shine binary does not undo this policy migration; keep a private backup of the
+policy store before migrating.
 File policies bind the host, operation, workspace, complete mappings, ciphertext versions, and remote
 targets. App policies also bind the effective category snapshot and requested permissions. A request
 may release only an explicit subset of the authorized files; new or changed sources require a

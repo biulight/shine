@@ -5,8 +5,12 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.9.0. Run `shine <COMMAND> --help` for every option supported by the
+This page reflects Shine 2.10.0. Run `shine <COMMAND> --help` for every option supported by the
 installed version. The task guides explain complete workflows; this page is a compact command index.
+
+Command failures are reported on stderr. When stderr supports color, the top-level `Error:`
+summary is bold red and `Caused by:` is bold; diagnostic details keep the default text color.
+Set `NO_COLOR=1` to disable color. Redirected stderr is plain unless color is explicitly forced.
 
 ## Targets
 
@@ -167,9 +171,19 @@ state migrations; if configuration validation fails, correct the reported file b
 If a release check fails, `update` still reports configuration updates. Retry the release check
 with `--refresh-release` after restoring connectivity.
 
-`--run-generators` executes App generators and requires trust. Even with a single-file target, it
-can evaluate generators throughout that App category. Failed or incomplete evaluation does not
-establish that the installed content is current.
+With no target, `shine update` counts skipped files by App category. Use `--run-generators` to
+evaluate them. A fully built-in category needs no additional grant. If the category includes files
+from an external preset directory or an overlay, the generator needs matching trust. When blocked,
+`update` identifies the contributing sources. Review the listed generator before granting trust.
+With a target, `shine update surge --run-generators` lists files it could not check before
+showing diffs for files with updates. A generator failure elsewhere in the same App category
+still makes a single-file check exit with status 1.
+Add `--verbose` to see the generator and its static analysis summary. Files sharing a generator and identical advisory findings are listed together, with counts and
+an example location for each kind of finding. Blocking findings retain their individual locations.
+Use `shine preset lint <PATH> --format json` for all locations in a separate source check.
+If an overlay is configured, supply a complete preset directory containing the effective base and overlay files.
+Without a target, verbose mode shows blocked files before the inventory. Failed or incomplete
+evaluation does not establish that installed content is current.
 
 For external Shell presets in `snapshot` mode, `update --diff` includes shared category files,
 not just the selected command script. `content: unchanged` does not rule out changes to helpers
@@ -351,7 +365,7 @@ shine clear serve
 stops and removes an older version's user service without loading Shine configuration or deleting
 published files. Repeating successful cleanup is safe; service-manager errors are reported.
 The `shine serve` namespace is removed. See
-[Installation and upgrades](../installation.md#retire-an-older-local-http-service).
+[System management](../guides/system-init.md#retire-legacy-http-service).
 
 `shine state migrate` remains the command for versioned runtime-state migrations.
 
@@ -378,6 +392,7 @@ See [SSH sessions, secret brokering, and file transfer](../guides/ssh-transfer.m
 ```text
 shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
+shine self uninstall [--dry-run | --yes]
 ```
 
 `stable` follows released versions. `preview` follows the replaceable preview build. See

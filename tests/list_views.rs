@@ -1637,7 +1637,14 @@ fn list_views_keep_deferred_generators_separate_from_upgrade_and_preserve_receip
         let text = stdout(&output);
         assert!(text.contains("App Configs"), "{output:?}");
         if args[0] == "update" {
-            assert!(text.contains("not evaluated"), "{output:?}");
+            assert!(
+                text.contains(if args.len() == 1 {
+                    "Skipped 1 generated file in app/demo."
+                } else {
+                    "not evaluated"
+                }),
+                "{output:?}"
+            );
             assert!(!text.contains("shine app refresh"), "{output:?}");
         }
         assert!(!fixture.0.join("generator-ran").exists());
@@ -1662,7 +1669,13 @@ fn list_views_keep_deferred_generators_separate_from_upgrade_and_preserve_receip
         let output = fixture.run(&args);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(
-            stdout(&output).contains("generator trust required"),
+            if args.contains(&"--verbose") {
+                stdout(&output).contains("generator trust required")
+            } else {
+                String::from_utf8_lossy(&output.stderr).contains(
+                    "app/demo uses an external preset source and requires generator trust",
+                )
+            },
             "{output:?}"
         );
         assert!(!fixture.0.join("generator-ran").exists());
@@ -2067,22 +2080,25 @@ fn global_generator_notices_escape_labels_and_keep_failure_exit_and_column_align
         ] {
             let output = fixture.run(&args);
             assert_eq!(output.status.code(), Some(1), "{output:?}");
-            assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains("one or more App generators could not be evaluated")
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
             let text = stdout(&output);
+            assert!(!stderr.contains("\nFORGED") && !stderr.contains("PRIVATE_DETAIL"));
             assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
             assert!(
                 !text.contains("\nFORGED") && !text.contains("PRIVATE_DETAIL"),
                 "{text:?}"
             );
-            assert!(
-                text.contains(r"! manual\nFORGED\r\t\u{1b}中文: generator"),
-                "{text:?}"
-            );
             assert!(!text.contains("Nothing to update."));
-            if args.contains(&"--diff") {
+            if !args.contains(&"--diff") {
+                assert_eq!(stderr.matches("Error:").count(), 1, "{stderr}");
+                assert!(stderr.contains("manual.txt"));
+                assert_eq!(stderr.contains("shine trust grant app/demo"), !trusted);
+            } else {
+                assert!(stderr.contains("one or more App generators could not be evaluated"));
+                assert!(
+                    text.contains(r"! manual\nFORGED\r\t\u{1b}中文: generator"),
+                    "{text:?}"
+                );
                 let columns: Vec<_> = text
                     .lines()
                     .filter_map(|line| line.split_once("  →  "))
@@ -2299,21 +2315,37 @@ fn generator_failure_notices_encode_renamed_source_and_remain_read_only() {
             // Selecting a static sibling still reports every category-scoped evaluation failure.
             let output = fixture.run(&[command, "app/demo/config.txt", "--run-generators"]);
             assert_eq!(output.status.code(), Some(1), "{output:?}");
-            assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains("one or more App generators could not be evaluated")
-            );
-            let text = stdout(&output);
-            assert!(text.contains(if trusted {
-                "generator evaluation failed"
+            let err = String::from_utf8_lossy(&output.stderr);
+            let text = format!("{}{err}", stdout(&output));
+            if command == "update" {
+                assert!(
+                    err.contains(if trusted {
+                        "Generator evaluation failed"
+                    } else {
+                        "requires generator trust"
+                    }),
+                    "{text}"
+                );
+                assert!(
+                    !err.contains("one or more App generators could not be evaluated"),
+                    "{text}"
+                );
             } else {
-                "generator trust required"
-            }));
+                assert!(
+                    err.contains("one or more App generators could not be evaluated"),
+                    "{text}"
+                );
+                assert!(text.contains(if trusted {
+                    "generator evaluation failed"
+                } else {
+                    "generator trust required"
+                }));
+            }
             assert!(!text.contains("PRIVATE_GENERATOR_DETAIL"));
             assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
             assert!(!text.contains("\nFORGED"), "{text:?}");
             if cfg!(unix) {
-                assert!(text.contains(r"demo/manual\nFORGED\r\t\u{1b}.txt:"));
+                assert!(text.contains(r"manual\nFORGED\r\t\u{1b}.txt"));
             }
             assert!(!text.contains("No update available"));
         }
@@ -2442,33 +2474,70 @@ fn targeted_update_keeps_generator_failures_out_of_no_update_footer() {
                 let output = fixture.run(&[command, target, "--run-generators"]);
                 assert_eq!(output.status.code(), Some(1), "{output:?}");
                 let text = stdout(&output);
-                assert!(
-                    text.contains(if trusted {
-                        "generator evaluation failed"
-                    } else {
-                        "generator trust required"
-                    }),
-                    "{output:?}"
-                );
+                let err = String::from_utf8_lossy(&output.stderr);
+                if command == "update" {
+                    assert!(
+                        err.contains("manual.txt")
+                            && err.contains(if trusted {
+                                "Generator evaluation failed"
+                            } else {
+                                "requires generator trust"
+                            }),
+                        "{output:?}"
+                    );
+                    assert!(
+                        !err.contains("one or more App generators could not be evaluated"),
+                        "{err}"
+                    );
+                } else {
+                    assert!(
+                        text.contains(if trusted {
+                            "generator evaluation failed"
+                        } else {
+                            "generator trust required"
+                        }),
+                        "{output:?}"
+                    );
+                    assert!(
+                        err.contains("one or more App generators could not be evaluated"),
+                        "{err}"
+                    );
+                }
                 assert!(!text.contains("No update available"), "{output:?}");
-                assert!(
-                    String::from_utf8_lossy(&output.stderr)
-                        .contains("one or more App generators could not be evaluated"),
-                    "{output:?}"
-                );
             }
         }
         assert_eq!(fixture.0.join("generator-ran").exists(), trusted);
     }
     fs::write(preset.join("config.txt"), "static-v2\n").unwrap();
     success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
-    let mixed = fixture.run(&["update", "app/demo", "--run-generators"]);
-    assert_eq!(mixed.status.code(), Some(1), "{mixed:?}");
-    let text = stdout(&mixed);
-    assert!(
-        text.contains("update available") && text.contains("generator evaluation failed"),
-        "{mixed:?}"
-    );
+    for target in ["app/demo", "app/demo/config.txt"] {
+        for verbose in [false, true] {
+            let mut args = vec!["update", target, "--run-generators"];
+            if verbose {
+                args.push("--verbose");
+            }
+            let mixed = fixture.run(&args);
+            assert_eq!(mixed.status.code(), Some(1), "{mixed:?}");
+            let text = stdout(&mixed);
+            assert!(
+                text.contains("update available")
+                    && text.contains("-static-v1")
+                    && text.contains("+static-v2"),
+                "{mixed:?}"
+            );
+            let err = String::from_utf8_lossy(&mixed.stderr);
+            assert!(
+                err.contains("manual.txt")
+                    && err.contains("Generator evaluation failed")
+                    && err.contains("generator exited with 1"),
+                "{mixed:?}"
+            );
+            assert!(
+                !err.contains("shine trust inspect") && !text.contains("No update available"),
+                "{mixed:?}"
+            );
+        }
+    }
     fs::write(preset.join("config.txt"), "static-v1\n").unwrap();
     fs::write(preset.join("generate.ts"), "console.log('manual-v1');\n").unwrap();
     success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
@@ -2481,6 +2550,28 @@ fn targeted_update_keeps_generator_failures_out_of_no_update_footer() {
     for (path, bytes) in paths.iter().zip(before) {
         assert_eq!(fs::read(fixture.0.join(path)).unwrap(), bytes);
     }
+    // User edits take precedence in file status, but the sibling generator still failed.
+    fs::write(fixture.0.join("destination/manual.txt"), b"user edit").unwrap();
+    fs::write(
+        preset.join("generate.ts"),
+        "throw new Error('sibling failed');",
+    )
+    .unwrap();
+    success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+    let output = fixture.run(&["update", "app/demo/config.txt", "--run-generators"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("manual.txt"),
+        "{output:?}"
+    );
+    assert!(
+        !stdout(&output).contains("No update available"),
+        "{output:?}"
+    );
+    assert_eq!(
+        fs::read(fixture.0.join("destination/manual.txt")).unwrap(),
+        b"user edit"
+    );
 }
 
 #[test]
@@ -2623,6 +2714,348 @@ fn generator_summary_preserves_unknown_trust_and_failure_states() {
         fs::read(fixture.0.join("destination/manual.txt")).unwrap(),
         b"manual-v1\n"
     );
+}
+
+#[test]
+fn update_names_only_layers_contributing_to_the_blocked_app() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    let overlay = fixture.0.join("overlay");
+    let unrelated = overlay.join("shell/unrelated");
+    fs::create_dir_all(&unrelated).unwrap();
+    fs::write(unrelated.join("notes.txt"), "unrelated").unwrap();
+    fs::write(
+        fixture.0.join("state/config.toml"),
+        format!(
+            "schema_version = 2\npresets_overlay_dir = {:?}\n[env]\nENABLE = '1'\n",
+            overlay.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let check = |reason: &str| {
+        let result = fixture.run(&["update", "--run-generators"]);
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains(&format!("Error: app/demo {reason}. Could not check 1 file")),
+            "{stderr}"
+        );
+        assert!(!fixture.0.join("generator-ran").exists());
+    };
+    check("uses an external preset source and requires generator trust");
+
+    let app_overlay = overlay.join("app/demo");
+    fs::create_dir_all(&app_overlay).unwrap();
+    fs::write(app_overlay.join("config.txt"), "only a data file").unwrap();
+    check("uses external preset and overlay files and requires generator trust");
+
+    let base = fixture.0.join("state/presets/app/demo");
+    for name in ["manual.txt", "generate.ts", "shine.toml"] {
+        fs::copy(base.join(name), app_overlay.join(name)).unwrap();
+    }
+    check("includes overlay files and requires generator trust");
+}
+
+#[test]
+fn verbose_generator_lint_hint_requires_a_complete_source_tree() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    let base = fixture
+        .0
+        .join("state")
+        .join("presets")
+        .join("app")
+        .join("demo");
+    let review = |target: Option<&str>| {
+        let mut args = vec!["update"];
+        args.extend(target);
+        args.extend(["--run-generators", "--verbose"]);
+        let output = fixture.run(&args);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            error.contains("Generator  generate.ts") && error.contains("generate.ts:"),
+            "{error}"
+        );
+        error
+    };
+    let single_source = review(Some("demo"));
+    let command = single_source
+        .lines()
+        .find(|line| line.trim_start().starts_with("shine preset lint "))
+        .unwrap()
+        .trim();
+    assert_hint_argv(
+        command,
+        &[
+            "shine",
+            "preset",
+            "lint",
+            base.to_str().unwrap(),
+            "--format",
+            "json",
+        ],
+    );
+
+    // Linting just the overlay cannot resolve the base generator referenced by its metadata.
+    let overlay = fixture.0.join("overlay");
+    let category = overlay.join("app/demo");
+    fs::create_dir_all(&category).unwrap();
+    fs::rename(base.join("shine.toml"), category.join("shine.toml")).unwrap();
+    fs::write(
+        fixture.0.join("state/config.toml"),
+        format!(
+            "schema_version = 2\npresets_overlay_dir = {:?}\n[env]\nENABLE = '1'\n",
+            overlay.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    for target in [Some("demo"), None] {
+        let mixed = review(target);
+        assert!(
+            mixed.contains("external preset and overlay files"),
+            "{mixed}"
+        );
+        assert!(mixed.contains("complete preset source tree"), "{mixed}");
+        let hints: Vec<_> = mixed
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("shine preset lint "))
+            .collect();
+        assert_eq!(hints, ["shine preset lint <PATH> --format json"], "{mixed}");
+    }
+    assert!(!fixture.0.join("generator-ran").exists());
+}
+
+#[test]
+fn verbose_update_reports_the_shared_surge_generator_once_before_inventory() {
+    let fixture = Fixture::new();
+    let preset = fixture.0.join("state/presets/app/surge");
+    let dest = fixture.0.join("destination");
+    fs::create_dir_all(preset.join("sub")).unwrap();
+    let files = ["subscription-proxies.conf", "sub/wget-cloud-proxies.conf"];
+    let mut metadata = format!(
+        "metadata_schema_version = 2\ndest = {:?}\n",
+        dest.to_str().unwrap()
+    );
+    metadata.push_str("[permissions]\nschema_version = 1\nnetwork = [{ scope = 'any' }]\n");
+    for name in files.into_iter().chain(["local-rules.conf"]) {
+        metadata.push_str(&format!("[[files]]\nsource = {name:?}\n"));
+        fs::write(preset.join(name), "installed").unwrap();
+    }
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    success(&fixture.run(&["app", "install", "surge", "--yes"]));
+    let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    let script = "generate-subscription.ts";
+    fs::write(
+        preset.join(script),
+        include_str!("../presets/app/surge/generate-subscription.ts"),
+    )
+    .unwrap();
+    for (name, env) in files.iter().zip([
+        "SURGE_SUBSCRIPTION_URL",
+        "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL",
+    ]) {
+        let entry = format!("source = {name:?}\n");
+        metadata = metadata.replace(&entry, &format!("{entry}generator = {{ script = '{script}', runtime = 'bun', when_env = '{env}', env = [{{ source = '{env}', target = 'SURGE_SUBSCRIPTION_URL', sensitivity = 'secret' }}], auto = false }}\n"));
+    }
+    fs::write(preset.join("shine.toml"), metadata).unwrap();
+    let overlay = fixture.0.join("overlay");
+    fs::create_dir_all(overlay.join("app/surge")).unwrap();
+    fs::write(overlay.join("app/surge").join(files[0]), "overlay data").unwrap();
+    fs::write(fixture.0.join("state/config.toml"), format!(
+        "schema_version = 2\npresets_overlay_dir = {:?}\n[env]\nSURGE_SUBSCRIPTION_URL = 'private-input'\nW_GET_CLOUD_SURGE_SUBSCRIPTION_URL = 'other-private-input'\n",
+        overlay.to_str().unwrap()
+    )).unwrap();
+    // A local release-cache failure exercises the independent version warning offline.
+    let cache = fixture.0.join("state/update-check.json");
+    fs::remove_file(&cache).unwrap();
+    fs::create_dir(&cache).unwrap();
+    let run = |args: &[&str]| {
+        // Combine stdout and stderr to check the order a terminal user sees.
+        let log = fixture.0.join("terminal.log");
+        let terminal = fs::File::create(&log).unwrap();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_shine"));
+        cmd.args(args)
+            .stdout(terminal.try_clone().unwrap())
+            .stderr(terminal);
+        let output = fixture.run_command(cmd);
+        let text = fs::read_to_string(log).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{text}");
+        text
+    };
+    let text = run(&["update", "--run-generators", "--verbose"]);
+    let mut rest = text.as_str();
+    for expected in [
+        "app/surge · 2 generated files could not be checked",
+        "external preset and overlay files",
+        "shine trust inspect app/surge",
+        "Generator  generate-subscription.ts",
+        "Static analysis · same report for these files · 0 blocking findings",
+        "target determined at runtime",
+        "calls outside verified coverage",
+        "Dependency",
+        "Declaration",
+        "shine preset lint",
+        "--format json",
+        "App Configs",
+        "2 generated files unchecked",
+        "Shine version",
+        "Check skipped",
+        "Result",
+        "2 files require generator trust",
+    ] {
+        rest = rest
+            .split_once(expected)
+            .unwrap_or_else(|| panic!("{expected}: {text}"))
+            .1;
+    }
+    assert_eq!(text.matches("Static analysis").count(), 1);
+    assert_eq!(
+        text.matches("Generator  generate-subscription.ts").count(),
+        1
+    );
+    for name in files {
+        assert!(
+            text.contains(name) || text.contains(&name.replace('/', "\\")),
+            "{text}"
+        );
+    }
+    for unwanted in [
+        "note[",
+        "configuration update check failed",
+        "one or more App generators",
+        "private-input",
+    ] {
+        assert!(!text.contains(unwanted), "{text}");
+    }
+    fs::write(preset.join("local-rules.conf"), "updated rules").unwrap();
+    for verbose in [false, true] {
+        let mut args = vec!["update", "surge", "--run-generators"];
+        if verbose {
+            args.push("--verbose");
+        }
+        let text = run(&args);
+        assert!(
+            text.contains("app/surge · 2 generated files could not be checked"),
+            "{text}"
+        );
+        assert!(
+            text.contains("external preset and overlay files")
+                && text.contains("shine trust inspect app/surge"),
+            "{text}"
+        );
+        for name in files {
+            assert!(
+                text.contains(name) || text.contains(&name.replace('/', "\\")),
+                "{text}"
+            );
+        }
+        for expected in [
+            "Generator  generate-subscription.ts",
+            "Static analysis",
+            "calls outside verified coverage",
+            "shine preset lint",
+            "Result",
+        ] {
+            assert_eq!(
+                text.matches(expected).count(),
+                usize::from(verbose),
+                "{expected}: {text}"
+            );
+        }
+        let (report, diff) = text
+            .split_once("--- Diff:")
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(
+            report.contains("shine trust inspect app/surge") && diff.contains("+updated rules"),
+            "{text}"
+        );
+        assert!(
+            !report.contains("Result") && diff.contains("Result") == verbose,
+            "{text}"
+        );
+        for unwanted in [
+            "note[",
+            "one or more App generators",
+            "No update available",
+            "Shine version",
+            "private-input",
+        ] {
+            assert!(!text.contains(unwanted), "{text}");
+        }
+    }
+    assert_eq!(
+        fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+        receipt
+    );
+    for name in files {
+        assert_eq!(fs::read(dest.join(name)).unwrap(), b"installed");
+    }
+    assert!(!fixture.0.join("state/runtime/app").exists());
+}
+
+#[test]
+fn compact_and_verbose_update_group_shared_generator_reports() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    let metadata = fixture.0.join("state/presets/app/demo/shine.toml");
+    let contents = fs::read_to_string(&metadata).unwrap()
+        .replace("list_mode = 'files'", "list_mode = 'category'")
+        .replace("source = 'config.txt'\n",
+            "source = 'config.txt'\ngenerator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = [{ source = 'ENABLE', sensitivity = 'plain' }], auto = true }\n");
+    fs::write(&metadata, contents).unwrap();
+    fs::write(fixture.0.join("state/presets/app/demo/generate.ts"),
+        "import * as console from 'node:console'; unknownCall(); anotherUnknownCall(); await fetch(url);\n").unwrap();
+    let skipped = fixture.run(&["update"]);
+    success(&skipped);
+    assert!(
+        stdout(&skipped).contains("Skipped 2 generated files in app/demo."),
+        "{skipped:?}"
+    );
+    assert!(!stdout(&skipped).to_lowercase().contains("trust"));
+    let blocked = fixture.run(&["update", "--run-generators"]);
+    assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");
+    let error = String::from_utf8_lossy(&blocked.stderr);
+    assert_eq!(error.matches("Error:").count(), 1, "{blocked:?}");
+    assert_eq!(
+        error.matches("Generator  generate.ts").count(),
+        1,
+        "{blocked:?}"
+    );
+    for expected in [
+        "Could not check 2 files",
+        "config.txt",
+        "manual.txt",
+        "Static analysis could not verify a dependency, 2 calls, and a network target.",
+        "shine trust inspect app/demo",
+        "every listed generator, hook and artifact",
+        "shine trust grant app/demo",
+        "--verbose",
+    ] {
+        assert!(error.contains(expected), "{blocked:?}");
+    }
+    assert!(!error.contains("configuration update check failed"));
+    let detailed = fixture.run(&["update", "--run-generators", "--verbose"]);
+    assert_eq!(detailed.status.code(), Some(1));
+    let detail = String::from_utf8_lossy(&detailed.stderr);
+    assert_eq!(
+        detail.matches("2 calls outside verified coverage").count(),
+        1,
+        "{detail}"
+    );
+    assert_eq!(
+        detail.matches("Generator  generate.ts").count(),
+        1,
+        "{detail}"
+    );
+    assert!(!fixture.0.join("generator-ran").exists());
 }
 
 #[tokio::test]
@@ -2863,6 +3296,7 @@ fn code_analysis_blocks_supported_scripts_before_execution_in_every_cli_evaluati
             vec!["info", "app/demo", "--run-generators", "--verbose"],
             vec!["info", "app/demo", "--run-generators", "--diff"],
             vec!["update", "app/demo", "--run-generators"],
+            vec!["update", "app/demo", "--run-generators", "--verbose"],
             vec!["update", "--run-generators"],
             vec!["update", "--run-generators", "--verbose"],
             vec!["update", "--run-generators", "--diff"],
@@ -2887,8 +3321,7 @@ fn code_analysis_blocks_supported_scripts_before_execution_in_every_cli_evaluati
             if code.contains("localCall") {
                 let detailed = args.contains(&"--verbose")
                     || args.contains(&"--diff")
-                    || args.starts_with(&["app", "info"])
-                    || args.starts_with(&["update", "app/demo"]);
+                    || args.starts_with(&["app", "info"]);
                 assert_eq!(
                     text.contains("4 diagnostics (code)"),
                     !detailed,
@@ -2905,7 +3338,8 @@ fn code_analysis_blocks_supported_scripts_before_execution_in_every_cli_evaluati
                     2,
                     "{args:?}: {text}"
                 );
-                assert!(text.contains("existing code trust is still required"));
+                assert!(text.contains("behavior static analysis could not verify"));
+                assert!(!text.contains("existing code trust is still required"));
             }
             assert!(!text.contains("SECRET_LITERAL"));
             assert!(!text.contains("private.example"));
@@ -2952,11 +3386,25 @@ fn code_analysis_details_do_not_grant_trust_for_advisory_only_code() {
                 String::from_utf8_lossy(&output.stderr)
             );
             assert_eq!(output.status.code(), Some(1), "{args:?}: {text}");
-            assert_eq!(
-                text.matches("note[code_analysis_call_unknown]").count(),
-                if verbose { 4 } else { 1 },
-                "{args:?}: {text}"
-            );
+            if args == ["update", "--run-generators"] {
+                assert!(
+                    text.contains("Static analysis could not verify 4 calls."),
+                    "{text}"
+                );
+                assert!(!text.contains("note[code_analysis_call_unknown]"), "{text}");
+            } else if args == ["update", "--run-generators", "--verbose"] {
+                assert!(
+                    text.contains("4 calls outside verified coverage") && text.contains("Calls"),
+                    "{text}"
+                );
+                assert!(!text.contains("note[code_analysis_call_unknown]"), "{text}");
+            } else {
+                assert_eq!(
+                    text.matches("note[code_analysis_call_unknown]").count(),
+                    if verbose { 4 } else { 1 },
+                    "{args:?}: {text}"
+                );
+            }
             assert!(!text.contains("error[code_analysis_"), "{args:?}: {text}");
             assert!(text.contains("trust"), "{args:?}: {text}");
             assert!(!fixture.0.join("state/runtime/app").exists());

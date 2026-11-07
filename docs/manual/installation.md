@@ -30,7 +30,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.9.0 sh install.sh
+SHINE_VERSION=2.10.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -44,10 +44,15 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.9.0"; .\install.ps1
+$env:SHINE_VERSION = "2.10.0"; .\install.ps1
 ```
 
 ## Install preview
+
+These commands install preview to the same destination as stable releases, replacing any existing
+Shine binary there. Both preview installer scripts select preview by default; an existing
+`SHINE_VERSION` environment variable overrides that default. Preview builds are prereleases and may be
+less stable. Check the installed build with `shine --version`.
 
 To install the rolling preview build directly on macOS or Linux:
 
@@ -60,11 +65,6 @@ On Windows PowerShell:
 ```powershell
 irm https://github.com/biulight/shine/releases/download/preview/install.ps1 | iex
 ```
-
-These commands install preview to the same destination as stable releases, replacing any existing
-Shine binary there. Both preview installer scripts select preview by default; an existing
-`SHINE_VERSION` environment variable overrides that default. Preview builds are prereleases and may be
-less stable. Check the installed build with `shine --version`.
 
 Update preview with `shine self upgrade --channel preview`, or return to the latest stable release
 with `shine self upgrade --channel stable`. Installing preview does not persist an update-channel
@@ -110,30 +110,29 @@ To build from the Shine source repository, run `cargo build --release`. The bina
 
 ## Upgrade Shine
 
-After installation, Shine can download either the stable or preview build:
+Choose one update command:
 
-```bash
-shine self upgrade
-shine self upgrade --channel stable
-shine self upgrade --channel preview
-```
+| Operation | Command |
+| --- | --- |
+| Upgrade to the latest stable release | `shine self upgrade` |
+| Reinstall latest stable; also return from preview | `shine self upgrade --channel stable` |
+| Update to the rolling preview | `shine self upgrade --channel preview` |
 
-Without a channel option, Shine upgrades to the latest stable release. Use `--channel stable`
-to reinstall the latest stable release, including when the installed version is the same or newer.
+`--channel stable` reinstalls even when the installed version is the same or newer.
 
 `preview` is a continuously updated prerelease channel and is not included in routine automatic
 update checks. `shine update` checks both installed configuration and stable Shine releases.
 
-Before upgrading from Shine 1.x, read [Upgrade from Shine 1.x](./guides/upgrade-to-2.md).
+<span id="upgrade-to-shine-28" />
+<span id="upgrade-to-shine-272" />
+<span id="upgrade-to-shine-271" />
+<span id="upgrade-to-shine-27" />
+<span id="upgrade-to-shine-26" />
+<span id="retire-an-older-local-http-service" />
 
-Before using [temporary secret files](./guides/environment.md#workspace-secret-files), upgrade all
-clients that read the same workspace to Shine 2.5 or later. On Windows, use names without executable
-extensions for new environment proxies, such as `gh` instead of `gh.exe`.
-
-When upgrading from 2.3.x or earlier, follow the
-[environment-layer migration and rollback steps](./guides/environment.md#manual-upgrade-and-rollback-for-env-layering).
-Back up your configuration privately, update scripts that use env write `--force`, and run
-`shine env explain KEY` in important projects to check which value takes effect after upgrading.
+Before upgrading, read [Upgrades and migration](./guides/upgrading.md) for actions that apply to your
+current version and features. See [Release notes](https://github.com/biulight/shine/releases)
+for new features and fixes.
 
 Use `shine self install --dest <PATH>` to copy Shine to a chosen path. Relative paths start from the
 current directory; add the destination's directory to `PATH`. Later self-upgrades also update this
@@ -145,123 +144,32 @@ Shine cannot elevate itself to upgrade when running from a protected directory. 
 install and run Shine from a user-writable directory. On Windows, installing or upgrading in a
 protected location requires a terminal with the necessary permissions.
 
-## Upgrade to Shine 2.8
+## Uninstall Shine
 
-Shine 2.8 adds [managed App secret files](./guides/app-presets.md#managed-secret-files),
-[local SSH file authorization](./guides/ssh-transfer.md#file-secret-broker), and clearer Shell
-installation reviews and system installer progress. This minor release includes incompatible
-protocol and state changes. Before upgrading from 2.7 or earlier:
+Run `shine self uninstall --dry-run` from the account and configuration you want to clean up.
+Review the listed changes. Run `shine self uninstall` to approve them interactively, or
+`shine self uninstall --yes` to accept them without a prompt.
 
-1. **Upgrade both SSH peers.** Protocol v4 requires matching clients, including for existing SSH
-   workflows. Upgrade the local and remote Shine binaries before reconnecting.
-2. **Review file policies explicitly.** Existing environment policies remain readable but do not
-   authorize files. Use `--migrate-file-policy` when adding a file policy to permit the policy
-   store upgrade to version 2. Review the exact host, operation, files, and permissions; see the
-   [file authorization guide](./guides/ssh-transfer.md#file-secret-broker).
-3. **Keep App state with a compatible client.** App writes use manifest version 2; older clients
-   reject it. Metadata version 3 is required for `secret_files`. Keep private backups before
-   upgrading, and do not downgrade a client against newly written state. Downgrading the binary
-   does not reverse state or policy migrations. Never delete private secret state to bypass an
-   error; it is needed for ownership checks and recovery.
-4. **Renew approvals and update integrations.** Plan, approval, and review schema versions are now
-   4. Generate fresh reports and approvals instead of reusing saved ones. Rust consumers of
-   `shine-core` must adapt to the changed public types and recompile.
+Shine uses each domain's uninstall rules for managed App files, Shell configuration, Sys items
+and environment proxies. For the default account configuration, it also checks for exact Sys
+startup blocks and the retired HTTP service. It keeps personal settings, tasks, external presets,
+encryption identities, custom Sys profiles and software installed by bootstrap. The configuration
+directory can still contain those files, caches and locks. The preview lists any trust grants
+and broker policies scheduled for removal. If Shine cannot inspect the account's service
+manager, retry from a session that can. If it finds a legacy service while using a custom
+configuration directory, review `shine clear serve` separately.
 
-Existing encrypted workspace sources do not need to be resealed just to upgrade Shine. Read-only
-App inspection does not decrypt files. Review [secret-file permissions and recovery](./guides/app-presets.md#managed-secret-files)
-before enabling automatic decryption, and follow the earlier migration steps below if upgrading
-from before 2.7.
+If a recovery journal or a modified managed file blocks cleanup, follow the reported domain's
+recovery or uninstall instructions and rerun the command. If a Shell startup block points to
+another Shine configuration or contains edits, review the reported file. Only the exact loader
+for the selected configuration can be removed automatically. Earlier successful steps stay applied.
+Shine removes recorded program copies last, after checking their file identity and contents
+against the running build. A changed or different-version copy needs separate review.
 
-## Upgrade to Shine 2.7.2
-
-Shine 2.7.2 fixes false modification warnings for unchanged Windows split-DNS rules, protects
-`preset new` from accidental overwrites, and allows workspace secret file groups outside Git
-repositories on separate filesystems. No configuration migration is required when upgrading
-from 2.7.1. See [managed system items](./guides/system-init.md),
-[Preset templates](./guides/custom-presets.md), and [file groups](./guides/environment.md).
-
-## Upgrade to Shine 2.7.1
-
-Shine 2.7.1 fixes environment-cache invalidation, hybrid key-decryption diagnostics, upgrade
-side effects and diff previews. Existing encrypted source files do not need to be resealed.
-Older caches are rebuilt, so the first environment command after upgrading may ask you to
-reauthorize decryption for each source. See [hybrid secrets](./guides/environment.md#share-a-payload-across-gpg-and-age-members).
-
-## Upgrade to Shine 2.7
-
-When upgrading from 2.6 or earlier, review these compatibility changes before updating external
-Presets or automation. Source builds now require Rust 1.90; prebuilt binaries do not require Rust.
-
-1. **Convert legacy Preset environment inputs.** Shell Bun commands and App generators, hooks and
-   artifacts require structured `env` entries containing `source`, optional `target`, and
-   `sensitivity`. Legacy string arrays are rejected. Keep a private backup of your source, then use
-   Shine 2.7 to preview the conversion before applying it:
-
-   ```bash
-   shine preset migrate ./my-presets --dry-run
-   shine preset migrate ./my-presets
-   shine preset validate ./my-presets
-   shine preset lint ./my-presets
-   ```
-
-   The migrator needs explicit sensitivity from the old declarations; missing or conflicting
-   classifications require manual correction. Migrate Git-managed overlays in their upstream
-   checkout, then pull again. Migration backs up metadata but does not execute scripts, decrypt
-   values, or renew trust. Review changed external snapshots before normal install/upgrade.
-   See [runtime environment inputs](./guides/custom-presets.md#declare-runtime-environment-inputs).
-2. **Review App code diagnostics.** Supported Bun code and local JS/TS dependencies are checked
-   before execution. Definite declaration differences and analysis failures block affected work,
-   even with existing trust or `--yes`. Fix the declarations or code; adding unrestricted-code
-   metadata does not bypass the check. Coverage gaps remain advisory and are not a sandbox or proof
-   of safety.
-   See [App code checks](./guides/custom-presets.md#check-app-code-before-execution).
-3. **Update automation and renew approvals.** If you consume structured reports or maintain preset
-   tests, run `shine preset schema` after upgrading and follow the
-   [authoring compatibility notes](./guides/custom-presets.md#check-app-code-before-execution).
-   Obtain new approvals instead of reusing old ones. Rust integrations using `shine-core` may need
-   source changes and recompilation for the updated public types.
-
-Downgrading Shine does not undo metadata conversion. Keep the original source or migration backup
-if you need to return to an older version.
-
-## Upgrade to Shine 2.6
-
-Shine 2.6 removes `--purge` from `uninstall`, `app uninstall`, and `shell uninstall`.
-Remove that option from scripts; commands that still contain it fail before loading configuration.
-Uninstall now includes internal cache cleanup in the Plan you approve. Preview removals with
-`--dry-run`, especially before removing a whole App category or all Shell presets. External preset
-sources are preserved. See [App removal](./guides/app-presets.md) and
-[Shell removal](./guides/shell-presets.md) for scope and retained-file behavior.
-
-Shine 2.6 also adds persistent secret-file export with
-`shine env workspace export --format files --mode <MODE> --file-group <GROUP>`.
-Unlike temporary files supplied to `env run`, exported plaintext stays on disk until you remove it.
-Read the [secret-file guide](./guides/environment.md#workspace-secret-files) before use.
-
-## Retire an older local HTTP service
-
-Version 2.4.0 removes HTTP serving and the `SHINE_APP_HTTP_DIR` script variable. Use local
-files for Surge and Clash Verge rules; application artifacts can keep persistent output in
-`SHINE_STATE_DIR` or `SHINE_CACHE_DIR`.
-
-If you installed the old background service, remove it after upgrading to 2.4.0:
-
-```bash
-shine clear serve
-```
-
-`shine clear serve` stops the old service and removes its user service registration. The entire
-`shine serve` command is removed. Cleanup works even if the old Shine configuration can no longer
-be loaded, and does not need the old binary or its `--config-dir`. Run it as the user who installed the service;
-repeating it after successful removal is safe. Service-manager failures are reported so you can
-correct them and retry.
-
-Normal interactive commands remind you when they detect a retained service. To check immediately,
-run `shine state check`; it only reports maintenance actions and works with unreadable configuration.
-
-Before upgrading, the old binary's `shine serve uninstall` can also remove the service.
-
-Upgrading does not remove existing files under the old runtime directory's `http/`. Keep any files
-you still need and update application references before deleting them.
+For a Cargo installation, use the Cargo uninstall command printed by Shine. For a manual download
+or an older installation without a matching receipt, remove the executable through its original
+installation channel after managed cleanup. On Windows, close running instances and invoke
+`self uninstall` from a separate copy of the same build with the same configuration. The separate
+copy remains available after cleanup.
 
 Next: [Complete your first preset installation](./quick-start.md).

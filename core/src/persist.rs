@@ -5,6 +5,11 @@
 //! then rename over the destination" sequence. This module is the single
 //! place that logic lives.
 
+#[cfg(windows)]
+mod windows_profile;
+#[cfg(windows)]
+pub use windows_profile::write_profile_like;
+
 use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::io::AsyncWriteExt;

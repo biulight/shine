@@ -11,12 +11,14 @@ Shell 预设把脚本安装到 Shine 的受管目录，并在 `~/.shine/bin/` �
 
 ## 查看与安装
 
-```bash
-shine shell list
-shine shell install proxy
-shine shell install utils/shine-env-export # 只安装这一个命令
-shine shell install            # 安装当前平台可用的全部类别
-```
+先查看预设，再选择一种安装范围：
+
+| 操作 | 命令 |
+| --- | --- |
+| 查看 Shell 预设 | `shine shell list` |
+| 安装 proxy 类别 | `shine shell install proxy` |
+| 只安装这一个命令 | `shine shell install utils/shine-env-export` |
+| 安装当前平台可用的全部类别 | `shine shell install` |
 
 也可以使用自动识别 shell 或 app 类别的简写：
 
@@ -63,12 +65,13 @@ shine completions install
 
 当受管脚本、命令入口或 PATH 片段需要按当前预设重建时：
 
+先用 `shine info shell/proxy --diff` 检查改动；`--replace-managed` 会覆盖受管内容。
+以下两条命令等价，选择一条执行：
+
 ```bash
 shine shell install proxy --replace-managed
 shine install shell/proxy --replace-managed
 ```
-
-`--replace-managed` 会覆盖 Shine 管理的对应内容。先用 `shine info shell/proxy --diff` 检查状态，避免把有意的本地修改当作损坏处理。
 
 命令与已有文件冲突时，请先检查提示中的路径，再决定是否删除或替换。
 切换预设来源或更新 Shine 后，可运行 `shine upgrade shell/<CATEGORY>` 更新已安装命令。
@@ -94,11 +97,11 @@ shine shell recover
 
 ## 卸载
 
-```bash
-shine shell uninstall proxy --dry-run
-shine shell uninstall proxy
-shine shell uninstall utils/shine-env-export
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览卸载类别 | `shine shell uninstall proxy --dry-run` |
+| 审阅后执行 | `shine shell uninstall proxy` |
+| 另一种范围：仅卸载此命令 | `shine shell uninstall utils/shine-env-export` |
 
 uninstall 和 `shine upgrade` 也会显示各自的计划改动。
 确认默认是 No；

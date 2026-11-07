@@ -176,3 +176,49 @@ Follow [`preset-authoring.md`](preset-authoring.md). Key rules: prefer `shine.to
 legacy `shine-dest:` annotations and declare transforms in order. Sys manifests declare `version =
 2`; every init item uses standard detection/provider metadata or one item-local script with a
 normal exit code. Do not add platform-wide dispatch or status/update wire protocols.
+
+## Installation, migration, and release documentation
+
+Keep `installation.md` focused on installing and updating the binary. Place
+`guides/upgrading.md` and the dedicated 1.x migration guide under Guides, leaving installation
+and quick start adjacent in the top-level navigation. Link existing users to migration guidance
+from the installation page. Preserve the migration page's `/upgrading` slug when moving its source.
+
+Reserve the migration guide for concrete preparation that runtime prompts cannot replace, such
+as updating scripts, converting external Preset inputs, or adapting changed configuration
+precedence. Group by starting version and affected feature; requirements accumulate when skipping
+releases. A safe runtime rejection alone does not justify a mandatory pre-upgrade checklist.
+Keep SSH peer mismatches in the SSH guide, saved approval/report compatibility in the authoring
+guide, and App downgrade limits in the App guide. Coordinate automation upgrades only when
+availability requires it. Omit routine prompts, automatic cache rebuilding, and no-migration notices.
+
+Do not prescribe backups merely because a version or state format changes. A backup recommendation
+must identify the specific information that would otherwise be lost, the operation that loses it,
+and how restoration works. Prefer existing automatic metadata backups or a verified reversible
+workflow where applicable; do not require an extra copy by default. Conversely, do not equate
+undoing managed effects or resealing ciphertext with downgrading installation records, trust, or
+recovery state. Explain verified compatibility limits without inventing a rollback recipe or
+turning an unverified downgrade path into an upgrade prerequisite.
+
+Feature announcements and fix summaries belong in `CHANGELOG.md` and GitHub Releases; link to
+release notes instead of creating a manual section for every release. Keep both locales aligned
+and preserve existing installation fragment links when moving migration guidance. Editorial
+corrections to released behavior should also reach the latest stable documentation snapshot;
+leave historical major versions unchanged.
+
+### Command examples
+
+Keep explanations outside commands intended for interactive shells. Default interactive Zsh passes
+`#` and subsequent words as arguments. Use prose for sequences and a purpose/command table for
+alternatives. Explain prerequisites and destructive effects before the command.
+Do not repeat the same short explanation in a paragraph below the block, or annotate obvious
+single commands merely for uniformity.
+
+Label alternatives as choices before the block, including install scopes, update channels, trust
+modes, and set/delete or enable/disable operations. Do not present equivalent commands as mandatory
+consecutive steps. For real workflows, preserve the order and explicit review boundaries between
+preview and mutation. Retain local/remote and shell-specific labels where execution context changes.
+Keep comments short and readable in both locales. Never append a comment after a shell continuation
+backslash, inside a quoted argument, or to a format that has no comment syntax; use a preceding
+explanation outside the code block for multiline commands. Check that edits preserve executable arguments and do not
+turn examples into automatic approval or execution instructions.

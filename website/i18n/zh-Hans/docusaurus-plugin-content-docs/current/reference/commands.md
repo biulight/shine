@@ -5,8 +5,12 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.9.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
+本页适用于 Shine 2.10.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
 请阅读对应指南；本页只提供便于查找的命令索引。
+
+命令失败信息写入 stderr。stderr 支持颜色时，顶层 `Error:` 摘要使用红色加粗，`Caused by:`
+标题加粗，诊断详情保持默认文字颜色。设置 `NO_COLOR=1` 可禁用颜色；重定向 stderr 时默认输出
+纯文本，除非显式强制启用颜色。
 
 ## 目标名称
 
@@ -155,8 +159,17 @@ shine completions <bash|zsh|powershell>
 
 版本检查失败时，`update` 仍会报告配置更新。恢复连接后，可用 `--refresh-release` 重试版本检查。
 
-`--run-generators` 会执行 App 生成器，需要信任授权。即使指定单个文件，也可能评估该 App
-类别中的全部生成器。评估失败或未完成不代表已安装内容是最新的。
+不指定目标时，`shine update` 会按 App 类别显示跳过的文件数。加上 `--run-generators` 可执行生成器来检查这些文件。
+如果类别中的文件全部来自内置预设，无需额外授权。如果该类别有生效文件来自外部预设目录或 overlay，
+执行生成器就需要匹配的信任授权。授权不足时，`update` 会说明涉及哪些来源。请先审阅列出的生成器，再决定是否授权。
+指定目标时，`shine update surge --run-generators` 会先列出无法检查的文件，再显示有更新的文件差异。
+即使只指定一个文件，同一 App 类别中其他生成器失败也会使这次检查返回退出码 1。
+加上 `--verbose` 可查看生成器和静态分析摘要。多个文件共用一个生成器且非阻断诊断相同时，
+只显示一份报告，按类型列出数量和一个示例位置。阻断诊断会逐条列出位置。
+用 `shine preset lint <PATH> --format json` 单独检查预设源码，可查看全部位置。
+如果配置了 overlay，请将 `<PATH>` 指向完整预设目录，其中包含实际生效的基础文件和 overlay 文件。
+不指定目标时，详细模式会在状态列表前说明哪些文件无法检查。
+评估失败或未完成时，无法据此确认已安装内容是最新的。
 
 外部 Shell 预设使用 `snapshot` 模式时，`update --diff` 也会显示类别共享文件的变化。
 `content: unchanged` 仅说明命令脚本未变，不代表辅助文件或元数据无需更新。
@@ -326,7 +339,7 @@ shine clear serve
 `clear` 必须指定目标；单独运行不会清理所有内容。`clear serve` 会停止并移除旧版用户服务，
 无需加载 Shine 配置，也不会删除已发布的文件。成功后重复清理也是安全的；系统服务管理器
 报错时会报告失败。整个 `shine serve` 命令已移除。参见
-[安装与升级](../installation.md#清理旧版本的本地-http-服务)。
+[系统管理](../guides/system-init.md#retire-legacy-http-service)。
 
 版本化运行时状态迁移仍使用 `shine state migrate`。
 
@@ -352,6 +365,7 @@ Shine 的转发与 broker 选项必须写在 SSH 目标之前。直接转发密�
 ```text
 shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
+shine self uninstall [--dry-run | --yes]
 ```
 
 `stable` 跟随正式发布，`preview` 跟随会被持续替换的预览构建。参见

@@ -5213,9 +5213,7 @@ fn top_level_uninstall_uses_receipts_after_app_source_removal() {
             fs::read(destination.join("config.txt")).unwrap(),
             b"original"
         );
-        let manifest: shine_core::install::AppManifest =
-            toml::from_str(&fs::read_to_string(state.join("app-manifest.toml")).unwrap()).unwrap();
-        assert!(manifest.entries.is_empty());
+        assert!(!state.join("app-manifest.toml").exists());
     }
 }
 
@@ -7916,9 +7914,8 @@ fn app_uninstall_defaults_to_reviewed_internal_cleanup() {
                 !external,
                 "{removed_text}"
             );
-            assert_eq!(
+            assert!(
                 removed_text.contains("empty App manifest removed"),
-                !external && whole,
                 "{removed_text}"
             );
             if external {
@@ -7931,19 +7928,188 @@ fn app_uninstall_defaults_to_reviewed_internal_cleanup() {
                     fs::read(sibling.join("extra.txt")).unwrap(),
                     b"sibling cache"
                 );
-                let remaining: AppManifest =
-                    toml::from_str(&fs::read_to_string(state.join("app-manifest.toml")).unwrap())
-                        .unwrap();
-                assert!(remaining.entries.is_empty());
             } else {
                 assert!(!state.join("presets/app").exists());
-                assert!(!state.join("app-manifest.toml").exists());
             }
+            assert!(!state.join("app-manifest.toml").exists());
             assert_eq!(
                 fs::read(state.join("config.toml")).unwrap(),
                 b"schema_version = 2\n"
             );
         }
+    }
+}
+
+#[test]
+fn app_uninstall_review_uses_the_installed_strategy_after_a_preset_edit() {
+    for installed_json in [false, true] {
+        let fixture = Fixture::new();
+        fs::write(fixture.0.join("shine.config.toml"), "schema_version = 2\n").unwrap();
+        let presets = fixture.0.join("presets");
+        let app = presets.join("app/demo");
+        fs::create_dir_all(&app).unwrap();
+        let source = app.join("config");
+        let json = r#"{"key":1}"#;
+        let configure = |merge: bool| {
+            let base = "metadata_schema_version=2\ndest='~/demo'\n[[files]]\nsource='config'\n";
+            let mode = if merge {
+                "install_mode='json-merge'\nmanaged_keys=['key']\n"
+            } else {
+                ""
+            };
+            fs::write(app.join("shine.toml"), format!("{base}{mode}")).unwrap();
+            fs::write(&source, if merge { json } else { "text" }).unwrap();
+        };
+        let run = |args: &[&str]| {
+            fixture
+                .command()
+                .env("SHINE_PRESETS", &presets)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        configure(installed_json);
+        let installed = run(&["app", "install", "demo", "--yes"]);
+        assert!(installed.status.success(), "{installed:?}");
+        let dest = fixture.0.join("home/demo/config");
+        if installed_json {
+            fs::write(&dest, r#"{"key":1,"user":2}"#).unwrap();
+        }
+        configure(!installed_json);
+        let before = fs::read(&dest).unwrap();
+        let guard = fixture.0.join("state/app-manifest.toml");
+        let receipts = fs::read(&guard).unwrap();
+        let edited = if installed_json {
+            r#"{"key":3,"user":2}"#
+        } else {
+            "local edit"
+        };
+        fs::write(&dest, edited).unwrap();
+        let protected = run(&["app", "uninstall", "demo", "--yes"]);
+        assert!(!protected.status.success(), "{protected:?}");
+        assert!(
+            String::from_utf8_lossy(&protected.stdout).contains("app_user_modified"),
+            "{protected:?}"
+        );
+        assert_eq!(fs::read_to_string(&dest).unwrap(), edited);
+        assert_eq!(fs::read(&guard).unwrap(), receipts);
+        fs::write(&dest, &before).unwrap();
+        let preview = run(&["app", "uninstall", "demo", "--dry-run"]);
+        assert!(preview.status.success(), "{preview:?}");
+        assert!(
+            String::from_utf8_lossy(&preview.stdout).contains("would remove empty App manifest"),
+            "{preview:?}"
+        );
+        assert_eq!(fs::read(&guard).unwrap(), receipts);
+        assert_eq!(fs::read(&dest).unwrap(), before);
+        let removed = run(&["app", "uninstall", "demo", "--yes"]);
+        assert!(removed.status.success(), "{removed:?}");
+        let text = String::from_utf8_lossy(&removed.stdout);
+        assert!(!text.contains("app_user_modified"), "{text}");
+        assert!(text.contains("empty App manifest removed"), "{text}");
+        assert!(!guard.exists());
+        if installed_json {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&fs::read(dest).unwrap()).unwrap(),
+                serde_json::json!({"user":2})
+            );
+        } else {
+            assert!(!dest.exists());
+        }
+    }
+}
+
+#[test]
+fn app_uninstall_category_retry_reviews_only_the_empty_manifest() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::write(fixture.0.join("shine.config.toml"), "schema_version = 2\n").unwrap();
+    let sibling = state.join("presets/app/sibling/extra");
+    fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+    fs::write(&sibling, "keep").unwrap();
+    let selected_cache = state.join("presets/app/git/extra");
+    fs::create_dir_all(selected_cache.parent().unwrap()).unwrap();
+    fs::write(&selected_cache, "keep").unwrap();
+    let guard = state.join("app-manifest.toml");
+    let empty = "schema_version = 2\nentries = []\n";
+    fs::write(&guard, empty).unwrap();
+    let run = |flags: &[&str]| {
+        fixture
+            .command()
+            .args(["app", "uninstall", "git"])
+            .args(flags)
+            .output()
+            .unwrap()
+    };
+    let preview = run(&["--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(
+        String::from_utf8_lossy(&preview.stdout).contains("would remove empty App manifest"),
+        "{preview:?}"
+    );
+    let declined = run(&[]);
+    assert!(!declined.status.success(), "{declined:?}");
+    assert_eq!(fs::read_to_string(&guard).unwrap(), empty);
+    // A pending transaction still owns the guard, even when the manifest is empty.
+    let journal = state.join("app-operation-journal.toml");
+    fs::write(&journal, "interrupted").unwrap();
+    let blocked = run(&["--yes"]);
+    assert!(!blocked.status.success(), "{blocked:?}");
+    assert_eq!(fs::read_to_string(&guard).unwrap(), empty);
+    assert_eq!(fs::read(&journal).unwrap(), b"interrupted");
+    fs::remove_file(journal).unwrap();
+    let done = run(&["--yes"]);
+    assert!(done.status.success(), "{done:?}");
+    assert!(
+        String::from_utf8_lossy(&done.stdout).contains("empty App manifest removed"),
+        "{done:?}"
+    );
+    assert!(!guard.exists());
+    assert_eq!(fs::read(&selected_cache).unwrap(), b"keep");
+    assert_eq!(fs::read(&sibling).unwrap(), b"keep");
+    let repeat = run(&["--yes"]);
+    assert!(repeat.status.success(), "{repeat:?}");
+    assert!(!guard.exists());
+}
+
+#[test]
+fn failed_json_removal_does_not_announce_or_delete_empty_app_manifest() {
+    use shine_core::install::{AppEntry, AppInstallStrategy, AppManifest};
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    let destination = fixture.0.join("invalid.json");
+    fs::write(&destination, "user edit").unwrap();
+    let manifest = AppManifest {
+        entries: vec![AppEntry {
+            source: "app/retired/file.json".into(),
+            destination: destination.clone(),
+            backup: None,
+            content_hash: 1,
+            install_strategy: AppInstallStrategy::JsonMerge {
+                managed_keys: vec!["key".into()],
+            },
+            uses_env: false,
+            requires_admin: false,
+        }],
+        ..AppManifest::default()
+    };
+    let guard = state.join("app-manifest.toml");
+    fs::write(&guard, toml::to_string_pretty(&manifest).unwrap()).unwrap();
+    for flag in ["--dry-run", "--yes"] {
+        let output = fixture
+            .command()
+            .args(["app", "uninstall", "retired", "--force", flag])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("empty App manifest"), "{stdout}");
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "user edit");
+        assert_eq!(
+            toml::from_str::<AppManifest>(&fs::read_to_string(&guard).unwrap()).unwrap(),
+            manifest
+        );
     }
 }
 
@@ -8288,4 +8454,200 @@ fn invalid_trust_store_notices_encode_paths_without_repairing_state() {
             "schema_version=2\n"
         );
     }
+}
+
+#[test]
+fn self_uninstall_pending_recovery_never_approves_or_removes_state() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    let journal = state.join("app-operation-journal.toml");
+    fs::write(&journal, "incomplete action").unwrap();
+    for flag in ["--dry-run", "--yes"] {
+        let result = fixture
+            .command()
+            .args(["self", "uninstall", flag])
+            .output()
+            .unwrap();
+        assert!(!result.status.success(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("shine app recover"),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(&journal).unwrap(), b"incomplete action");
+        assert!(!state.join("config.toml").exists());
+    }
+}
+
+#[test]
+fn self_uninstall_preserves_a_shell_loader_owned_by_another_configuration() {
+    let fixture = Fixture::new();
+    let home = fixture.0.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let profile = home.join(".bashrc");
+    let original = "before\r\n# >>> shine >>>\r\nsource \"$HOME/other/shell/profile.sh\"\r\n# <<< shine <<<\r\nafter\r\n";
+    fs::write(&profile, original).unwrap();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    for flag in ["--dry-run", "--yes"] {
+        let result = fixture
+            .command()
+            .env("SHELL", "bash")
+            .args(["self", "uninstall", flag])
+            .output()
+            .unwrap();
+        assert!(!result.status.success(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("Shell loader"),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(&profile).unwrap(), original.as_bytes());
+        assert!(!state.join("shell-operation-journal.toml").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn self_uninstall_reviews_owned_copy_and_stops_before_final_cleanup_on_conflict() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.0.join("tools");
+    fs::create_dir(&tools).unwrap();
+    let (name, answer) = if cfg!(target_os = "macos") {
+        ("launchctl", "")
+    } else {
+        (
+            "systemctl",
+            "LoadState=not-found\nActiveState=inactive\nUnitFileState=",
+        )
+    };
+    let manager = tools.join(name);
+    fs::write(&manager, format!("#!/bin/sh\nprintf '%s\\n' '{answer}'\n")).unwrap();
+    fs::set_permissions(manager, fs::Permissions::from_mode(0o755)).unwrap();
+    let paths = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let src = fixture.0.join("src");
+    let cat = src.join("app/demo");
+    fs::create_dir_all(&cat).unwrap();
+    fs::write(fixture.0.join("shine.config.toml"), "schema_version=2\n").unwrap();
+    fs::write(
+        cat.join("shine.toml"),
+        "metadata_schema_version=2\ndest='~/demo'\n[[files]]\nsource='config'\n",
+    )
+    .unwrap();
+    fs::write(cat.join("config"), "original").unwrap();
+    let state = fixture.0.join("state");
+    let run = |exe: &std::path::Path, args: &[&str]| {
+        fixture
+            .configure(Command::new(exe))
+            .env("PATH", &paths)
+            .env("SHINE_PRESETS", &src)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let source = std::path::Path::new(env!("CARGO_BIN_EXE_shine"));
+    let copy = fixture.0.join("installed/shine");
+    let preview = run(source, &["self", "uninstall", "--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(!state.exists());
+    let result = run(
+        source,
+        &["self", "install", "--dest", copy.to_str().unwrap()],
+    );
+    assert!(result.status.success(), "{result:?}");
+    let result = run(&copy, &["app", "install", "demo", "--yes"]);
+    assert!(result.status.success(), "{result:?}");
+    let owned = fixture.0.join("home/demo/config");
+    fs::write(&owned, "edit").unwrap();
+    fs::write(state.join("tasks.toml"), "personal tasks").unwrap();
+    let result = run(&copy, &["self", "uninstall", "--yes"]);
+    assert!(!result.status.success(), "{result:?}");
+    assert_eq!(fs::read(&owned).unwrap(), b"edit");
+    assert!(copy.is_file() && state.join("app-manifest.toml").is_file());
+    fs::write(&owned, "original").unwrap();
+    let preview = run(&copy, &["self", "uninstall", "--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    let denied = run(&copy, &["self", "uninstall"]);
+    assert!(
+        !denied.status.success() && owned.exists() && copy.exists(),
+        "{denied:?}"
+    );
+    let result = run(&copy, &["self", "uninstall", "--yes"]);
+    assert!(result.status.success(), "{result:?}");
+    assert!(!owned.exists() && !copy.exists() && !state.join("self-installed.json").exists());
+    assert_eq!(
+        fs::read(state.join("tasks.toml")).unwrap(),
+        b"personal tasks"
+    );
+    assert_eq!(fs::read(cat.join("config")).unwrap(), b"original");
+}
+
+#[cfg(unix)]
+#[test]
+fn top_level_error_colors_follow_stderr_and_preserve_diagnostics() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    let blocked = fixture.0.join("parent-file");
+    fs::write(&blocked, "retain").unwrap();
+    for chained in [false, true] {
+        let mut baseline = None;
+        for (terminal_stderr, no_color) in [(false, false), (true, false), (true, true)] {
+            let mut command = fixture.command();
+            if chained {
+                command
+                    .args(["self", "install", "--dest"])
+                    .arg(blocked.join("shine"));
+            } else {
+                command.args(["--config-dir", "", "list"]);
+            }
+            command
+                .env("TERM", "xterm-256color")
+                .env("RUST_BACKTRACE", "0")
+                .env("RUST_LIB_BACKTRACE", "0")
+                .env_remove("NO_COLOR")
+                .env_remove("FORCE_COLOR")
+                .env_remove("CLICOLOR_FORCE")
+                .env_remove("CLICOLOR")
+                .env_remove("IGNORE_IS_TERMINAL");
+            if no_color {
+                command.env("NO_COLOR", "1");
+            }
+            let (output, terminal) = output_with_terminal(command, !terminal_stderr);
+            assert_eq!(output.status.code(), Some(1));
+            assert!(output.stdout.is_empty());
+            let text = String::from_utf8_lossy(if terminal_stderr {
+                &terminal
+            } else {
+                &output.stderr
+            })
+            .replace("\r\n", "\n");
+            let plain = console::strip_ansi_codes(&text).into_owned();
+            assert!(plain.starts_with("Error: "), "{plain}");
+            assert_eq!(plain.contains("\nCaused by:\n"), chained, "{plain}");
+            if terminal_stderr && !no_color {
+                let first = text.lines().next().unwrap();
+                assert!(first.contains("\x1b[31;1m"), "{text:?}");
+                assert!(first.ends_with("\x1b[0m"), "{text:?}");
+                if chained {
+                    assert!(text.contains("\n\x1b[1mCaused by:\x1b[0m\n"), "{text:?}");
+                    let details = text.split_once("Caused by:\x1b[0m\n").unwrap().1;
+                    assert!(!details.contains("\x1b["), "{text:?}");
+                }
+            } else {
+                assert!(!text.contains("\x1b["), "{text:?}");
+            }
+            if let Some(expected) = &baseline {
+                assert_eq!(&plain, expected);
+            } else {
+                baseline = Some(plain);
+            }
+        }
+    }
+    assert_eq!(fs::read_to_string(blocked).unwrap(), "retain");
 }

@@ -53,10 +53,10 @@ SHINE_CONFIG_DIR=/tmp/shine-check shine app list
 
 `shine env set` 更新变量，但已安装模板不会自动重写。运行：
 
-```bash
-shine update --verbose
-shine upgrade --verbose
-```
+| 操作 | 命令 |
+| --- | --- |
+| 详细检查待更新内容 | `shine update --verbose` |
+| 更新配置并显示详细输出 | `shine upgrade --verbose` |
 
 如果使用项目 `shine.config.toml`、项目 `shine.env.toml` 或 overlay，请确认当前工作目录和覆盖优先级。
 

@@ -32,8 +32,9 @@ bugs. Check this list before changing the modules named in each entry.
   Asset copy/export and Config file/global-load tests call their production owners. Removal tests
   use approved Shell uninstall. CLI uninstall always requests internal cleanup: extra cache-tree
   files survive targeted Shell removal but are included in whole-shell cleanup. App cleanup removes
-  the selected internal category tree, or the entire App tree without a target. Only an empty App
-  manifest may be deleted; protected/failed receipts remain available for retry.
+  the selected internal category tree, or the entire App tree without a target. Only a reviewed empty App
+  manifest may be deleted after ordinary and secret receipts are exhausted and recovery is idle;
+  protected/failed receipts retain the schema guard for retry.
   External preset sources remain preserved. Core retains its explicit purge field for Plan binding
   and existing callers; the CLI no longer accepts `--purge` (ADR 0148). Do not revive the retired
   asset-name deletion algorithm (ADR 0136).
@@ -973,6 +974,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **Self-install persists the path it actually writes.** Resolve `--dest` relative to the invocation
   cwd before installation and save the absolute path. Config-relative interpretation on reload must
   not redirect later upgrade synchronization to another binary.
+
+- **Self uninstall removes program copies last.** Keep pending recovery evidence and persistent
+  domain locks. Verify the self-install receipt, file identity and build digest before unlinking
+  a program. Treat other installation channels as a manual handoff ([ADR 0165](../decisions/0165-self-uninstall.md)).
 
 - **Trust store mutations serialize the entire read/modify/write cycle.** Grant and revoke acquire
   the persistent `trust.lock` OS lock before reading grants and retain it through private atomic

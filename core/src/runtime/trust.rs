@@ -231,6 +231,15 @@ impl<H> CoreRuntime<H> {
         }
     }
 
+    pub(super) fn app_external_source_kinds(&self, category: &str) -> BTreeSet<PresetSourceKind> {
+        category_paths(self, &format!("app/{category}/"))
+            .into_iter()
+            .filter_map(|path| self.presets().origin(path))
+            .map(|origin| origin.source_kind)
+            .filter(|kind| *kind != PresetSourceKind::Embedded)
+            .collect()
+    }
+
     pub(crate) fn app_capability_trusted(
         &self,
         category: &AppCategory,

@@ -7,6 +7,8 @@ use crate::{colors, update_check, version};
 use anyhow::Result;
 
 pub async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
+    let _lock = super::receipt::lock(config).await?;
+    let owned_path = super::receipt::owned_upgrade_path(config, &std::env::current_exe()?)?;
     let current = version::semver();
     let selected_channel = channel.unwrap_or(ReleaseChannel::Stable);
     let force_install = channel.is_some();
@@ -42,6 +44,9 @@ pub async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel
                     &release_tag,
                 ))
             );
+            if let Some(path) = owned_path {
+                super::receipt::record(config, &installed_path, &path).await?;
+            }
             sync_self_install_dest(config, &installed_path).await;
         }
         Err(e) => {

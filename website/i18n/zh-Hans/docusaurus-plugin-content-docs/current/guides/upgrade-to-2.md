@@ -5,13 +5,13 @@ sidebar_position: 1
 
 # 从 Shine 1.x 升级
 
-本页说明如何从既有 1.x 安装升级到 Shine 2.9。请先阅读下列生命周期安全与恢复变化，
-以及 [2.8](../installation.md#升级到-shine-28) 和 [2.7 迁移步骤](../installation.md#升级到-shine-27)。
+本页说明如何从既有 1.x 安装升级到 Shine 2.10。请先阅读下列生命周期安全与恢复变化，
+以及[升级与迁移](./upgrading.md)中适用的配置与脚本变更。
 
 交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
 必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
 
-## 安装 Shine 2.9
+## 安装 Shine 2.10
 
 在 macOS 或 Linux 上安装最新稳定版：
 
@@ -91,10 +91,10 @@ shine sys profile disable <ITEM>
 
 先检查旧 runtime 和 environment 状态，再应用迁移：
 
-```bash
-shine state migrate --dry-run
-shine state migrate
-```
+| 操作 | 命令 |
+| --- | --- |
+| 预览旧状态迁移 | `shine state migrate --dry-run` |
+| 审阅预览后应用迁移 | `shine state migrate` |
 
 旧 App、Shell 和 Sys 安装仍可读取，也能直接升级或移除，无需先重新安装。被用户修改或不属于
 Shine 的命令入口和用户文件会保留并报告，不会覆盖。
@@ -119,7 +119,11 @@ shine sys recover
 ```bash
 shine preset migrate --dry-run
 shine preset migrate
-# 审阅同一来源后用于自动化：
+```
+
+审阅同一来源后用于自动化：
+
+```bash
 shine preset migrate --yes
 ```
 

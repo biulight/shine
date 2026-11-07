@@ -16,14 +16,15 @@ shine sys list
 shine list --available
 ```
 
-前三个入口分别列出 shell 命令、应用配置和当前操作系统的初始化项目；`list --available` 展示三类资源，也可追加 `app`、`shell` 或 `sys` 过滤。
+`list --available` 也可追加 `app`、`shell` 或 `sys` 过滤。
 
 ## 2. 安装代理命令
 
 ```bash
 shine shell install proxy
-# 等价的规范 target 写法：shine install shell/proxy
 ```
+
+等价的目标写法是 `shine install shell/proxy`。
 
 Shine 通过 `~/.shine/bin/` 提供这些命令，并将该目录加入支持的 shell profile。
 
@@ -34,8 +35,9 @@ Shine 通过 `~/.shine/bin/` 提供这些命令，并将该目录加入支持的
 
 ```bash
 source ~/.zshrc
-# bash 用户使用：source ~/.bashrc
 ```
+
+Bash 用户请运行 `source ~/.bashrc`。
 
 PowerShell 用户可重新打开终端，确保更新后的 profile 生效。
 
@@ -47,8 +49,7 @@ shine list
 shine info shell/proxy
 ```
 
-`shine list` 显示已安装的 `proxy` 类别；`shine info shell/proxy` 再展开它管理的命令、
-入口与来源详情。脚本中使用完整 target `shell/proxy`，裸名称只在 app 与 shell 类别之间唯一时才可使用。
+脚本中使用完整 target `shell/proxy`，裸名称只在 app 与 shell 类别之间唯一时才可使用。
 
 取消当前终端会话中的代理：
 

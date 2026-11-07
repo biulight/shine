@@ -19,6 +19,25 @@ const DETAIL_LABEL_WIDTH: usize = 15;
 const DETAIL_STATUS_WIDTH: usize = 13;
 const COLUMN_GAP: usize = 2;
 
+/// Emphasize the failure summary while retaining anyhow's diagnostic and backtrace layout.
+pub fn command_error(error: &anyhow::Error) -> String {
+    let diagnostic = format!("Error: {error:?}");
+    let (summary, details) = diagnostic.split_once('\n').unwrap_or((&diagnostic, ""));
+    let mut rendered = colors::bold_red_stderr(summary);
+    if diagnostic.contains('\n') {
+        rendered.push('\n');
+        for line in details.split_inclusive('\n') {
+            if line == "Caused by:\n" {
+                rendered.push_str(&colors::bold_stderr("Caused by:"));
+                rendered.push('\n');
+            } else {
+                rendered.push_str(line);
+            }
+        }
+    }
+    rendered
+}
+
 /// Keep untrusted labels on one terminal row without changing their stored values.
 pub(crate) fn escape_controls(value: &str) -> String {
     value

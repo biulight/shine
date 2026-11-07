@@ -20,6 +20,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/analysis/` | Bounded pure JS/TS facts, dependency traversal, entry-specific declaration comparison and safe diagnostics |
 | `core/src/runtime/code_analysis.rs` | Private command evidence, lock-external preparation, launcher admission and cancellation state |
 | `cli/src/code_analysis.rs` | Shared safe analysis text for lifecycle review and explicit evaluation |
+| `cli/src/generator_review.rs` | Global and targeted update output for captured generator inspections, including trust failures, affected files and analysis summaries |
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
 | `core/src/action.rs` | Versioned executable Action IR, constructors, opaque provenance and rollback DTOs |
 | `core/src/action/contracts.rs`, `action/contracts/` | Exhaustive resource-family routing and domain validation/permission rules; incompatible input fails closed |
@@ -179,7 +180,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `preset migrate [PATH]` | `cli/src/preset_migration.rs` orchestrates `preset_migration/{discovery,assessment,render,apply}.rs`: read-only inputs, same-scope validation, report/diffs, source rechecks/private backup/atomic edits |
 | `preset pull`, `update --pull`, `upgrade --pull` | `cli/src/git_pull.rs` plus top-level routing |
 | `init` | `cli/src/init.rs` |
-| `self install/upgrade` | `cli/src/self_install.rs` facade → `self_install/{binary,release}.rs`, `cli/src/update_check/` |
+| `self install/upgrade/uninstall` | `cli/src/self_install.rs` facade → `self_install/{binary,release,receipt,uninstall}.rs`, `cli/src/update_check/` |
 | `update [TARGET]`, `upgrade [TARGET]` | `self_install/{update,config_upgrade}.rs`; untargeted upgrade retains Shell/App/managed Sys batch review |
 | `state migrate` | `cli/src/state.rs` |
 | `ssh ...` | `cli/src/ssh/mod.rs` |

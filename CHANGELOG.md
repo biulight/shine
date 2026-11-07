@@ -5,6 +5,35 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [2.10.0] — 2026-11-07
+
+### Features
+
+- Add `shine self uninstall` to remove managed resources for the selected configuration before
+  removing verified Shine binaries. Preview with `--dry-run`. Personal settings, external presets,
+  encryption identities and software installed by bootstrap are preserved.
+- Use Ctrl+H/J/K/L to focus adjacent splits in Ghostty and in IdeaVim Normal mode. Ghostty passes
+  the shortcut through when it cannot move focus. `Ctrl+\` opens a split to the right and `Ctrl+-`
+  opens one below in Ghostty.
+
+### Bug Fixes
+
+- Check more file, network and environment accesses in App scripts, including calls through saved
+  builtins and aliases. Distinguish these from locally replaced functions and bound the work spent
+  checking deeply nested declarations. Run `shine preset lint <PATH>` on external presets before using
+  them with 2.10. A confirmed undeclared access blocks execution.
+- Use the recorded installation strategy when uninstalling an App whose preset has changed.
+  Remove the empty installation record after the last ordinary and secret receipts are cleared,
+  including when uninstalling one category at a time.
+- Show which generator-backed files `shine update` skipped or could not check, and which external
+  or overlay sources need trust. Interactive Plan confirmation now explains when approval covers
+  only the current operation.
+
+### Docs
+
+- Publish the English and Simplified Chinese 2.10 manuals with uninstall, upgrade and preset
+  review guidance. The version selector also offers the 1.8 manual and Next.
+
 ## [2.9.0] — 2026-11-02
 
 ### Features
