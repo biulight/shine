@@ -5,7 +5,8 @@ sidebar_position: 1
 
 # 管理 Shell 预设
 
-Shell 预设把脚本安装到 Shine 的受管目录，并在 `~/.shine/bin/` 创建可直接调用的命令入口。Shine 当前支持 Bash、Zsh 和 PowerShell 的 profile 与命令目录管理；原生命令入口使用 `.sh` 或 `.ps1`，Bun 可作为另一种跨平台命令运行时。
+Shell 预设把常用脚本安装为可以直接调用的命令，支持 Bash、Zsh 和 PowerShell。
+部分命令需要 Bun 等额外运行环境，请先确认预设的要求。
 
 内置类别、平台限制、当前会话命令和所需环境变量见[内置预设](../reference/built-in-presets.md#shell-预设)。
 
@@ -20,40 +21,16 @@ Shell 预设把脚本安装到 Shine 的受管目录，并在 `~/.shine/bin/` �
 | 只安装这一个命令 | `shine shell install utils/shine-env-export` |
 | 安装当前平台可用的全部类别 | `shine shell install` |
 
-也可以使用自动识别 shell 或 app 类别的简写：
+安装类别会启用其中适用于当前平台的全部命令；只需要一个命令时，使用 `category/command`。
+不要仅传命令名，因为不同类别可能有同名命令。
 
-```bash
-shine install proxy
-shine install shell/utils/shine-env-export
-```
+执行前请审阅计划中的命令、配置改动、备份和所需权限，确认后才会安装，默认为否。
+需要详细路径和权限时，添加 `--verbose`。
 
-类别 target 会启用当前平台可用的全部命令；只需要其中一个命令时，使用明确的
-`category/command` target。修改型命令不接受裸命令名，因为不同类别可能出现同名命令。
-
-正常的内置 Shell 安装会在确认前显示简短摘要：
-
-```text
-Install · utils
-  Source       built-in · Shine distribution
-  Commands     copyfile, shine-env-export, shine-theme-sync
-  Changes      install 3 commands; update shell integration and ~/.bashrc
-  Backup       ~/.bashrc
-
-Apply? [y/N]
-```
-
-命令、变更的 shell 配置路径和恢复备份路径以当前 Plan 为准。
-命令使用非敏感环境变量时，摘要还会列出变量名，例如安装 `image-tools` 时：
-
-```text
-  Environment  IMAGE_MAX_HEIGHT, IMAGE_MAX_WIDTH, IMAGE_QUALITY
-```
-
-启用颜色时，变量名以蓝色显示；输出重定向或设置 `NO_COLOR` 时使用纯文本。
-
-使用 `--verbose` 查看缓存与状态文件、完整权限、作者说明和计划身份。
-涉及敏感环境变量、外部代码、安装期间执行代码、其他额外权限、冲突或未知诊断时，
-仍显示展开的审阅信息。
+Shell 命令以你的权限运行，没有沙箱隔离。外部预设与覆盖层中的代码需要审阅和授权：
+交互确认可以只批准本次操作；自动化中使用 `--yes` 前须已有信任授权。
+该选项只跳过提示，不会跳过安全检查，且不能与 `--dry-run` 同用。
+具体授权步骤见[自定义预设](./custom-presets.md#声明权限)。
 
 安装后需打开新终端或重新加载 shell profile。需要补全时运行：
 
@@ -63,15 +40,14 @@ shine completions install
 
 ## 修复安装
 
-当受管脚本、命令入口或 PATH 片段需要按当前预设重建时：
-
-先用 `shine info shell/proxy --diff` 检查改动；`--replace-managed` 会覆盖受管内容。
-以下两条命令等价，选择一条执行：
+命令入口或 Shell 配置损坏时，先检查差异，再决定是否用预设内容替换：
 
 ```bash
+shine info shell/proxy --diff
 shine shell install proxy --replace-managed
-shine install shell/proxy --replace-managed
 ```
+
+`--replace-managed` 会覆盖受管内容，包括你的本地修改。
 
 命令与已有文件冲突时，请先检查提示中的路径，再决定是否删除或替换。
 切换预设来源或更新 Shine 后，可运行 `shine upgrade shell/<CATEGORY>` 更新已安装命令。
@@ -89,7 +65,7 @@ shine shell recover
 ```
 
 查看恢复计划，确认后执行。Shine 会根据中断位置撤销未完成的变更，或保留已完成的操作并清理残留文件。
-恢复 Shell profile 中的托管区块时，Shine 会保留无关内容以及 Unix 上当前的文件权限。
+恢复 Shell 配置时，Shine 会保留无关内容。
 
 如果相关文件在中断后被修改，Shine 会停止恢复并保留这些文件，避免覆盖你的修改。请保留报错信息和相关文件，根据提示排查，不要手动删除恢复记录或回滚文件。
 
@@ -103,50 +79,37 @@ shine shell recover
 | 审阅后执行 | `shine shell uninstall proxy` |
 | 另一种范围：仅卸载此命令 | `shine shell uninstall utils/shine-env-export` |
 
-uninstall 和 `shine upgrade` 也会显示各自的计划改动。
-确认默认是 No；
-自动化必须传入 `--yes`，但 Plan 与安全检查仍会执行。`--dry-run` 是独立预览，不能与 `--yes`
-组合。
+卸载前同样需要审阅并确认计划。按命令卸载会保留同类别中其他已安装命令及它们需要的共享文件。
+外部预设源目录和 `~/.shine/config.toml` 始终保留；Shell 配置中的其他内容也会保留。
 
-Shell 命令以你的权限运行，并未被沙箱隔离。External 和 overlay 命令无论如何声明权限，
-都需要确认当前 Plan 或具有匹配的信任授权。操作被阻止时，请按提示运行 `shine trust inspect`
-和 `shine trust grant` 审阅。只有也信任该来源的后续修改时，才使用 `--development`。
-详见[自定义 Preset 能力说明](./custom-presets.md#声明权限)。
+不指定目标的 `shine shell uninstall` 会卸载全部 Shell 预设，并清理剩余的受管启动配置和整个
+内部 Shell 缓存，包括你额外放入缓存的文件。指定类别或命令时，额外缓存文件会保留。
+请先用 `shine shell uninstall --dry-run` 核对范围。
 
-Snapshot trust 与默认 snapshot 部署配合使用：Shine 把已审阅类别内容复制到受管目录，之后的来源
-修改只有经过显式审阅更新才进入已安装命令。`external_shell_mode = "live"` 必须使用 development
-trust，因为以后调用或 source 会读取可变的受信任来源。Snapshot trust 不能用于 live 部署。
+卸载和恢复不需要先授权被移除的代码。旧脚本若仍使用 `--purge`，请按
+[升级与迁移](./upgrading.md#upgrade-to-shine-26)移除该选项。
 
-更新共享文件可能影响同类别中的其他已安装命令。Plan 会列出所有受影响的命令供审阅；每个受影响 external command 都必须由本次人工确认或匹配 grant 授权。
-未安装兄弟不需要 grant，也不会被安装。升级 Shine 后会保留已有 live launcher，但 `list`/`info`
-会显示 `development trust required`，直到重新审阅。卸载和恢复无需先信任即将移除的代码。
+## 更新外部预设
 
-使用 `shine list` 查看已安装资源；`shine shell list` 展示可用 Shell 预设。
-按命令卸载会保留同类别下其他已安装命令；只要兄弟命令仍需要，共享 preset 或 snapshot 文件
-就可能继续保留。
-卸载最后一个类别后，可以用 `shine shell uninstall` 清理剩余的受管 profile 和启动集成。
-Shell 配置中的其他内容会保留；确认前可用 `shine shell uninstall --dry-run` 预览清理范围。
+默认的 snapshot 模式只在你审阅并执行更新后，才让来源修改进入已安装命令。
+使用 `shine update shell/<CATEGORY>` 查看变化，再运行 `shine upgrade shell/<CATEGORY>`。
+共享文件的变化可能影响同类别其他已安装命令，请检查计划列出的完整范围；未安装命令不会被自动安装。
 
-卸载默认清理空的受管目录。未指定 target 时，它会清理整棵内部 Shell 预设缓存树，
-包括存放在其中的额外文件。指定类别或命令 target 时，会保留额外缓存文件，以及其他已安装
-兄弟命令仍需要的共享文件。外部预设源目录始终保留；适用的受管启动器
-和安装 snapshot 仍会被移除。卸载不会删除 `~/.shine/config.toml`。
-请审阅 Plan，并用 `--dry-run` 检查所选范围。
-
-`shine uninstall shell/<category>[/<command>]` 使用相同的目标限定行为。`--purge` 已移除；
-旧命令请直接去掉该选项。App 类别卸载会删除整个内部类别缓存（包括额外文件），
-与 Shell 的目标限定行为不同，详见 [App 预设](app-presets.md)。
+live 模式会在下次调用时直接使用修改后的来源，需要 `--development` 授权。
+只有确实信任该来源的未来代码修改时才使用它；普通快照授权不能用于 live 模式。
+如果 `list` 或 `info` 显示 `development trust required`，请先审阅来源并按提示重新授权。
+设置方式见[自定义预设](./custom-presets.md)。
 
 ## 内置常用命令
 
 | 类别 | 命令 | 用途 |
 | --- | --- | --- |
 | `image-tools` | `img-compress`、`img-resize`、`img-convert` | 使用 Bun 1.3.14 或更高版本批量处理 JPEG、PNG、WebP |
-| `proxy` | `setproxy`、`usetproxy` | 设置或清除当前终端会话的代理变量 |
+| `proxy` | `setproxy`、`usetproxy` | 设置或清除当前终端代理；也会修改 Yarn 的持久代理设置 |
 | `utils` | `copyfile` | 通过 OSC52 将文件内容复制到本地剪贴板 |
 | `utils` | `shine-env-export` | 将 Shine env 值载入当前 shell |
-| `utils` | `shine-theme-sync` | 输出当前终端明暗主题的 shell `export` 语句 |
-| `agent` | `ccenv` | 选择 Codex、DeepSeek 或 Qwen provider，并在隔离的子进程环境中启动 Claude Code；需要 Bun |
+| `utils` | `shine-theme-sync` | 在当前会话应用终端明暗主题设置 |
+| `agent` | `ccenv` | 选择 Codex、DeepSeek 或 Qwen provider，并为启动的 Claude Code 设置专用环境变量；需要 Bun |
 
 某些类别按平台提供不同脚本；`shine shell list` 只显示当前平台可用的条目。
 

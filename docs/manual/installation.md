@@ -15,20 +15,18 @@ curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh
 ```
 
 The default destination is `~/.local/bin/shine`. The installer does not modify shell configuration.
-If the installation directory is missing from `PATH`, copy and run the command printed for your
-shell, then open a new shell. The installer uses `$SHELL` (your default login shell): Bash appends
-to `~/.bashrc`, and Zsh to `${ZDOTDIR:-$HOME}/.zshrc`.
-The Bash/Zsh command does not append the same line twice. If you use a different shell from the
-one shown, or use Fish or another shell, add the directory to your shell configuration manually.
-Then verify the installation:
+If it reports that the directory is missing from `PATH`, run the command printed for your shell,
+then open a new terminal. If your shell differs from the one shown, or you use Fish or another
+shell, add the directory to its configuration manually. Verify the installation:
 
 ```bash
 shine --version
 ```
 
-To choose a destination or version:
+To choose a destination or version, first download the script, then choose an invocation:
 
 ```bash
+curl -fsSLo install.sh https://github.com/biulight/shine/releases/latest/download/install.sh
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
 SHINE_VERSION=2.10.0 sh install.sh
 ```
@@ -40,9 +38,13 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
 The default destination is `%LOCALAPPDATA%\Programs\shine\shine.exe`. The installer does not change
-the user `PATH`. To choose a destination or version:
+the user `PATH`. If it reports the directory is missing, follow its instructions to add it to your
+user `PATH`, open a new terminal, and run `shine --version`.
+
+To choose a destination or version, first download the script, then choose an invocation:
 
 ```powershell
+Invoke-WebRequest https://github.com/biulight/shine/releases/latest/download/install.ps1 -OutFile install.ps1
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
 $env:SHINE_VERSION = "2.10.0"; .\install.ps1
 ```
@@ -159,12 +161,12 @@ and broker policies scheduled for removal. If Shine cannot inspect the account's
 manager, retry from a session that can. If it finds a legacy service while using a custom
 configuration directory, review `shine clear serve` separately.
 
-If a recovery journal or a modified managed file blocks cleanup, follow the reported domain's
+If an interrupted operation or a modified managed file blocks cleanup, follow the affected resource's
 recovery or uninstall instructions and rerun the command. If a Shell startup block points to
 another Shine configuration or contains edits, review the reported file. Only the exact loader
 for the selected configuration can be removed automatically. Earlier successful steps stay applied.
-Shine removes recorded program copies last, after checking their file identity and contents
-against the running build. A changed or different-version copy needs separate review.
+Shine removes program copies last, and only when it can confirm that it installed them and they
+remain unchanged. A changed or different-version copy needs separate review.
 
 For a Cargo installation, use the Cargo uninstall command printed by Shine. For a manual download
 or an older installation without a matching receipt, remove the executable through its original

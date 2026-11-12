@@ -52,13 +52,37 @@ Shine 2.6 从 `uninstall`、`app uninstall` 和 `shell uninstall` 中移除了 `
 
 ## 从 2.3.x 或更早版本升级：替换 HTTP 服务依赖 {#清理旧版本的本地-http-服务}
 
-如果应用仍引用旧版 Shine 的 HTTP 服务，升级前先改为读取本地文件。
-脚本中的 `SHINE_APP_HTTP_DIR` 也需替换；应用 artifact 的持久输出可写入
-`SHINE_STATE_DIR` 或 `SHINE_CACHE_DIR`。升级不会删除旧 `http/` 目录中的文件。
-完成引用调整后，按[旧服务清理步骤](./system-init.md#retire-legacy-http-service)移除服务。
+Shine 2.4.0 移除了旧 HTTP 服务。如果 Surge、Clash Verge 等应用仍引用它，升级前先改为读取
+本地文件。脚本中的 `SHINE_APP_HTTP_DIR` 也需替换；应用 artifact 的持久输出可写入
+`SHINE_STATE_DIR` 或 `SHINE_CACHE_DIR`。
+
+完成引用调整并升级到 2.4.0 或更高版本后，以安装服务的用户运行：
+
+```bash
+shine clear serve
+```
+
+此命令会停止旧服务并删除其用户服务注册，即使旧版配置无法加载也可运行。
+升级前，也可使用旧二进制的 `shine serve uninstall` 移除服务。
+
+升级不会删除旧 `http/` 目录中的文件。请保留仍需使用的文件，并先更新应用中的引用再删除。
 
 ## 从 2.3.x 或更早版本升级：环境分层
 
-从 2.3.x 或更早版本升级时，请按[环境分层的升级与回退步骤](./environment.md#env-分层变更的人工升级与回退)操作。
-更新使用环境写入 `--force` 的脚本，并在升级后于重要项目中运行
-`shine env explain KEY`，确认实际生效的值。
+此版本调整了环境值优先级：内置默认值 < overlay 基线 < 全局 `[env]` < 全局 env 文件 <
+项目 `[env]` < 项目 env 文件。旧版 overlay 和 env 文件的位置不同，升级后实际值可能变化，
+不会自动迁移为相同结果。完整规则见[配置参考](../reference/configuration.md#env-值覆盖顺序)。
+
+1. 升级前记录重要项目的变量来源，对准备修改的配置做私有备份，不要把秘密放入公开日志。
+2. 更新旧的环境写入 `--force` 用法：全局 env 文件使用 `--global --env-file`，项目 env 文件使用
+   `--project --env-file`，手动覆盖层使用 `--overlay`。Git 管理的覆盖层应在上游修改，或改用本地覆盖。
+3. 升级后，在项目外及每个重要项目内分别运行 `shine env list` 和 `shine env explain KEY`，
+   确认实际值的来源。
+4. 旧的显式配置仍然优先，即使它等于过去的默认值。只有确认不再需要时，才指定写入层用
+   `shine env delete` 删除，再检查继承结果。调整明文键不会取消同名 `KEY_SECRET` 的优先使用。
+5. 运行 `shine update` 检查已安装配置，再审阅并执行 `shine upgrade`。修改环境值或升级程序
+   不会自动更新已安装的配置。
+
+回退 Shine 版本会恢复旧的优先级，但不能恢复已删除的值或已更新的应用配置。
+需要时从私有备份恢复，并检查是否会覆盖后续修改；没有专用的 env 回退命令。
+旧版本可能重新写入默认值，但不会恢复已删除的自定义值。

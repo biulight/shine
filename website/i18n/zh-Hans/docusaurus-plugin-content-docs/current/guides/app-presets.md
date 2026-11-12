@@ -5,7 +5,8 @@ sidebar_position: 2
 
 # 管理应用配置
 
-应用预设将配置安装到应用需要的位置。替换已有的非受管文件前，会先创建 `*.shine.bak` 备份。
+应用预设将配置安装到应用需要的位置。替换已有的非受管配置文件前，会先创建 `*.shine.bak` 备份。
+[秘密文件](#managed-secret-files) 使用更严格的冲突规则，不会创建明文备份。
 
 它们只管理配置文件，不安装、下载或启动对应应用。所有内置类别的目标路径、平台限制、权限与重启要求见[内置预设](../reference/built-in-presets.md#app-预设)。
 
@@ -22,6 +23,9 @@ shine app install starship --dry-run
 
 ## 安装与更新
 
+安装、升级、卸载、刷新和 artifact 操作都会先显示计划。请审阅后确认，默认为否。自动化中可在
+审阅后使用 `--yes`，但该选项不能绕过权限、信任或安全检查。
+
 安装一次，之后按需检查并应用更新：
 
 ```bash
@@ -31,43 +35,30 @@ shine app install starship
 等价写法：`shine install app/starship`
 
 ```bash
-shine update
-shine upgrade
+shine update app/starship
+shine upgrade app/starship
 ```
 
-`shine update` 比较当前安装结果与预设，只报告状态；`shine upgrade` 将受管 shell 和应用配置更新到当前预设内容。
+`shine update` 只报告差异，`shine upgrade` 应用可用的配置更新；这里的命令只针对 Starship。
 
 安装失败时，部分文件可能已安装成功。重试前请检查报告的结果。
 
-重新安装类别时会保留安装后被修改的文件，包括受管 JSON 键。对于审阅过的 Plan 标为保留的文件，
-Shine 也会跳过其 generator。若要显式覆盖已修改的受管内容，先使用
-`shine app install starship --replace-managed --dry-run` 预览，再审阅 `shine app install starship --replace-managed`。
-
-若另一项 App 操作仍在运行，请等待它结束。Shine 提示相关文件或设置发生变化时，请重新审阅 Plan。
-
-如果只需覆盖一个类别的受管文件：
+重新安装类别时会保留安装后被修改的文件，包括受管 JSON 键。若要用预设内容覆盖自己的修改，
+请先预览，再批准替换：
 
 ```bash
+shine app install starship --replace-managed --dry-run
 shine app install starship --replace-managed
 ```
 
+若另一项 App 操作仍在运行，请等待它结束。Shine 提示相关文件或设置发生变化时，请重新审阅 Plan。
+
 ### 将旧版 App metadata 迁移到 Shine 2
 
-当前 App metadata 会在 `shine.toml` 根级包含以下字段：
-
-```toml
-metadata_schema_version = 2
-```
-
-它与 `[permissions].schema_version` 相互独立。若旧 overlay 覆盖了
-`app/<category>/shine.toml`，但没有 `metadata_schema_version`，先运行
-`shine preset migrate --dry-run` 预览，再在审阅 diff 后运行 `shine preset migrate`。也可以显式传入
-仓库、类别或 manifest 路径。
-
-迁移只修改 metadata，保留 payload 自定义内容，并在写入前备份文件。无法安全迁移的 hook、generator
-和 artifact 会留给作者手动处理。使用 `shine preset validate` 和 `shine preset plan` 验证结果；不要
-仅为绕过不兼容而授予外部代码信任。完整作者流程见
-[自定义预设](./custom-presets.md#迁移-1x-来源)。
+如果 Shine 提示外部预设或 overlay 的元数据不兼容，先运行 `shine preset migrate --dry-run`
+预览，再审阅并执行 `shine preset migrate`。迁移会备份元数据并保留自定义配置文件。安装前请先
+处理报告中需要手动修改的项目；授予代码信任不能解决元数据不兼容。验证与编写步骤见
+[迁移 1.x 来源](./custom-presets.md#迁移-1x-来源)。
 
 ## 卸载与恢复
 
@@ -75,10 +66,6 @@ metadata_schema_version = 2
 | --- | --- |
 | 预览卸载 | `shine app uninstall starship --dry-run` |
 | 审阅预览后再执行卸载 | `shine app uninstall starship` |
-
-install、upgrade、uninstall、generator refresh 和 artifact apply/remove 都会在改动前显示 Plan，
-确认默认是 No。只有审阅过同一范围后，才应在有人值守的自动化中使用命令级 `--yes`；它不能绕过
-权限、信任或安全检查。
 
 默认情况下，Shine 会保留安装后被修改的文件并报告冲突。安全卸载会还原安装时创建的原文件备份。
 迁移目标路径时，旧受管文件必须未修改，新路径也必须空闲；任一位置发生变化，Shine 都会保持原状，
@@ -100,11 +87,14 @@ upgrade 仅在获批命令包含 `--prune-stale` 时移除已从
 
 ## 升级与降级 {#upgrade-and-downgrade}
 
-Shine 2.8 及更高版本写入的 App 安装状态无法由 2.7.x 及更早版本读取。
-若计划降级，仅安装旧二进制或重新封存加密源文件，
-都不会转换 App 安装记录。旧客户端会拒绝不兼容的记录；`app install --replace-managed` 也需要读取记录，不能绕过此限制。
-不要通过删除记录或修改版本号绕过检查。
-使用本版时，先预览并完成 App 卸载，再更换程序。最后一条普通或机密文件回执移除后，Shine 会清理空的安装记录；逐类别卸载或使用外部预设时也一样。若有受保护的文件或待恢复的操作，先用新版处理。之后可用旧版支持的预设重新安装，由旧版创建自己的 App 记录。如果类别卸载在清除最后一条回执后中断，可重新执行同一类别的卸载命令。此时只审阅并移除空记录，保留各类别的缓存。
+Shine 2.8 及更高版本保存的 App 安装记录无法由 2.7.x 及更早版本读取。降级前：
+
+1. 使用新版程序预览并完成 App 卸载，先处理受保护文件和待恢复操作，并备份需要保留的配置。
+2. 若卸载中断，重新执行同一卸载命令，完成清理。
+3. 更换程序后，使用旧版支持的预设重新安装。
+
+安装旧程序、重新封存加密源文件或使用 `--replace-managed` 都不能转换安装记录。
+不要删除记录或修改其版本号来绕过兼容性检查。
 
 ## 恢复中断的 App 操作
 
@@ -120,8 +110,7 @@ shine app recover --yes
 只要相关文件仍与中断时一致，恢复会完成或回退原操作。中断后被修改的文件绝不会被覆盖；恢复会停止
 并保留现场，交给用户检查。JSON 恢复只调整预设拥有的键，不影响其它设置。
 
-只有确实需要修改受保护路径时，恢复 Plan 才会列出管理员权限。回滚文件可能包含配置数据，应按敏感
-内容处理。不要手动编辑或删除恢复状态；若命令报告冲突，请先备份并检查它指出的路径。
+恢复可能需要管理员权限。恢复文件可能包含配置数据，应按敏感内容处理。不要手动编辑或删除恢复状态；若命令报告冲突，请先备份并检查它指出的路径。
 
 ## 配置变换
 
@@ -135,14 +124,11 @@ shine app recover --yes
 
 ## 生成式文件与 Surge URI 订阅
 
-`[[files]]` 的 generator 将预期文件内容写入 UTF-8 标准输出，由 Shine 应用变换并管理安装和
-卸载。脚本不得直接写入目标文件。stdout 上限为 8 MiB，stderr 上限为 64 KiB，超限会导致生成失败。
+部分预设会根据订阅 URL 等输入生成配置。普通 `list`、`info` 和 `update` 不运行生成器。
+`generator not evaluated` 提示表示 Shine 尚未检查生成内容，并不代表已安装文件是最新状态。
 
-生成器可分为自动和手动两类。普通 `list`、`info` 和 `update` 都不会运行它们；无法在不执行代码的
-情况下计算动态预期内容时，info/update 会醒目显示 `generator not evaluated`，不会声称已安装文件
-是最新状态。使用 `--run-generators` 可以显式执行所选 generator，检查生成结果的状态或差异，而不安装文件：
-
-按需选择一种检查范围；这些命令会执行生成器：
+若只想检查生成内容而不安装，请选择以下一种范围。这些命令会执行代码，可能访问网络；
+外部预设或 overlay 的生成器需要已有的[信任授权](#生命周期钩子)。
 
 | 操作 | 命令 |
 | --- | --- |
@@ -151,43 +137,28 @@ shine app recover --yes
 | 执行生成器并检查此 App 的更新 | `shine update app/surge --run-generators --diff` |
 | 执行所有已安装 App 类别的生成器 | `shine update --run-generators` |
 
-全局形式会评估所有已安装 App 类别；定向形式只评估选中的 App。由于该参数已经表达明确意图，自动
-generator 和 `auto = false` 的手动 generator 都会参与。外部或 overlay generator 仍需要匹配的
-scoped trust。单项失败不会阻止其余 generator 继续评估，但命令会在报告不完整结果后返回非零状态。
-用户取消、命令累计分析预算耗尽，或无法安全继续的分析器故障会停止剩余工作。
-分析预算包含声明的作用域查找；即使源文件很小，深层嵌套也可能耗尽预算。
+评估会运行所选范围内的自动和手动生成器，不会安装文件，也不会运行钩子或 artifact。
+失败或未完成的评估会报错并返回非零退出状态；请先解决错误，再将结果视为完整检查。
+如果 Shine 因代码与声明不一致而阻止脚本执行，请按
+[App 代码检查](./custom-presets.md#执行前检查-app-代码)处理；授予信任不能绕过该检查。
 
-受支持的 App Bun 代码会在执行前与声明核对；确定差异或解析失败会阻止该脚本启动，已有 trust
-不能绕过检查。其余独立选中文件仍可继续评估。修复方法、覆盖限制和作者工具见
-[App 代码检查](custom-presets.md#执行前检查-app-代码)。评估仍不会安装文件、更新 receipt 或运行 hook、artifact。
-
-refresh 只处理已由 App manifest 记录的生成文件。新增带 generator 的 `[[files]]` 项后，先运行一次
-`shine install app/<CATEGORY>`，然后才能刷新该 source。
-
-自动 generator 也可以在获批的安装或升级中运行；`auto = false` 的手动 generator 可在安装、显式
-评估或显式 refresh 中运行：
-
-按需选择刷新整个类别或单个文件：
+要保存新生成的内容，请刷新已安装的文件：
 
 | 操作 | 命令 |
 | --- | --- |
-| 刷新类别中所有已跟踪的自动和手动生成文件 | `shine app refresh <CATEGORY>` |
-| 仅刷新指定源文件 | `shine app refresh <CATEGORY> <SOURCE_FILE>` |
+| 刷新类别中所有已安装的生成文件 | `shine app refresh <CATEGORY>` |
+| 刷新指定文件 | `shine app refresh <CATEGORY> <SOURCE_FILE>` |
 
-指定文件时，`SOURCE_FILE` 是预设 `[[files]].source` 的相对路径。刷新失败会保留上次成功内容；
-目标已被用户修改时也会保留，只有确认要覆盖时才添加 `--force`。安装和带
-`--replace-managed` 的修复安装会运行已由 `when_env` 启用的生成器，不受 `auto` 设置影响。
-refresh 会显示并重新校验安全 Plan；自动化调用必须添加 `--yes`。
+`SOURCE_FILE` 是预设列出的源文件相对路径。新增生成文件后，需先运行
+`shine app install <CATEGORY>` 安装，再刷新。刷新会显示计划并请求确认，自动化调用需要
+`--yes`。失败时保留上次成功内容；本地修改也会保留，只有明确添加 `--force` 才会覆盖。
 
-当安全 Plan 列出来自外部预设或 overlay 的代码时，回答 `yes` 只授权本次 Plan 使用列出的代码。
-使用同一脚本且分析提示完全相同的条目会合并显示。加上 `--verbose` 可逐项查看。
-自动化或使用 `--run-generators` 时，先用 `shine trust inspect app/<CATEGORY>` 审阅该类别的每项能力。
-确认 `shine trust grant app/<CATEGORY>` 后，该快照中列出的所有生成器、hook 和 artifact 都会获得信任。
-生成器会收到声明的环境输入和固定 `SHINE_APP_*` 路径变量，并受执行时间、输出大小限制。
-请只运行你信任的预设。
+自动生成器也可以在安装和升级中运行；手动生成器（`auto = false`）在安装、显式评估或刷新时运行，
+不会随日常升级执行。使用 `--replace-managed` 重新安装时也可能运行它们。只有符合预设启用条件的
+生成器才会执行。
 
-权限声明用于帮助审阅预设，不会对代码提供沙箱隔离。声明中不得包含密钥值或凭据。
-编写预设时请参阅[能力声明](./custom-presets.md#声明权限)。
+权限声明不会对代码提供沙箱隔离。批准外部脚本前请先审阅；单次授权和持久信任的操作见
+[外部代码授权](#生命周期钩子)。
 
 ### Surge URI 订阅
 
@@ -219,27 +190,21 @@ shine app refresh surge subscription-proxies.conf
 shine app refresh surge sub/wget-cloud-proxies.conf
 ```
 
-刷新成功且内容变化后会通过现有 `post_upgrade` 钩子 reload Surge；失败时保留上次成功文件。`local-proxy-groups.conf` 中的 `Subscription` 组通过 `policy-path=subscription-proxies.conf` 读取节点，其它策略组可用 `include-other-group=Subscription` 纳入这些节点。
+刷新成功且内容变化后会重新加载 Surge；失败时保留上次成功文件。`local-proxy-groups.conf` 中的 `Subscription` 组通过 `policy-path=subscription-proxies.conf` 读取节点，其它策略组可用 `include-other-group=Subscription` 纳入这些节点。
 
 ## 构建辅助资源
 
-部分 app 预设会在 `shine.toml` 的 `[artifact]` 中声明脚本。需要生成或刷新这类资源时，手动运行：
+部分预设需要额外一步，把已安装的文件接入应用。请按提示显式运行，例如：
 
 ```bash
 shine app artifact apply surge
 ```
 
-Shine 不会隐式运行 artifact 命令。每次手动 apply/remove 都会显示自己的 Plan；脚本失败时命令也会
-失败。自动化调用只有在审阅该操作后才应添加 `--yes`。预设作者应让生命周期钩子直接调用底层脚本，
-不要在钩子中嵌套 `app artifact apply`。
-当某个声明 artifact 的类别在安装或升级中确实改动了受管文件时，Shine 会打印显式 apply 命令；没有受管文件
-发生变化时则不提示。脚本只会收到结构化 `[artifact].env` 列出且已配置的 source；此外会加入
-`SHINE_CACHE_DIR`、`SHINE_STATE_DIR` 等固定路径变量。完整变量说明见
-[任务与应用构建产物](./tasks-and-serve.md)。
+每次 apply 或 remove 都会显示计划并请求确认；脚本失败时，命令也会报告失败。自动化中使用
+`--yes` 前应先审阅该操作。这些命令可能修改应用设置，请按下面对应预设的步骤操作。
+自定义脚本见[任务与应用构建产物](./tasks-and-serve.md)。
 
-需要保留的脚本输出请写入 `SHINE_STATE_DIR` 或 `SHINE_CACHE_DIR`；临时源文件副本会在执行后删除。
-
-内置 `surge` app 预设会把 `local-proxies.conf`、`local-proxy-groups.conf`、`local-rules.conf`、`shine-general.sgmodule` 和可选的订阅生成文件安装到 Surge Profiles 目录。设置 `[env]` 中的 `SURGE_PROFILE` 后，`shine app artifact apply surge` 使用内置 Bun artifact 幂等修补 `[Proxy]`、`[Proxy Group]` 与 `[Rule]` 的 `#!include` 行，启用 `shine-general` 模块，再 reload Surge。Overlay 只需覆盖自己的策略文件，无需提供构建脚本。
+内置 `surge` app 预设会把 `local-proxies.conf`、`local-proxy-groups.conf`、`local-rules.conf`、`shine-general.sgmodule` 和可选的订阅生成文件安装到 Surge Profiles 目录。设置 `[env]` 中的 `SURGE_PROFILE` 后，`shine app artifact apply surge` 会将这些文件接入指定 Profile，启用 `shine-general` 模块，再重新加载 Surge。Overlay 只需覆盖自己的策略文件，无需提供构建脚本。
 
 要添加本地 `[General]` 设置，在当前 overlay 中创建 `app/surge/shine-general.sgmodule`：
 
@@ -301,7 +266,9 @@ shine preset copy app/clash-verge
 shine preset overlay link .
 ```
 
-这会创建 `app/clash-verge/`，其中包含当前 Shine 版本附带的 `merge.yaml`、元数据和构建脚本。编辑其中的 `app/clash-verge/merge.yaml`，填入实际配置；不要直接修改 `~/.shine/clash-verge/`，该目录是 Shine 安装后的受管副本。只打算定制 `merge.yaml` 时，可以删除复制出的其它文件：overlay 按相对路径覆盖，缺失的文件会继续使用内置版本并随 Shine 更新。
+编辑 `app/clash-verge/merge.yaml`，填入实际配置。不要直接修改 `~/.shine/clash-verge/`，
+该目录是安装后的受管副本。只定制 `merge.yaml` 时，可以删除其余复制出的文件，让它们继续使用
+内置版本并随 Shine 更新。
 
 确认内容后安装预设：
 
@@ -315,70 +282,51 @@ shine app install clash-verge
 shine app artifact apply clash-verge
 ```
 
-Shine 只读取 `profiles.yaml` 定位这些绑定文件，不会修改订阅、创建绑定或写入远端订阅 YAML。构建写入新内容后，在 Clash Verge Rev 中重新选择一次订阅，再运行构建即可请求立即刷新 rule-provider。
+Shine 会更新这四个编辑器的配置，不修改远端订阅或创建编辑器绑定。写入新内容后，请在 Clash Verge Rev
+中重新选择订阅；若要立即刷新规则提供者，再运行一次 apply 命令。
 
-示例沿用上述三类流量，并为 rule-provider 提供三套互斥布局：mihomo `HomeDir` 内的 `type: file`、同设备的 loopback HTTP 服务，或远程 HTTPS 服务。Shine 会通过普通受管 app 文件把三份默认不生效的参考规则安装到 `HomeDir/ruleset/shine-source/`；只有选择 file provider 时才需要在 overlay 中覆盖这些文件。loopback 和远程 HTTP 布局不会引用它们，因此 URL、interval 与 provider 缓存路径保持不变。`shine upgrade` 实际更新该类别后，会自动运行已审批的 post-upgrade 脚本。若订阅绑定内容已经生效，本地参考规则更新会立即刷新全部 provider 并关闭旧连接；若渲染结果改变了绑定文件，脚本只写入文件，不请求 mihomo 尚未加载的 provider。此时请重新选择订阅，再运行 `shine app artifact apply clash-verge`。选择一整套 provider 后，还需同步启用对应策略组与 `prepend-rules`。loopback 或私有服务的 `proxy: DIRECT` 只控制 provider 下载，如服务器只能经代理访问，应删除或调整它。私有域名依赖系统 split DNS 时，还需配置 mihomo 自己的 `dns.nameserver-policy`。
+在 `merge.yaml` 中选择一整套规则提供者配置：mihomo 的 `HomeDir` 内的本地文件、同设备
+loopback HTTP，或远程 HTTPS，并启用相应的策略组与 `prepend-rules`。只有本地文件方式使用
+`HomeDir/ruleset/shine-source/` 下的参考规则；选择此方式时，通过 overlay 定制它们。
+`proxy: DIRECT` 只影响规则下载，服务器需要代理时应调整它。私有域名依赖系统 split DNS 时，
+还需配置 mihomo 的 `dns.nameserver-policy`。
 
-artifact 和 post-upgrade 脚本都使用 Bun，运行机器必须已安装 Bun。自动钩子仅在 `shine upgrade` 确实改动 `clash-verge` 受管文件时运行；首次设置、重选变化后的绑定或刷新失败重试仍使用显式命令。外部脚本型钩子需要人工确认生命周期 Plan 或已有匹配 grant。即时刷新还可使用 `[env]` 中的 `CLASH_CONTROLLER_URL` 和 `CLASH_CONTROLLER_TOKEN`；未配置 URL 时只跳过立即刷新，provider 仍按自身 interval 更新。artifact 会刷新最终生效的 `merge.yaml` 中 `rule-providers` 映射声明的全部名称，自定义 provider 名称无需同步修改脚本。该映射缺失、为 null 或为空时跳过刷新；存在但不是映射时报告配置错误。所有已声明 provider 都刷新成功后，artifact 还会关闭当前全部 mihomo 连接，使浏览器和其它应用自动重连并立即按新规则匹配，无需重启应用；正在进行的下载或其它长连接可能会短暂中断。控制器令牌不要写入 overlay 或文档。
+运行机器必须已安装 Bun。`shine upgrade` 修改此类别后，会自动运行已批准的脚本更新集成。
+若编辑器配置发生变化，请重新选择订阅，再运行 `shine app artifact apply clash-verge`。
+首次设置和刷新失败后重试，也使用此命令。
+
+如需立即刷新，在 Shine 的环境设置中配置 `CLASH_CONTROLLER_URL` 和 `CLASH_CONTROLLER_TOKEN`。
+未配置 URL 时，规则提供者仍按自身间隔更新。立即刷新会处理 `merge.yaml` 声明的全部规则提供者；
+全部刷新成功后，会关闭当前 mihomo 连接，让应用重连并按新规则匹配。这可能短暂中断下载和其他长连接。
+不要把控制器令牌写入 overlay 或文档。
 
 `shine app artifact remove clash-verge` 不会清除 Clash Verge Rev 自己保存的订阅绑定；完全移除时还需在应用中手动清空上述四个编辑器。
 
 ## 生命周期钩子
 
-预设作者可以声明 `post_install` 和 `post_upgrade` 钩子：前者在安装实际写入文件后运行，后者只在 `shine upgrade` 实际更新该类别至少一个文件后运行；未变化的类别不会触发。
+部分预设会在安装或升级后执行后续操作，例如重新加载应用。这些钩子只在操作写入文件后运行，
+未变化的类别不会触发。确认前请检查所需的环境输入和管理员权限。钩子失败会报告错误，但不会
+阻止其他类别的安装或升级。需要查看预设允许显示的成功输出时，为 `shine upgrade` 添加 `--verbose`。
 
-钩子读取的每个环境输入都必须在结构化 `env` 中声明 `source`、可选 `target` 与 `sensitivity`，无需重复声明类别环境权限；Plan 不会显示
-变量值。缺少必需环境输入时不能批准；脚本型 hook 的可选输入缺失时不会注入子进程。
-
-每个钩子必须且只能声明一种动作。`command` 运行声明的命令和参数；`script` 运行 native 或 Bun 脚本，
-并只接收自身 `env` 声明的值与固定 `SHINE_APP_*` 变量。`runtime` 只能与 `script` 同用；Bun 脚本沿用
-artifact 和 generator 的扩展名及锁定依赖规则。
-
-```toml
-post_upgrade = [
-  { command = "my-reloader", env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }] },
-]
-
-[permissions]
-schema_version = 1
-```
-
-```toml
-post_upgrade = [{
-  script = "refresh.ts",
-  runtime = "bun",
-  env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }],
-}]
-
-[permissions]
-schema_version = 1
-network = [{ scope = "any" }]
-```
-
-外部钩子和 generator 可通过交互式生命周期确认获得本次授权。需要持久授权时使用 target-scoped trust：
-
-先检查目标，再选择快照信任或开发信任。
-开发信任也会授权未来的代码变更，仅在你明确接受此范围时使用。
+外部钩子、生成器和 artifact 需要代码授权。交互确认可以只授权本次列出的代码，不保存信任。
+自动化或显式 `--run-generators` 检查需要先审阅并授予持久信任：
 
 | 操作 | 命令 |
 | --- | --- |
-| 仅检查，不授予信任 | `shine trust inspect app/<CATEGORY>` |
-| 授予快照信任 | `shine trust grant app/<CATEGORY>` |
-| 信任未来的代码变更 | `shine trust grant app/<CATEGORY> --development` |
+| 检查代码与所需能力 | `shine trust inspect app/<CATEGORY>` |
+| 信任已审阅的类别 | `shine trust grant app/<CATEGORY>` |
 
-`trust inspect` 显示需要授权的内容，不会授予信任。Snapshot trust 会绑定完整有效 App 类别，包括辅助文件和数据文件。
-只有准备信任所显示本地来源中的后续代码修改时才使用 `--development`。
-授予信任前，先处理 Plan 显示的缺失环境输入或 Administrator 要求。若启用的 overlay
-中 `app/<CATEGORY>/shine.toml` 是覆盖内置 metadata 的旧版完整副本，应先删除或迁移该 metadata 文件；
-`merge.yaml`、`rules/` 等 overlay payload 文件仍可保留。
+授权覆盖类别中列出的全部代码，包括辅助文件；类别内容变化后可能需要重新审阅。
+`--development` 也会信任所显示本地来源中的未来代码修改，只有明确接受这一更大范围时才使用。
+缺失输入和元数据不兼容仍需处理，权限声明也不会对代码提供沙箱隔离。
 
-钩子默认不显示 stdout。预设将 `show_output` 设为 `true` 后，安装和 refresh 会显示成功输出；`shine upgrade` 仅在 `--verbose` 下显示成功完成信息和输出。钩子失败或权限拦截始终可见，但不会中断其它类别的安装或升级。
+钩子声明和环境输入的编写方法见[App 构建脚本运行时](./custom-presets.md#app-构建脚本运行时)。
 
 ## 受管秘密文件 {#managed-secret-files}
 
-App metadata v3 可以安装 workspace 密文，并持续管理解密后的目标文件。
-明文不得进入预设仓库；继续使用 workspace v3 的 `file_groups` 映射和加密策略，
-解密身份留在执行解密的机器上。
+应用预设可以安装 workspace 密文，并管理服务所需的解密文件。明文不得进入预设仓库，解密身份
+应留在执行解密的机器上。先按[管理环境变量](./environment.md)准备 workspace 文件组和加密策略，
+再在 App 预设中声明所需文件组：
 
 ```toml
 metadata_schema_version = 3
@@ -424,8 +372,8 @@ Windows 使用当前用户私有 ACL，拒绝 Unix 权限字段。
 卸载会移除未修改的受管秘密文件，保留本地修改。关闭自动解密会暂停创建和更新，但保留既有所有权。
 删除声明后，需要通过 `upgrade --prune-stale` 移除未修改的旧目标；目标迁移需要先显式处理旧安装。
 写入中断会保留受保护的恢复状态，重试前应审阅并执行 `shine app recover`。
-不要删除 Shine 的私有秘密文件状态或指纹密钥，它们用于所有权检查和恢复。如果中断导致 Shine 未能记录
-已创建文件的身份，自动恢复会停止并保留文件供人工检查，即使其内容看起来没有变化。
+不要删除 Shine 的私有秘密文件状态或密钥。无法安全确认文件身份时，恢复会保留文件供人工检查，
+即使其内容看起来没有变化。
 
 关闭自动解密时，可在安装后的 workspace 中执行 `shine env workspace export --format files`，
 明确选择模式和文件组。手动导出拒绝已有文件，不创建 App 所有权，并使用自身的私有权限默认值；
@@ -434,6 +382,5 @@ Windows 使用当前用户私有 ACL，拒绝 Unix 权限字段。
 容器运行时仍需明文。配置安装不会启动或重启容器；替换密码文件后，应显式重建需要更新文件挂载的容器。
 卸载必要配置前，应先停止依赖它的服务。
 
-预设作者使用 `secret_files` 时，必须声明 `metadata_schema_version = 3`。App 写入使用 manifest
-版本 2，包括普通 App 文件的状态写入；旧客户端会拒绝新格式。通过 SSH 使用这些预设前，请先升级
-两端。兼容性限制见[升级与降级](#upgrade-and-downgrade)。
+使用 `secret_files` 的预设必须声明 `metadata_schema_version = 3`。通过 SSH 使用这些预设前，
+请先升级两端。改用旧版 Shine 前，请阅读[升级与降级](#upgrade-and-downgrade)。

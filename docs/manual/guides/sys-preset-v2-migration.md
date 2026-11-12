@@ -158,13 +158,10 @@ shine trust inspect sys/neovim
 shine trust grant sys/neovim
 ```
 
-A capability statement is optional, unverified review context; a trust grant records your review
-and permission to execute external code. Package-only items need no empty declaration. Snapshot
-trust binds the complete effective Sys OS snapshot and requires review after any file, source-layer,
-or author/env/admin statement change.
-Run the installation preview again after granting trust. During ongoing local authoring,
-`--development` may accept code
-edits from the same enrolled source; statement and source changes still require review.
+Permission declarations alone do not authorize code execution. Review trust again when preset
+files, sources, or permission requirements change, then rerun the installation preview.
+During development, `--development` can trust future code edits from the same source; use it only
+when you accept that scope. Source or permission changes still require review.
 
 Migration preparation is complete when local validation has no errors, Shine reads the correct
 source, and the installation preview matches your intent. When ready to install, run

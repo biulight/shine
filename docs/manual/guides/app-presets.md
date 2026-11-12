@@ -5,8 +5,9 @@ sidebar_position: 2
 
 # Manage application configuration
 
-Application presets install configuration where the application expects it. Existing unmanaged files
-are backed up as `*.shine.bak` before replacement.
+Application presets install configuration where the application expects it. Existing unmanaged
+configuration files are backed up as `*.shine.bak` before replacement.
+[Secret files](#managed-secret-files) have stricter conflict rules and never create plaintext backups.
 
 Presets manage configuration only; they do not install, download, or start the application. See
 [built-in presets](../reference/built-in-presets.md#application-presets) for destinations, platforms,
@@ -25,6 +26,10 @@ confirm destinations and scope without writing application files.
 
 ## Install and update
 
+Shine shows a plan before installing, upgrading, removing, refreshing, or applying an artifact.
+Review it before confirming; the default is No. Automation can use `--yes` after review, but the
+option does not bypass permission, trust, or safety checks.
+
 Install once, then check and apply updates when needed:
 
 ```bash
@@ -34,47 +39,33 @@ shine app install starship
 The equivalent target form is `shine install app/starship`.
 
 ```bash
-shine update
-shine upgrade
+shine update app/starship
+shine upgrade app/starship
 ```
 
-`shine update` compares installed results with presets and reports status without applying it.
-`shine upgrade` updates managed shell and application configuration to current preset content.
+`shine update` reports differences without applying them. `shine upgrade` applies available
+configuration updates; these examples affect only Starship.
 
 If installation fails, some files may already be installed. Check the reported results before retrying.
 
 Reinstalling a category preserves files changed since installation, including managed JSON keys.
-Shine also skips the generator for a file that the reviewed Plan marks for preservation. To
-explicitly replace modified managed content, preview `shine app install starship --replace-managed --dry-run`
-and then review `shine app install starship --replace-managed`.
+To replace your edits with the preset content, preview and then approve the replacement:
+
+```bash
+shine app install starship --replace-managed --dry-run
+shine app install starship --replace-managed
+```
 
 If another App operation is running, wait for it to finish. Review a new Plan if Shine reports
 that the relevant files or settings have changed.
 
-To replace managed files for one category:
-
-```bash
-shine app install starship --replace-managed
-```
-
 ### Migrating legacy App metadata to Shine 2
 
-Current App metadata includes this field at the root of `shine.toml`:
-
-```toml
-metadata_schema_version = 2
-```
-
-This is separate from `[permissions].schema_version`. If an older overlay replaces
-`app/<category>/shine.toml` without `metadata_schema_version`, preview the required changes with
-`shine preset migrate --dry-run`, then run `shine preset migrate` after reviewing the diff. You can
-also pass a repository, category, or manifest path explicitly.
-
-The migration changes metadata only, keeps payload customizations, and backs up files before
-writing. Hooks, generators, and artifacts that cannot be migrated safely are reported for manual
-authoring. Validate the result with `shine preset validate` and `shine preset plan`; do not grant
-external-code trust merely to bypass an incompatibility. See [Customize presets](./custom-presets.md#migrate-a-1x-source)
-for the complete author workflow.
+If Shine reports incompatible metadata in an external preset or overlay, preview migration with
+`shine preset migrate --dry-run`, then review and apply it with `shine preset migrate`. Migration
+backs up metadata and preserves customized configuration files. Resolve any items reported as
+requiring manual changes before installing; granting code trust cannot fix incompatible metadata.
+See [migrate a 1.x source](./custom-presets.md#migrate-a-1x-source) for validation and authoring steps.
 
 ## Uninstall and restore
 
@@ -82,10 +73,6 @@ for the complete author workflow.
 | --- | --- |
 | Preview removal | `shine app uninstall starship --dry-run` |
 | Apply only after reviewing the preview | `shine app uninstall starship` |
-
-Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a Plan before making
-changes. The prompt defaults to No. Use command-level `--yes` only after reviewing the same scope in
-an attended automation; it does not bypass permission, trust, or safety checks.
 
 By default, Shine preserves files modified after installation and reports a conflict. Safe uninstall
 restores the original backup when one was created. A destination move also requires the old managed
@@ -106,23 +93,21 @@ files outside these caches and review the removal Plan before approval.
 has been removed. Resolve protected or failed removals before retrying; do not delete installation
 records or backups manually.
 
-During upgrade,
-obsolete managed entries are removed only when `--prune-stale` is part of the approved command;
+During upgrade, obsolete managed entries are removed only when `--prune-stale` is part of the approved command;
 modified entries remain preserved.
 
 ## Upgrade and downgrade {#upgrade-and-downgrade}
 
-Shine 2.8 and later write App installation state that Shine 2.7.x and earlier cannot read.
-If you intend to downgrade, reinstalling the old binary or resealing encrypted sources does not convert App installation
-records. An older client rejects incompatible records; `app install --replace-managed` also needs to read
-them and cannot bypass this limit. Do not delete records or edit their version number to bypass
-that check. With this version, preview and complete App uninstall before replacing the binary.
-Once the last ordinary and secret App receipts are removed, Shine removes the empty installation record,
-including after category-by-category removal or when using external presets. Resolve protected files
-or pending recovery with the newer binary first. The older version can then install from a preset it
-supports and create its own App record. If category removal was interrupted after clearing its last
-receipt, rerun the same category uninstall. This retry reviews and removes only the empty record
-and leaves category caches in place.
+Shine 2.8 and later save App installation records that Shine 2.7.x and earlier cannot read.
+Before downgrading:
+
+1. Use the newer binary to preview and complete App uninstall. Resolve protected files and pending
+   recovery first. Back up any configuration you want to keep.
+2. If uninstall was interrupted, rerun the same uninstall command to finish cleanup.
+3. Replace the binary, then reinstall using presets supported by the older version.
+
+Installing the old binary, resealing encrypted sources, or using `--replace-managed` cannot convert
+installation records. Do not delete records or edit their version to bypass the compatibility check.
 
 ## Recover an interrupted App operation
 
@@ -140,9 +125,8 @@ match the state Shine recorded. Files changed afterward are never overwritten; r
 preserves the evidence for manual review. JSON recovery changes only keys owned by the Preset and
 keeps unrelated values.
 
-The recovery Plan lists administrator access only when protected paths actually need changes.
-Rollback files can contain configuration data, so treat them as sensitive. Do not edit or delete
-recovery state manually; if recovery reports a conflict, inspect the named paths and keep a backup
+Recovery may require administrator access. Recovery files can contain configuration data, so
+treat them as sensitive. Do not edit or delete recovery state manually; if recovery reports a conflict, inspect the named paths and keep a backup
 before resolving it.
 
 ## Configuration transforms
@@ -157,16 +141,13 @@ Some presets process source files before installation:
 
 ## Generated files and Surge URI subscriptions
 
-A `[[files]]` generator writes the intended file content to UTF-8 standard output; Shine applies
-transforms and manages installation and removal. The script must not write the destination directly.
-Output is limited to 8 MiB on stdout and 64 KiB on stderr; exceeding either limit fails the generator.
+Some presets generate configuration from other inputs, such as subscription URLs. Ordinary
+`list`, `info`, and `update` do not run generators. A `generator not evaluated` warning means Shine
+has not checked the generated content; it does not mean the installed file is current.
 
-Generators can be automatic or manual. Neither kind runs during ordinary `list`, `info`, or
-`update`. When Shine cannot determine dynamic desired content without execution, info/update shows
-a prominent `generator not evaluated` warning and does not claim that the installed file is
-current. Use `--run-generators` to execute the selected generators explicitly and inspect the resulting status or diff without installing the files:
-
-Choose one inspection scope; these commands execute generators:
+To check generated content without installing it, choose a scope below. These commands run code
+and may access the network. External or overlay generators require an existing
+[trust grant](#lifecycle-hooks).
 
 | Operation | Command |
 | --- | --- |
@@ -175,52 +156,30 @@ Choose one inspection scope; these commands execute generators:
 | Check this App with generator evaluation | `shine update app/surge --run-generators --diff` |
 | Evaluate all installed App categories | `shine update --run-generators` |
 
-The global form evaluates generators for every installed App category; the targeted forms evaluate
-only the selected App. Both automatic and `auto = false` manual generators participate because the
-flag is explicit. External or overlay generator evaluation with `--run-generators` still requires matching scoped trust;
-interactive lifecycle operations can obtain one-time code consent. Generator
-failures do not stop evaluation of the remaining selection, but the command returns nonzero after
-reporting incomplete results. Cancellation, command-wide analysis budget exhaustion, or an analyzer
-failure that prevents safe continuation stops the remaining work.
-The analysis budget includes declaration scope lookup; deeply nested code can exhaust it even in a
-small source file.
+Evaluation runs both automatic and manual generators in the selected scope. It does not install
+files or run hooks or artifacts. Failed or incomplete evaluation is reported with a nonzero exit
+status; resolve those errors before treating the result as a complete check. If Shine blocks a
+script because its code does not match its declarations, follow
+[App code checks](./custom-presets.md#check-app-code-before-execution); trust does not bypass that check.
 
-Before execution, supported App Bun code is checked against its declarations. A definite difference
-or parse failure prevents that script from starting; existing trust does not override it. Other
-independent selected files may still be evaluated. See [App code checks](custom-presets.md#check-app-code-before-execution)
-for fixes, coverage limits and author tools. Evaluation still does not install files, update receipts,
-or run hooks or artifacts.
-
-Refresh applies only to generated files already tracked by the App manifest. After adding a new
-generated `[[files]]` entry, run `shine install app/<CATEGORY>` once before refreshing that source.
-
-Automatic generators may also run during an approved install or upgrade. A manual generator with
-`auto = false` runs during installation, explicit evaluation, or explicit refresh:
-
-Choose a category-wide or single-file refresh:
+To save newly generated content, refresh the installed files:
 
 | Operation | Command |
 | --- | --- |
-| Refresh all tracked automatic and manual outputs | `shine app refresh <CATEGORY>` |
-| Refresh only the selected source | `shine app refresh <CATEGORY> <SOURCE_FILE>` |
+| Refresh all installed generated files in a category | `shine app refresh <CATEGORY>` |
+| Refresh one file | `shine app refresh <CATEGORY> <SOURCE_FILE>` |
 
-`SOURCE_FILE` is the relative `[[files]].source` path. A failed refresh preserves the last successful
-content. A user-modified destination is also preserved unless you explicitly add `--force`.
-Installation, including a repair with `--replace-managed`, runs generators enabled by `when_env`
-regardless of their `auto` setting. Refresh displays and revalidates a security Plan; automation
-must add `--yes`.
+`SOURCE_FILE` is the relative source path listed by the preset. Newly added generated files must
+be installed with `shine app install <CATEGORY>` before they can be refreshed. Refresh shows a plan
+for confirmation; automation requires `--yes`. Failure preserves the last successful content.
+Local edits are preserved unless you explicitly add `--force`.
 
-When a Security Plan lists external or overlay code, answering `yes` authorizes the listed code
-for this Plan only. The compact analysis lists entries together when they share a script and
-identical advisory findings. Use `--verbose` to inspect each entry separately.
-For automation or `--run-generators`, review every capability listed by
-`shine trust inspect app/<CATEGORY>`. Confirming `shine trust grant app/<CATEGORY>` trusts all
-listed generators, hooks, and artifacts for that snapshot. Generators receive declared environment
-inputs and fixed `SHINE_APP_*` path variables. Execution time and output size are limited. Run only presets you trust.
+Automatic generators can also run during install and upgrade. Manual generators (`auto = false`)
+run during installation, explicit evaluation, or refresh, but not routine upgrade. Reinstalling with
+`--replace-managed` can run them too. Only generators enabled by the preset's conditions run.
 
-Permission declarations help you review a preset; they do not sandbox its code. Never include
-secret values or credentials in those declarations. See
-[capability declarations](./custom-presets.md#declare-permissions) when authoring a preset.
+Permission declarations do not sandbox code. Review external scripts before approving them; see
+[external-code authorization](#lifecycle-hooks) for one-operation approval and persistent trust.
 
 ### Surge URI subscriptions
 
@@ -261,38 +220,29 @@ shine app refresh surge subscription-proxies.conf
 shine app refresh surge sub/wget-cloud-proxies.conf
 ```
 
-When refreshed content changes, the existing `post_upgrade` hook reloads Surge. Failure preserves the
+When refreshed content changes, Surge is reloaded. Failure preserves the
 last successful file. The `Subscription` group in `local-proxy-groups.conf` reads nodes through
 `policy-path=subscription-proxies.conf`; other groups can include them with
 `include-other-group=Subscription`.
 
 ## Build helper resources
 
-Some application presets declare a script in `[artifact]`. Generate or refresh its resources
-explicitly:
+Some presets need a separate step to connect installed files to the application. Run it explicitly
+when prompted; for example:
 
 ```bash
 shine app artifact apply surge
 ```
 
-Shine does not implicitly run artifact commands. Each manual apply or remove shows its own Plan and
-fails the command if the script fails. Automation must add `--yes` after reviewing that operation.
-Preset authors should call the underlying script from a lifecycle hook rather than nesting
-`app artifact apply` inside the hook.
-When an install or upgrade changes managed files for a category that declares an artifact, Shine
-prints the explicit apply command. It prints nothing when no managed files changed.
-Scripts receive configured sources from their structured `[artifact].env` entries, plus path variables such as
-`SHINE_CACHE_DIR` and `SHINE_STATE_DIR`. See
-[Tasks and application artifacts](./tasks-and-serve.md) for the complete variable list.
-
-Keep script output that must survive execution in `SHINE_STATE_DIR` or `SHINE_CACHE_DIR`.
-Temporary source copies are removed afterward.
+Each apply or remove command shows a plan for confirmation and reports failure if its script fails.
+Use `--yes` for automation only after reviewing the operation. These commands can change application
+settings, so follow the preset-specific instructions below. For custom scripts, see
+[Tasks and application artifacts](./tasks-and-serve.md).
 
 The built-in `surge` preset installs `local-proxies.conf`, `local-proxy-groups.conf`,
 `local-rules.conf`, `shine-general.sgmodule`, and the optional subscription file in the Surge Profiles directory. After setting
-`SURGE_PROFILE` in `[env]`, `shine app artifact apply surge` uses a built-in Bun artifact to
-idempotently patch `[Proxy]`, `[Proxy Group]`, and `[Rule]` `#!include` lines, enable the
-`shine-general` module, and reload Surge.
+`SURGE_PROFILE` in `[env]`, `shine app artifact apply surge` connects those files to the selected Profile, enables the
+`shine-general` module, and reloads Surge.
 An overlay supplies only its policy files and does not need its own build script.
 
 For local `[General]` settings, create `app/surge/shine-general.sgmodule` in your active overlay:
@@ -384,38 +334,27 @@ For first use, open and save the current subscription's **Extend Config**, **Edi
 shine app artifact apply clash-verge
 ```
 
-Shine reads `profiles.yaml` only to locate those bound files. It never modifies subscriptions,
-creates bindings, or writes remote subscription YAML. After the build writes new content, reselect the
-subscription in Clash Verge Rev; running the build again can request an immediate rule-provider
-refresh.
+Shine updates the four editor configurations without changing the remote subscription or creating
+editor bindings. After it writes new content, reselect the subscription in Clash Verge Rev, then run
+the apply command again if you want an immediate rule-provider refresh.
 
-The example uses the same three traffic classes and offers three mutually exclusive provider layouts:
-a mihomo `type: file` path inside `HomeDir`, loopback HTTP on the same device, or remote HTTPS. Shine
-installs three inert reference lists under `HomeDir/ruleset/shine-source/` through ordinary managed
-app-file entries; customize those files in an overlay only when choosing the file-provider layout.
-The loopback and remote HTTP layouts do not reference these local files, so their URLs, intervals,
-and provider cache paths are unchanged. When `shine upgrade` changes this category, its approved
-post-upgrade script runs automatically. If the subscription bindings are already current, local
-reference changes immediately refresh every provider and close existing connections. If the
-rendered binding documents change, the script writes them without contacting providers that mihomo
-has not loaded yet; reselect the subscription and run `shine app artifact apply clash-verge`.
-After choosing one complete provider set, enable its matching
-policy groups and `prepend-rules`. `proxy: DIRECT` on loopback or private services affects only provider downloads;
-remove or change it when the server requires a proxy. Private domains that rely on system split DNS
-also require mihomo `dns.nameserver-policy` configuration.
+Choose one complete rule-provider layout in `merge.yaml`: local files inside mihomo's `HomeDir`,
+loopback HTTP on the same device, or remote HTTPS. Enable the matching policy groups and
+`prepend-rules`. Only the local-file layout uses the reference lists installed under
+`HomeDir/ruleset/shine-source/`; customize them through your overlay when using that layout.
+`proxy: DIRECT` affects provider downloads only; change it if the server requires a proxy.
+Private domains that rely on system split DNS also need mihomo `dns.nameserver-policy` configuration.
 
-The artifact and post-upgrade script use Bun, which must be installed on the machine. The automatic
-hook runs only when `shine upgrade` actually changes a managed `clash-verge` file; use the explicit
-command for first-time setup, after reselecting changed bindings, or to retry a failed refresh.
-External script hooks require human confirmation of the lifecycle Plan or a matching grant. Optional
-`CLASH_CONTROLLER_URL` and `CLASH_CONTROLLER_TOKEN` values can request an immediate refresh. Without
-the URL, only that immediate refresh is skipped; providers still update on their own intervals. The
-artifact refreshes every name declared by the effective `merge.yaml` `rule-providers` mapping, so
-custom provider names need no matching script change. A missing, null, or empty mapping skips the
-refresh; a non-mapping value is reported as invalid configuration. After every declared provider
-refreshes successfully, the artifact closes all active mihomo connections so browsers and other
-applications reconnect under the new rules without being restarted. This can briefly interrupt
-downloads or other long-lived proxied sessions. Never put controller tokens in an overlay or
+Bun must be installed. When `shine upgrade` changes this category, its approved script automatically
+updates the integration. If it changes the editor configurations, reselect the subscription and run
+`shine app artifact apply clash-verge` again. Use that command for first-time setup and failed-refresh
+retries too.
+
+To request an immediate refresh, configure `CLASH_CONTROLLER_URL` and `CLASH_CONTROLLER_TOKEN` in
+Shine's environment settings. Without the URL, providers still update on their own intervals.
+The refresh includes all rule providers declared in `merge.yaml`; after they all refresh successfully,
+it closes active mihomo connections so applications reconnect under the new rules. This may briefly
+interrupt downloads and other long-lived sessions. Keep controller tokens out of overlays and
 documentation.
 
 `shine app artifact remove clash-verge` does not clear subscription bindings stored by Clash Verge
@@ -423,69 +362,35 @@ Rev. Clear the four editors manually when removing the integration completely.
 
 ## Lifecycle hooks
 
-Preset authors can declare `post_install` and `post_upgrade`. The former runs after installation
-actually writes files. The latter runs only when `shine upgrade` updates at least one file in that
-category. Unchanged categories do not trigger hooks.
+Some presets run a follow-up action after installation or upgrade, such as reloading the application.
+These hooks run only when the operation writes files; unchanged categories do not trigger them.
+Review any requested environment inputs and administrator access before confirming. Hook failures
+are reported without stopping installation or upgrades for other categories. Add `--verbose` to
+`shine upgrade` when you need successful hook output that the preset makes available.
 
-Declare each environment input a hook consumes with `source`, optional `target`, and `sensitivity`
-in its structured `env` list; no duplicate category environment declaration is needed. Values are not displayed in the Plan. Missing required
-environment inputs block approval; optional script inputs are omitted from the child environment.
-
-Each hook declares exactly one action. `command` runs the declared command and arguments. `script`
-runs a native or Bun script with its declared `env` values plus the fixed `SHINE_APP_*` variables.
-`runtime` is valid only for a script hook; Bun scripts use the same extension and locked-dependency
-rules as artifacts and generators.
-
-```toml
-post_upgrade = [
-  { command = "my-reloader", env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }] },
-]
-
-[permissions]
-schema_version = 1
-```
-
-```toml
-post_upgrade = [{
-  script = "refresh.ts",
-  runtime = "bun",
-  env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }],
-}]
-
-[permissions]
-schema_version = 1
-network = [{ scope = "any" }]
-```
-
-For persistent authorization of external hooks and generators, use target-scoped trust.
-Interactive lifecycle confirmation can instead authorize only the current operation:
-
-Inspect the target first, then choose snapshot or development trust.
-Development trust also authorizes future code changes; use it only when you intend that scope.
+External hooks, generators, and artifacts need code authorization. Interactive confirmation can
+authorize the listed code for that operation only, without saving trust. For automation or explicit
+`--run-generators` checks, inspect and grant persistent trust first:
 
 | Operation | Command |
 | --- | --- |
-| Inspect without granting trust | `shine trust inspect app/<CATEGORY>` |
-| Grant snapshot trust | `shine trust grant app/<CATEGORY>` |
-| Trust future changes | `shine trust grant app/<CATEGORY> --development` |
+| Inspect the code and requested capabilities | `shine trust inspect app/<CATEGORY>` |
+| Trust the reviewed category | `shine trust grant app/<CATEGORY>` |
 
-`trust inspect` shows what needs authorization without granting trust. Snapshot trust binds the complete
-effective App category, including helper and data files. Use `--development` only when you intend
-to trust later code edits from the displayed local source. Before granting trust, resolve missing
-environment inputs or Administrator requirements shown by the Plan. If an active overlay's `app/<CATEGORY>/shine.toml` is an old full copy that
-overrides built-in metadata, remove or migrate that metadata file first; overlay payload files such
-as `merge.yaml` and `rules/` remain usable.
+A grant covers all listed code in the category, including its helpers. Changes to that category may
+require a new review. `--development` also trusts future code changes from the displayed local source;
+use it only if you intend that wider authorization. Missing inputs or incompatible metadata must still
+be resolved, and permission declarations do not sandbox the code.
 
-Hooks hide stdout by default. When a preset sets `show_output = true`, successful output is shown
-during installation and refresh; `shine upgrade` reserves successful hook completion and output for
-`--verbose`. A hook failure or permission block is always shown and does not interrupt installation
-or upgrades for other categories.
+For hook declarations and environment inputs, see
+[application artifact runtimes](./custom-presets.md#application-artifact-runtimes).
 
 ## Managed secret files {#managed-secret-files}
 
-App metadata version 3 can install encrypted workspace files and manage their decrypted targets.
-Keep plaintext out of the preset repository. Use the existing workspace version 3 `file_groups`
-mappings and encryption policy; identities remain on the decrypting machine.
+Use an App preset to install encrypted workspace files and manage the decrypted files needed by a
+service. Keep plaintext out of the preset repository and decryption identities on the decrypting
+machine. First prepare the workspace file groups and encryption policy described in
+[Manage environment variables](./environment.md), then declare the selected group in the App preset:
 
 ```toml
 metadata_schema_version = 3
@@ -535,10 +440,8 @@ Uninstall removes unchanged managed secret files and preserves local edits. Turn
 decryption off pauses creation and updates but retains existing ownership. Removing a declaration
 requires `upgrade --prune-stale` to remove an unchanged old target. Destination moves require
 explicitly handling the old installation first. Interrupted writes retain protected recovery state;
-review `shine app recover` before retrying. Do not delete Shine's private secret state or fingerprint
-key, which are required for ownership checks and recovery. If an interruption prevents Shine from
-recording the created file's identity, automatic recovery stops and retains the files for manual
-inspection, even when their content appears unchanged.
+review `shine app recover` before retrying. Do not delete Shine's private secret state or keys. If recovery cannot safely identify a file, it
+retains that file for manual inspection even when its content appears unchanged.
 
 With automatic decryption disabled, use `shine env workspace export --format files` from the
 installed workspace, selecting its mode and file group. Manual export refuses existing files,
@@ -549,7 +452,6 @@ Containers still need runtime plaintext. Configuration installation does not sta
 explicitly recreate containers whose file bind mounts must pick up a replaced password file, and
 stop dependent services before uninstalling their required configuration.
 
-Preset authors must use `metadata_schema_version = 3` for `secret_files`. App writes use manifest
-version 2, including writes for ordinary App files; older clients reject the new format. When using
-these presets over SSH, upgrade both peers first. See [upgrade and downgrade](#upgrade-and-downgrade)
-for compatibility limits.
+Presets using `secret_files` require `metadata_schema_version = 3`. Upgrade both SSH peers before
+using these presets remotely. See [upgrade and downgrade](#upgrade-and-downgrade) before switching
+to an older Shine version.

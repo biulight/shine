@@ -56,15 +56,46 @@ Remove that option from scripts; commands that still contain it fail before load
 
 ## From 2.3.x or earlier: replace HTTP service dependencies {#retire-an-older-local-http-service}
 
-If applications still reference the old Shine HTTP service, switch them to local files before
-upgrading. Replace `SHINE_APP_HTTP_DIR` in scripts; application artifacts can keep persistent
-output in `SHINE_STATE_DIR` or `SHINE_CACHE_DIR`. Upgrading does not remove files in the old
-`http/` directory. After updating references, follow the
-[old service cleanup steps](./system-init.md#retire-legacy-http-service).
+Shine 2.4.0 removed the old HTTP service. If applications such as Surge or Clash Verge still
+reference it, switch them to local files before upgrading. Replace `SHINE_APP_HTTP_DIR` in scripts;
+application artifacts can keep persistent output in `SHINE_STATE_DIR` or `SHINE_CACHE_DIR`.
+
+After updating references and upgrading to 2.4.0 or later, run as the user who installed the service:
+
+```bash
+shine clear serve
+```
+
+This stops the old service and removes its user service registration, even if the old
+configuration can no longer be loaded. Before upgrading, the old binary's
+`shine serve uninstall` can also remove the service.
+
+Upgrading does not remove files in the old `http/` directory. Keep any files you still need and
+update application references before deleting them.
 
 ## From 2.3.x or earlier: environment layering
 
-When upgrading from 2.3.x or earlier, follow the
-[environment-layer migration and rollback steps](./environment.md#manual-upgrade-and-rollback-for-env-layering).
-Update scripts that use env write `--force`, and run
-`shine env explain KEY` in important projects to check which value takes effect after upgrading.
+This release changes value precedence to: built-in defaults < overlay baseline < global `[env]` <
+global env file < project `[env]` < project env file. Older versions ranked overlays and env files
+differently, so effective values can change after upgrading; no automatic migration preserves the
+old result. See the [configuration reference](../reference/configuration.md#environment-value-precedence).
+
+1. Before upgrading, record important projects' value sources and privately back up configuration
+   you will edit. Keep secrets out of public logs.
+2. Replace old env-write `--force` usage: use `--global --env-file` for the global env file,
+   `--project --env-file` for project env files, and `--overlay` for a manual overlay. Edit a
+   Git-managed overlay upstream or use local overrides.
+3. After upgrading, run `shine env list` and `shine env explain KEY` outside projects and in each
+   important project to confirm the effective sources.
+4. Old explicit entries still take precedence, even when they equal a previous default. Delete an
+   entry with `shine env delete` and an explicit layer only when you no longer need it, then check
+   inheritance again. Editing a plaintext key does not stop the matching `KEY_SECRET` from taking
+   precedence.
+5. Run `shine update` to inspect installed configuration, then review and run `shine upgrade`.
+   Editing environment values or upgrading the program does not update installed configuration
+   automatically.
+
+Downgrading Shine restores old precedence, but not deleted values or updated application
+configuration. Restore private backups where needed, checking for later edits before replacing
+files; there is no dedicated env rollback command. Older versions may write defaults again,
+but this does not recover deleted custom values.

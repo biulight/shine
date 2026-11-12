@@ -10,9 +10,17 @@ with GPG or age. Sealed secrets can be injected into local child processes or re
 command through the SSH Secret Broker while decryption remains local. Never put real secrets in a
 public repository or documentation example.
 
-Secret operations live under `shine env secret`. Workspace-based `shine env run` and
-`env run --with` inject values on demand. For remote commands, first choose between direct forwarding
-and brokered on-demand decryption as described below.
+Choose the workflow you need:
+
+- [Set a preset variable](#inspect-and-set-values), such as a proxy address.
+- [Provide values to one command](#provide-values-to-one-command) without changing your terminal.
+- Encrypt secrets with [GPG](#encrypt-values-with-gpg) or [age](#use-age-identities).
+- [Share project environments](#use-layered-project-environments) or [import existing dotenv files](#initialize-a-workspace-from-dotenv).
+- [Use encrypted files during a build](#workspace-secret-files) or [provide secrets remotely](#provide-variables-and-secrets-to-remote-commands).
+
+Keep private identities and unsealed secrets out of version control. Only approve decryption for
+commands you trust; the receiving command and other processes with sufficient permissions can read
+the plaintext.
 
 ## Inspect and set values
 
@@ -34,14 +42,10 @@ The built-in image commands use `IMAGE_QUALITY=80`, `IMAGE_MAX_WIDTH=1920`, and
 `IMAGE_MAX_HEIGHT=1080` by default. Override them for one run with `--quality`, `--width`, or
 `--height`, or keep different machine-local defaults with `shine env set`.
 
-`shine env list` hides sensitive values by default; use `--reveal` only in a trusted terminal.
-It groups effective values by builtin, overlay, global config, global env file, project config,
-and project env file, with actual file paths and the current project root. `env explain KEY` shows
-that storage key's definitions from low to high, its winning layer and description source, hiding
-all values by default. `--reveal` never decrypts. Explicit injection still prefers `KEY_SECRET`
-over `KEY`; explain and write output point out an existing encrypted key.
-Defaults are runtime fallbacks: queries create no configuration. Setting a value equal to a builtin
-still records an explicit entry.
+`shine env list` hides sensitive values; `shine env explain KEY` hides all values and shows which
+file supplies the effective value. Use `--reveal` only in a trusted terminal; it does not decrypt
+secrets. Injection prefers `KEY_SECRET` over `KEY`, so changing a plaintext value may not change
+what a command receives.
 
 If Shine reports invalid TOML, correct the indicated file or field before retrying the edit.
 
@@ -51,11 +55,11 @@ a description:
 ```toml
 [env]
 HTTP_PROXY_PORT = "6152"
-MY_API_TOKEN = { value = "<token>", description = "Token for the internal API" }
+API_URL = { value = "https://api.example.com", description = "API endpoint" }
 ```
 
 `value` behaves exactly like the short string form; `description` appears in `shine env list`.
-Running `shine env set MY_API_TOKEN <new-value>` on a detailed entry updates `value` and preserves the
+Running `shine env set API_URL https://api.example.org` on a detailed entry updates `value` and preserves the
 description.
 
 Write targets depend on options and cwd, independently of the effective source:
@@ -106,10 +110,8 @@ HTTP_PROXY_PORT = "7890"
 PROXY_HOST = { value = "127.0.0.1", description = "Local proxy host" }
 ```
 
-Strings and detailed entries with only `value` inherit lower-layer descriptions. An explicit
-`description` replaces the description; an empty string clears it and disables preset catalog
-fallback. Invalid entries—numbers,
-arrays, or a table without `value`—fail explicitly.
+For accepted value formats, descriptions, and precedence, see the
+[configuration reference](../reference/configuration.md#environment-entry-formats-and-descriptions).
 
 After changing a value used by template rendering, run:
 
@@ -117,34 +119,136 @@ After changing a value used by template rendering, run:
 shine upgrade
 ```
 
-## Manual upgrade and rollback for env layering
+## Provide values to one command
 
-The unified order is builtin defaults < overlay baseline < global `[env]` < global env file <
-project `[env]` < project env file. Previously overlays outranked global env files and every env file
-outranked both `[env]` layers. Upgrading can change values; there is no old-order mode or automatic
-migration.
+Use `--with` to provide values without changing the current terminal or creating workspace files:
 
-1. Before upgrading, record the actual runtime root, important projects, and key sources. Make
-   private backups of files you plan to edit; keep secrets out of repositories and public logs.
-2. Replace old `--force` scripts: use `--global --env-file` for global env files,
-   `--project --env-file` for project env files, and `--overlay` for manual overlays. Maintain managed
-   mirror values upstream or select local overrides.
-3. After upgrading, run `env list` and `env explain KEY` outside projects and in each important
-   project. Projects can select different overlays; one project's result does not describe another.
-4. All historical entries remain explicit, including auto-written entries equal to old defaults.
-   Delete selected entries with explicit targets only after review, then check inheritance again;
-   equality with a default alone is no reason to delete. Only keys without explicit definitions
-   follow new builtin defaults. To inherit overlay values, remove unneeded local or project entries.
-5. Check `KEY_SECRET`: changing or deleting plaintext does not cancel encrypted-first injection.
-   Run `shine update`, review the `shine upgrade` Plan, and apply installed-artifact changes through
-   that existing workflow. Editing config or upgrading the binary never rerenders, runs, or approves
-   presets automatically.
 
-Downgrading the binary restores old precedence, but cannot restore deleted entries or updated
-installed artifacts. Review and restore private backups as needed without overwriting unrelated
-edits; artifact changes still require lifecycle review. There is no env-specific migration or
-recovery command. Old binaries may also resume expanding missing builtin defaults into global
-config; this does not recover deleted custom values.
+| Operation | Command |
+| --- | --- |
+| Inject under the same name | `shine env run --with MY_TOKEN -- bun run build` |
+| Rename for the child process | `shine env run --with MY_TOKEN=API_TOKEN -- bun run build` |
+| Inject multiple variables | `shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build` |
+| Skip workspace loading | `shine env run --no-workspace --with MY_TOKEN -- bun run build` |
+
+Each key prefers `<KEY>_SECRET` and falls back to plaintext `<KEY>`. The name after `=` is the child
+process variable. Explicit `--with` values override the current process and workspace.
+
+`--no-workspace` skips `shine.workspace.toml` discovery completely and merges only the current
+process and explicit `--with` values. It cannot be combined with `--workspace` or `--mode`.
+
+## Choose one-time injection or a transparent wrapper
+
+Use one-time injection for an occasional sensitive operation. For example, Cargo accepts
+`CARGO_REGISTRY_TOKEN` for crates.io when its `cargo:token` credential provider is active, so a yank
+can receive the token without leaving it in the shell or keeping a command wrapper enabled:
+
+```bash
+shine env run --no-workspace \
+  --with CARGO_REGISTRY_TOKEN \
+  -- cargo yank my-crate@1.2.3
+```
+
+`--with CARGO_REGISTRY_TOKEN` prefers encrypted `CARGO_REGISTRY_TOKEN_SECRET` and injects the
+plaintext only into Cargo for this run. Cargo and any descendants it launches can still read the
+value. For ordinary persistent Cargo authentication, Cargo recommends an operating-system
+credential provider; use Shine injection when you intentionally keep the token encrypted in Shine.
+See [Cargo registry authentication](https://doc.rust-lang.org/stable/cargo/reference/registry-authentication.html)
+and [`cargo yank`](https://doc.rust-lang.org/stable/cargo/commands/cargo-yank.html).
+
+### Install a transparent wrapper for fixed credential variables
+
+Use a transparent wrapper when a CLI repeatedly needs the same fixed credential variable. Some
+CLIs, such as GitHub CLI, read a variable like `GH_TOKEN` instead of accepting it as an argument:
+
+```bash
+shine env proxy install gh --with GH_TOKEN
+gh pr list
+```
+
+Shine creates a same-name shim in `~/.shine/bin/` and records the real command found in `PATH`. The
+shim resolves `GH_TOKEN_SECRET` only for its child and falls back to plaintext `GH_TOKEN`. It never
+exports the value back to the parent. `--with` is repeatable and accepts `KEY=ALIAS`.
+
+The wrapper keeps using the Shine configuration directory chosen at installation, even if you
+later change `SHINE_CONFIG_DIR`. Re-run `env proxy install` to use another configuration directory.
+Project rules still follow the directory where you run the command.
+
+An installed proxy is command-wide, not subcommand-specific. If you deliberately proxy Cargo,
+disable injection until it is needed:
+
+```bash
+shine env proxy install cargo --with CARGO_REGISTRY_TOKEN
+shine env proxy disable cargo
+
+# Later, for the credentialed operation:
+shine env proxy enable cargo
+cargo yank my-crate@1.2.3
+shine env proxy disable cargo
+```
+
+While enabled, every Cargo subcommand and any descendant process may inherit the token. Disabling
+the rule retains the shim and forwards directly to the real Cargo without decrypting or injecting
+values. For an occasional yank, prefer the one-time `env run` form above.
+
+Proxy only a command you trust, using a bare name containing ASCII letters, numbers, `-`, `_`, or
+`.`. Put `~/.shine/bin/` early in `PATH`. The target must be an executable outside Shine's command
+directory and cannot be another Shine wrapper or Shine itself.
+
+On Windows, use `gh`, not `gh.exe`: `.exe`, `.com`, `.bat`, `.cmd`, and `.ps1` suffixes are rejected.
+Previously installed suffixed names can still be removed with `shine env proxy uninstall <COMMAND>`.
+
+Shine preserves conflicting files during installation or removal. Inspect reported conflicts before
+retrying. If an operation fails or is interrupted, check the wrapper and configuration before using
+it again; do not assume recovery completed.
+
+Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
+`--project` to scope the rule; a project rule for the same command overrides the global one.
+Outside that project, the shim uses the global rule if present; otherwise it forwards to the real
+command without injecting values:
+
+```bash
+shine env proxy install gh --with GH_TOKEN --project
+shine env proxy list
+```
+
+Disable injection temporarily while retaining the wrapper; the command will run without injected values:
+
+| Operation | Command |
+| --- | --- |
+| Disable the proxy | `shine env proxy disable gh` |
+| Enable the proxy | `shine env proxy enable gh` |
+| Disable the project proxy | `shine env proxy disable gh --project` |
+
+Without `--project`, enable/disable changes the global rule even inside a project. A project rule
+can still override it. If Shine reports that the rule was saved but its effective state could not
+be verified, inspect the configuration and run `shine env proxy list` again.
+
+Remove the managed shim and user-level rule when no longer needed:
+
+```bash
+shine env proxy uninstall gh
+```
+
+If the real executable moves or is replaced, rerun the install command to record its new path.
+
+## Provide variables and secrets to remote commands
+
+Choose according to how widely plaintext may be visible remotely:
+
+| Goal | Local command | Plaintext visibility |
+| --- | --- | --- |
+| Forward a normal value | `shine ssh --with API_URL dev` | Remote login shell or specified command |
+| Decrypt and forward a secret directly | `shine ssh --with-secret API_TOKEN dev` | Remote login shell or specified command |
+| Let an authorized remote child request local decryption | `shine ssh --secret-broker ... dev` | Only the approved remote child process |
+
+Direct secret forwarding suits temporary work on a trusted host, but the remote login shell and
+same-account processes may read the plaintext. Use the SSH Secret Broker when the decryption key
+must stay local and only a selected remote child should receive the value. The remote administrator
+or same-account processes can still inspect that child.
+
+For setup commands, local policies, enrollment, and the complete security boundary, see
+[SSH sessions, secret brokering, and file transfer](./ssh-transfer.md#provide-secrets-to-remote-commands-on-demand).
 
 ## Encrypt values with GPG
 
@@ -166,8 +270,10 @@ shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET
 shine env secret decrypt MY_TOKEN_SECRET
 ```
 
-Encryption needs only recipient public keys. Decryption requires the YubiKey containing the private
-key and may prompt for a PIN or touch.
+Encryption needs only recipient public keys. Decryption needs the corresponding private key.
+If that key is on a YubiKey, connect it and follow any PIN or touch prompts. `decrypt` prints
+plaintext, so run it only in a trusted terminal. Encryption leaves the original plaintext variable
+in place; remove it explicitly when you no longer need it.
 
 Legacy `gpg_key_id` is deprecated. Preview and apply migration with
 `shine state migrate --dry-run` and `shine state migrate`; a workspace using the old
@@ -189,16 +295,15 @@ $exportCode = shine env secret export MY_TOKEN --as API_TOKEN
 if ($LASTEXITCODE -eq 0) { Invoke-Expression $exportCode }
 ```
 
-PowerShell exports preserve Unicode and multiline values, including their original line endings.
-After installing the `utils` shell preset, `shine-env-export MY_TOKEN --as API_TOKEN` is equivalent.
-Values containing NUL cannot be represented in environment variables. `env secret export` rejects
-them; `env get` and `env secret decrypt` can still return the original value.
+After installing the `utils` shell preset, you can also use
+`shine-env-export MY_TOKEN --as API_TOKEN`. Exported values remain available in the current shell;
+use [one-command injection](#provide-values-to-one-command) when only one command needs them.
+Values containing NUL cannot be exported as environment variables.
 
 ## Use age identities
 
-The `age` backend is suitable for committing team ciphertext encrypted to multiple member
-recipients. Existing GPG ciphertext needs no migration: legacy untagged ciphertext continues to use
-GPG, while new age ciphertext has an `age:` tag.
+Use age to encrypt project secrets for one or more recipients. Existing GPG ciphertext remains
+readable without conversion.
 
 First ensure age 1.3 or newer is installed and available on `PATH`. Create a normal software
 identity and record its recipient:
@@ -232,9 +337,9 @@ shine env secret identity init --touch-id
 shine env secret identity list
 ```
 
-`--touch-id` is macOS-only. Decryption requires the local Secure Enclave and prompts for Touch ID or
-the system passcode; copying the identity file to another machine is normally insufficient to
-decrypt. Cancel unexpected authorization prompts and inspect the command that caused them. For the
+`--touch-id` is macOS-only. Decryption requires the original Mac's Secure Enclave and authorization
+under the selected access policy, using Touch ID by default. Copying the identity file to another
+machine is normally insufficient to decrypt. Cancel unexpected authorization prompts and inspect the command that caused them. For the
 security boundary when AI agents can run local commands, see
 [Protect environment secrets when using AI agents](./agent-secret-safety.md#what-touch-id-improves).
 
@@ -252,9 +357,8 @@ age_identity = "~/.shine/age/identity.txt"
 age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 ```
 
-The legacy `age_identity` path and the additional `age_identities` list are merged in order and
-deduplicated. This lets a normal or Secure Enclave identity coexist with hardware-plugin stubs
-without copying either file.
+Use `age_identity` for one identity and `age_identities` for additional identities, including
+hardware-backed ones. Keep these files on the machines that decrypt the secrets.
 
 A project-team recipient list belongs in `[env.encryption]` in the project's
 `shine.workspace.toml`. It can be committed and overrides global defaults without affecting other
@@ -319,92 +423,43 @@ upstream credentials; rotate exposed credentials at their source when necessary.
 
 ### Experiment with phone authorization on Windows and macOS {#experiment-with-phone-authorization-on-windows}
 
-[`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) now offers a limited
-technical Beta for synthetic or disposable data, not real or production secrets. Follow its
-[Beta release notes](https://github.com/biulight/age-plugin-phone/blob/main/docs/releases/v0.1.0-beta.1.md)
-and [Windows Beta quick start](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-beta-quickstart.md)
-for installation, matching desktop/phone artifacts, pairing, and recovery checks. Keep an
-independently verified recovery recipient.
+The [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) integration is experimental.
+Use synthetic or disposable data, not real or production secrets. Keep an independently tested
+recovery recipient that does not depend on the same phone, computer, or plugin state.
 
-Windows requires Windows 11 x64, TPM 2.0, Microsoft Platform Crypto Provider, and a
-capability-qualified Android StrongBox phone. Windows and macOS support Cargo source installation;
-follow the plugin's build prerequisites. The optional Windows ZIP is test-signed: do not import
-its private signing root into a system trust store. macOS has no installer package.
+Install age 1.3+ and matching desktop-plugin and phone-app versions that support tagged recipients.
+Follow the plugin's [Windows quick start](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-beta-quickstart.md)
+or [macOS quick start](https://github.com/biulight/age-plugin-phone/blob/main/docs/macos-quickstart.md)
+for hardware requirements, supported transports, installation, and recovery. Do not import a
+private test-signing root into your system trust store.
 
-Shine also opens the experimental macOS pairing flow. Follow the plugin's
-[macOS source quick start](https://github.com/biulight/age-plugin-phone/blob/main/docs/macos-quickstart.md)
-with a matching Android StrongBox app. It requires real Secure Enclave support in a logged-in
-user session; Intel/T2 and other hardware or OS versions are not generally verified. A compilation
-deployment floor is not a tested minimum supported macOS version. iPhone evidence is limited to
-existing development devices; the Beta does not provide an externally installable iOS app.
-The plugin performs the hardware checks.
+For Wi-Fi pairing, first open **Pair · Wi-Fi** in the phone app, then run:
 
-The Beta's validated transport scope is Android Developer USB and foreground Wi-Fi on the recorded
-devices. QR with tagged recipients, BLE, and background wake are outside that scope. On macOS,
-`auto` can select QR when no Wi-Fi listener responds: keep the phone's Wi-Fi listener ready or
-explicitly use Android ADB for this workflow. Do not restore older plugin replay state to recover
-a failed operation; follow the plugin's recovery instructions.
+```powershell
+shine env secret identity init --phone --label "Work laptop" --transport auto
+```
 
-For example, on a Mac with an authorized Android ADB device:
+`auto` tries Wi-Fi discovery first. Without a responding phone it selects Developer USB/ADB on
+Windows or QR on macOS. For this experimental workflow, keep the Wi-Fi listener ready or select
+Android ADB explicitly; QR with tagged recipients is outside the documented Beta validation scope.
+For USB, run the desktop command first, wait for it to request the phone connection, then choose
+**Pair · USB** on the phone:
 
 ```sh
 shine env secret identity init --phone --label "Work Mac" --transport adb --adb-serial SERIAL
 ```
 
-After installing the matching desktop plugin and Android application, start its transactional
-pairing through Shine:
+Use `--adb-serial` when more than one ADB device is connected. If pairing reports ambiguous devices
+or a discovery error, resolve it before retrying. Do not start another pairing to recover an
+interrupted setup; follow the plugin's `setup --resume` or `setup --cleanup` instructions.
 
-```powershell
-shine env secret identity init --phone --label "NUC WiFi Pair" --transport auto
-```
+After fingerprint confirmation, Shine adds the identity path to the user's global `age_identities`.
+If the current project overrides `age_identity` or `age_identities`, resolve that override before
+pairing. If pairing succeeds but saving configuration fails, use the configuration printed by
+Shine; the pairing remains active.
 
-Before running the command, open the phone's explicit **Pair · Wi-Fi** action if you want to pair
-over the local network. On Windows and macOS, `auto` performs one bounded Wi-Fi discovery first. Exactly one
-matching foreground phone listener selects Wi-Fi; if no listener responds, setup selects Developer
-USB/ADB on Windows or QR on macOS before creating the pairing offer. QR requires a supported
-camera and the plugin's scan flow. Ambiguous discovery or a local discovery error fails
-closed, and an attempt never switches transport after protocol work begins. `auto` is the default,
-so omitting `--transport auto` keeps the same policy.
-
-Developer USB uses the opposite order. Start the desktop command first; after the plugin has
-selected ADB and is waiting for the phone connection, choose **Pair · USB** on the phone. With
-`--transport adb`, ADB is selected directly after preflight. The phone makes one immediate
-connection attempt, so choosing **Pair · USB** before the desktop has armed its reverse rule reports
-`usb_transport_failed`.
-
-The pairing label defaults to the computer name on Windows and macOS, or `Shine desktop` if no
-valid name is available. Explicit labels must be nonblank and at most 64 UTF-8 bytes. Override it, pin Developer USB or QR, or
-select one of multiple ADB devices explicitly when needed:
-
-Choose one pairing method for this device:
-
-```powershell
-shine env secret identity init --phone --label "Work laptop"
-shine env secret identity init --phone --transport adb
-shine env secret identity init --phone --transport qr
-shine env secret identity init --phone --adb-serial SERIAL
-```
-
-After successful fingerprint confirmation, Shine adds the identity path to
-the current user's global `age_identities`. If the active project explicitly overrides
-`age_identity` or `age_identities`, the command stops before pairing instead of creating an identity
-that the project would ignore. A manual configuration has this shape (use the actual absolute
-identity path returned by the plugin on your platform):
-
-```toml
-age_identities = ["/absolute/path/returned/by/plugin/identity.txt"]
-```
-
-If decryption fails only when multiple phone identities are configured, enable diagnostics with
-`AGE_PLUGIN_PHONE_MESSAGES=1` and check whether the plugin needs upgrading. As a temporary
-workaround, configure only the matching identity path; do not delete pairing or recovery state.
-
-The shortcut does not change `secret_backend` and does not add recipients. Interrupted plugin setup
-must be handled with `age-plugin-phone setup --resume` or `age-plugin-phone setup --cleanup` as
-described by the plugin; do not start a second pairing as recovery.
-
-Put the printed `age1tag...` recipient and an independently verified recovery recipient in the
-project's commit-ready `shine.workspace.toml`:
+The command does not change `secret_backend` or add recipients. Put the printed recipient and your
+verified recovery recipient in the project's `shine.workspace.toml`:
 
 ```toml
 [env.encryption]
@@ -412,273 +467,32 @@ backend = "age"
 age_recipients = ["age1tag...", "age1..."]
 ```
 
-Shine requests `--recipient-type tag` by default. This requires age 1.3+ before pairing and a
-desktop plugin and phone app that both support tagged recipients, available starting with
-`0.1.0-beta.1`. The older `alpha.5` release does not include this capability. Shine does not retry setup or fall
-back to another recipient type. `age1tag...` encryption needs only age 1.3+ on the
-encrypting computer, with no phone plugin or phone prompt. Pairing and phone decryption still need
-the plugin and matching phone app.
+The default tagged recipient allows encryption with age 1.3+ without a phone plugin or prompt on
+the encrypting machine. Decryption still requires the plugin, matching phone app, and fresh biometric
+authorization on the phone. Someone who knows the tagged recipient can test whether a ciphertext targets it.
+If you need the plugin's `age1phone...` format, use
+`shine env secret identity init --phone --recipient-type phone`; that format requires the plugin
+on every encrypting machine too.
 
-To retain the plugin's phone recipient format, explicitly select:
-
-```powershell
-shine env secret identity init --phone --recipient-type phone
-```
-
-`age1phone...` encryption still requires `age-plugin-phone` on every encrypting computer.
-The plugin's own default remains `phone`; Shine explicitly requests its chosen type.
-Unlike phone v2's private recipient selection, a tagged recipient lets someone who knows the
-recipient test whether a ciphertext targets it.
-
-For an existing pairing, first upgrade and verify the desktop plugin and phone app's tag support,
-then export its public tag recipient without pairing again:
+For an existing pairing, verify tag support in the desktop plugin and phone app, then export its
+public tagged recipient without pairing again:
 
 ```powershell
 age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag
 ```
 
-Replace the corresponding recipient in global/project `age_recipients` or workspace
-`[env.encryption].age_recipients`, retaining the independently verified recovery recipient, then
-reseal. `shine state migrate` does not convert phone recipients. Export does not rewrite the stub
-or existing ciphertext; `identity list` continues to show the recipient recorded in the stub.
-Resealing an existing payload first decrypts it and may require phone authorization; see
-[Add recipients to existing workspace secrets](#add-recipients-to-existing-workspace-secrets).
-Changing recipients does not revoke access to historical ciphertext. For later
-Wi-Fi-first decrypts with an `auto` pairing, enable **Wi-Fi auto-listen** and keep the phone app in
-the foreground. The plugin discovers the matching listener before creating the unwrap request and
-otherwise selects Developer USB/ADB on Windows or QR on macOS; it does not race routes or retry in flight.
-Decrypting a phone-backed secret, including through `shine env run`, invokes the standard age
-plugin and must require a fresh strong biometric authorization for each file-key unwrap. Developer
-USB and Wi-Fi plugin guidance is quiet by default; set `AGE_PLUGIN_PHONE_MESSAGES=1` to opt into it.
-Explicit QR requests remain visible because the phone must scan them. Never make the experimental phone recipient the only recipient for retained data; the
-recovery path must not depend on the same phone StrongBox keys, desktop TPM/Secure Enclave keys, or plugin state.
+Replace the corresponding recipient in your configuration, retain the recovery recipient, and
+[reseal the workspace secrets](#add-recipients-to-existing-workspace-secrets). Exporting the
+recipient alone does not update existing ciphertext; `shine state migrate` does not convert phone
+recipients. Resealing may require phone authorization and does not revoke access to old ciphertext.
 
-If AI agents participate in development, read
-[Protect environment secrets when using AI agents](./agent-secret-safety.md) first to understand
-the boundaries around identity files, Touch ID, phone authorization prompts, and command execution.
+For later Wi-Fi decryption, enable **Wi-Fi auto-listen** and keep the phone app in the foreground.
+Set `AGE_PLUGIN_PHONE_MESSAGES=1` when you need plugin guidance. If multiple configured phone
+identities cause decryption to fail, check for a plugin update or temporarily select only the
+matching identity; keep pairing and recovery state intact.
 
-## Provide values to one command
-
-Use repeatable `--with` without changing the current terminal or creating workspace files:
-
-Choose one injection method:
-
-| Operation | Command |
-| --- | --- |
-| Inject under the same name | `shine env run --with MY_TOKEN -- bun run build` |
-| Rename for the child process | `shine env run --with MY_TOKEN=API_TOKEN -- bun run build` |
-| Inject multiple variables | `shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build` |
-| Skip workspace loading | `shine env run --no-workspace --with MY_TOKEN -- bun run build` |
-
-Each key prefers `<KEY>_SECRET` and falls back to plaintext `<KEY>`. The name after `=` is the child
-process variable. Explicit `--with` values override the current process and workspace.
-
-`--no-workspace` skips `shine.workspace.toml` discovery completely and merges only the current
-process and explicit `--with` values. It cannot be combined with `--workspace` or `--mode`. Managed
-Bun entries use this mode when they need fixed Shine configuration independent of the working
-directory.
-
-## Choose one-time injection or a transparent wrapper
-
-Use one-time injection for an occasional sensitive operation. For example, Cargo accepts
-`CARGO_REGISTRY_TOKEN` for crates.io when its `cargo:token` credential provider is active, so a yank
-can receive the token without leaving it in the shell or keeping a command wrapper enabled:
-
-```bash
-shine env run --no-workspace \
-  --with CARGO_REGISTRY_TOKEN \
-  -- cargo yank my-crate@1.2.3
-```
-
-`--with CARGO_REGISTRY_TOKEN` prefers encrypted `CARGO_REGISTRY_TOKEN_SECRET` and injects the
-plaintext only into Cargo for this run. Cargo and any descendants it launches can still read the
-value. For ordinary persistent Cargo authentication, Cargo recommends an operating-system
-credential provider; use Shine injection when you intentionally keep the token encrypted in Shine.
-See [Cargo registry authentication](https://doc.rust-lang.org/stable/cargo/reference/registry-authentication.html)
-and [`cargo yank`](https://doc.rust-lang.org/stable/cargo/commands/cargo-yank.html).
-
-### Install a transparent wrapper for fixed credential variables
-
-Use a transparent wrapper when a CLI repeatedly needs the same fixed credential variable. Some
-CLIs, such as GitHub CLI, read a variable like `GH_TOKEN` instead of accepting it as an argument:
-
-```bash
-shine env proxy install gh --with GH_TOKEN
-gh pr list
-```
-
-Shine creates a same-name shim in `~/.shine/bin/` and records the real command found in `PATH`. The
-shim resolves `GH_TOKEN_SECRET` only for its child and falls back to plaintext `GH_TOKEN`. It never
-exports the value back to the parent. `--with` is repeatable and accepts `KEY=ALIAS`.
-
-The proxy forwards child stdout/stderr and preserves its numeric exit code. On Unix, termination
-by a signal returns `128 + signal` (for example, SIGTERM returns 143), including when injection is
-disabled or no rule applies.
-
-The shim retains the absolute runtime directory selected during installation, including a custom
-`--config-dir`. Later calls use that directory even when the caller's `SHINE_CONFIG_DIR` differs.
-Project rules still follow the caller's working directory. Re-run `env proxy install` to update an
-older shim or move it to another runtime directory.
-Proxy installation requires UTF-8 configuration and executable paths.
-
-An installed proxy is command-wide, not subcommand-specific. If you deliberately proxy Cargo,
-disable injection until it is needed:
-
-```bash
-shine env proxy install cargo --with CARGO_REGISTRY_TOKEN
-shine env proxy disable cargo
-
-# Later, for the credentialed operation:
-shine env proxy enable cargo
-cargo yank my-crate@1.2.3
-shine env proxy disable cargo
-```
-
-While enabled, every Cargo subcommand and any descendant process may inherit the token. Disabling
-the rule retains the shim and forwards directly to the real Cargo without decrypting or injecting
-values. For an occasional yank, prefer the one-time `env run` form above.
-
-Proxy only a command you trust, using a bare name containing ASCII letters, numbers, `-`, `_`, or
-`.`. Put `~/.shine/bin/` early in `PATH`. The target must be an executable outside Shine's command
-directory and cannot be another Shine wrapper or Shine itself.
-
-On Windows, use `gh`, not `gh.exe`: `.exe`, `.com`, `.bat`, `.cmd`, and `.ps1` suffixes are rejected.
-Previously installed suffixed names can still be removed with `shine env proxy uninstall <COMMAND>`.
-
-Shine preserves conflicting files during installation or removal. Inspect reported conflicts before
-retrying. If an operation fails or is interrupted, check the wrapper and configuration before using
-it again; do not assume recovery completed.
-
-Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
-`--project` to scope the rule; a project rule for the same command overrides the global one.
-Outside that project, the shim uses the global rule if present; otherwise it forwards to the real
-command without injecting values:
-
-```bash
-shine env proxy install gh --with GH_TOKEN --project
-shine env proxy list
-```
-
-Disable injection temporarily while retaining the shim; the disabled wrapper directly forwards to
-the real program:
-
-Choose the state and scope you need:
-
-| Operation | Command |
-| --- | --- |
-| Disable the proxy | `shine env proxy disable gh` |
-| Enable the proxy | `shine env proxy enable gh` |
-| Disable the project proxy | `shine env proxy disable gh --project` |
-
-Without `--project`, enable/disable changes the global rule even inside a project. A project rule
-can still override it. If Shine reports that the rule was saved but its effective state could not
-be verified, inspect the configuration and run `shine env proxy list` again.
-
-Remove the managed shim and user-level rule when no longer needed:
-
-```bash
-shine env proxy uninstall gh
-```
-
-If the real executable moves or is replaced, rerun the install command to record its new path.
-
-## Provide variables and secrets to remote commands
-
-Choose according to how widely plaintext may be visible remotely:
-
-| Goal | Local command | Plaintext visibility |
-| --- | --- | --- |
-| Forward a normal value | `shine ssh --with API_URL dev` | Remote login shell or specified command |
-| Decrypt and forward a secret directly | `shine ssh --with-secret API_TOKEN dev` | Remote login shell or specified command |
-| Let an authorized remote child request local decryption | `shine ssh --secret-broker ... dev` | Only the approved remote child process |
-
-Direct secret forwarding suits temporary work on a trusted host, but the remote login shell and
-same-account processes may read the plaintext. Use the SSH Secret Broker when the decryption key
-must stay local and only a selected remote child should receive the value. The remote administrator
-or same-account processes can still inspect that child.
-
-For setup commands, local policies, enrollment, and the complete security boundary, see
-[SSH sessions, secret brokering, and file transfer](./ssh-transfer.md#provide-secrets-to-remote-commands-on-demand).
-
-## Initialize a workspace from dotenv
-
-At a project root with Vite-style `.env` files, generate a Shine workspace and TOML sources:
-
-| Operation | Command |
-| --- | --- |
-| Preview importing dotenv files | `shine env workspace init --from-dotenv --dry-run` |
-| Apply the reviewed import | `shine env workspace init --from-dotenv` |
-
-The command reads `.env`, `.env.local`, `.env.<mode>`, and `.env.<mode>.local`, discovers modes, and
-preserves that precedence. Source dotenv files are unchanged. Existing targets are not overwritten
-unless you add `--force`, including dangling symbolic links and files created by a concurrent
-import. Import selected modes with repeatable `--mode`:
-
-```bash
-shine env workspace init --from-dotenv --mode development --mode production
-```
-
-`--dry-run` previews the import without creating or replacing files.
-
-Mark known sensitive keys for `[secret]`, then configure recipients and seal. Unmarked values are
-imported as plaintext; never accidentally commit credentials as ordinary configuration.
-Imported secrets also remain plaintext until sealing. On Unix, generated workspace and source
-files use owner-only `0600` permissions, including replacements with `--force`.
-
-```bash
-shine env workspace init --from-dotenv --secret DATABASE_URL
-shine env secret seal
-```
-
-To preserve dotenv semantics, values containing `$` (including `$BASE_URL` and `${BASE_URL}`) or
-escaped double-quoted content are rejected, even inside quotes. Resolve interpolation before
-importing; keep literal dollar signs in a manually authored Shine source instead. Single-line
-backtick-quoted values preserve literal hashes, quotes, backslashes, and whitespace. Multiline
-quoted values are rejected. An unquoted `#`
-starts a comment; quote values that contain a literal `#`. The generated file
-includes a documented empty `[secret]` table even when no `--secret` is selected.
-
-## Export a workspace to dotenv
-
-Export one fully resolved mode when another tool needs a conventional dotenv file, or when you want
-to stop using Shine env:
-
-```bash
-shine env workspace export \
-  --format dotenv \
-  --mode production \
-  --output .env.production.local
-```
-
-`--format` is required so the export contract remains explicit. The command merges the workspace
-sources in their declared order, but does not include inherited process variables or `--with`
-values. By default it exports only winning `[plain]` entries and does not decrypt payloads. If a
-later secret declaration shadows an earlier plain value, that old plain value is omitted.
-
-Include sealed secrets only when the destination really needs a complete runnable environment:
-
-```bash
-shine env workspace export \
-  --format dotenv \
-  --mode production \
-  --output .env.production.local \
-  --include-secrets
-```
-
-This writes plaintext secrets. Keep the output out of version control; on Unix, it is readable
-only by its owner. Existing destinations are preserved unless you add `--force` to replace them.
-`--dry-run` previews the destination and non-secret variables without printing values, decrypting
-secrets, or writing files, even when `--include-secrets` is present.
-
-The exported file has no Shine metadata or runtime dependency. To leave Shine env, export and test
-each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and
-only then archive or delete `shine.workspace.toml` and its `*.shine.toml` sources yourself. Export
-never deletes those source files.
-
-Export preserves literal backslashes, quotes, and newlines using dotenv quoting. Values containing
-`$`, carriage returns, NUL bytes, or no safe quote delimiter are rejected before writing or replacing
-the output. For those values, continue using `shine env run`, or prepare an output specifically for
-your target tool. Always test the exported file with that tool before switching over.
+If AI agents can run commands on your machine, read
+[Protect environment secrets when using AI agents](./agent-secret-safety.md) before use.
 
 ## Use layered project environments
 
@@ -715,17 +529,14 @@ version = 1
 VITE_APP_NAME = "Example App"
 
 [secret]
-DATABASE_URL = true
+DATABASE_URL = false
 API_TOKEN = false
-SENTRY_TOKEN = "<value to seal>"
-
-[payload]
-data = "<GPG ciphertext managed by Shine>"
 ```
 
-- `true` keeps an existing value in the encrypted payload.
-- `false` prompts safely during the next `seal`.
-- A string is replaced by `true` after sealing so plaintext does not remain in the file.
+`false` prompts for a value when you seal the file. Shine encrypts it, changes the entry to `true`,
+and saves the ciphertext; do not create `[payload]` yourself. Existing `true` entries retain their
+values when resealed. You can also supply a string to seal, but it remains plaintext until sealing
+and must not be committed.
 
 Seal pending values and start a command with the merged environment:
 
@@ -752,7 +563,82 @@ Never commit a source containing unsealed strings. Before committing, inspect `[
 every sealed entry is `true`. See the [configuration reference](../reference/configuration.md) for
 file formats and precedence.
 
-## Share a payload across GPG and age members
+## Initialize a workspace from dotenv
+
+At a project root with Vite-style `.env` files, generate a Shine workspace and TOML sources:
+
+| Operation | Command |
+| --- | --- |
+| Preview importing dotenv files | `shine env workspace init --from-dotenv --dry-run` |
+| Apply the reviewed import | `shine env workspace init --from-dotenv` |
+
+The command reads `.env`, `.env.local`, `.env.<mode>`, and `.env.<mode>.local`, discovers modes, and
+preserves that precedence. Source dotenv files are unchanged. Existing targets are preserved unless you add `--force`. Import selected modes with repeatable `--mode`:
+
+```bash
+shine env workspace init --from-dotenv --mode development --mode production
+```
+
+`--dry-run` previews the import without creating or replacing files.
+
+Mark known sensitive keys for `[secret]`, then configure recipients and seal. Unmarked values are
+imported as plaintext; never accidentally commit credentials as ordinary configuration.
+Imported secrets also remain plaintext until sealing. On Unix, generated workspace and source files are accessible only to their owner.
+
+```bash
+shine env workspace init --from-dotenv --secret DATABASE_URL
+shine env secret seal
+```
+
+To preserve dotenv semantics, values containing `$` (including `$BASE_URL` and `${BASE_URL}`) or
+escaped double-quoted content are rejected, even inside quotes. Resolve interpolation before
+importing; keep literal dollar signs in a manually authored Shine source instead. Single-line
+backtick-quoted values preserve literal hashes, quotes, backslashes, and whitespace. Multiline
+quoted values are rejected. An unquoted `#`
+starts a comment; quote values that contain a literal `#`.
+
+## Export a workspace to dotenv
+
+Export one fully resolved mode when another tool needs a conventional dotenv file, or when you want
+to stop using Shine env:
+
+```bash
+shine env workspace export \
+  --format dotenv \
+  --mode production \
+  --output .env.production.local
+```
+
+`--format` is required. Export includes the selected workspace mode, without current process
+variables or `--with` values. By default it exports only winning `[plain]` entries and does not decrypt payloads. If a
+later secret declaration shadows an earlier plain value, that old plain value is omitted.
+
+Include sealed secrets only when the destination really needs a complete runnable environment:
+
+```bash
+shine env workspace export \
+  --format dotenv \
+  --mode production \
+  --output .env.production.local \
+  --include-secrets
+```
+
+This writes plaintext secrets. Keep the output out of version control; on Unix, it is readable
+only by its owner. Existing destinations are preserved unless you add `--force` to replace them.
+`--dry-run` previews the destination and non-secret variables without printing values, decrypting
+secrets, or writing files, even when `--include-secrets` is present.
+
+The exported file has no Shine metadata or runtime dependency. To leave Shine env, export and test
+each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and
+only then archive or delete `shine.workspace.toml` and its `*.shine.toml` sources yourself. Export
+never deletes those source files.
+
+Export preserves literal backslashes, quotes, and newlines using dotenv quoting. Values containing
+`$`, carriage returns, NUL bytes, or no safe quote delimiter are rejected before writing or replacing
+the output. For those values, continue using `shine env run`, or prepare an output specifically for
+your target tool. Always test the exported file with that tool before switching over.
+
+## Share secrets with GPG and age users {#share-a-payload-across-gpg-and-age-members}
 
 Before converting a workspace from Shine 2.0.x, upgrade all readers, including the local SSH
 broker machine, to a release supporting hybrid encryption. Older readers cannot read `hybrid:`
@@ -767,24 +653,15 @@ gpg_recipients = ["<full 40-hex primary fingerprint>"]
 age_recipients = ["age1..."]
 ```
 
-Run `shine env secret seal --workspace shine.workspace.toml`. Reading old ciphertext
-requires its own identity; resealing requires both encryption tools and complete public
-lists. Either group independently reads the same data ciphertext. Hybrid GPG wrapping
-excludes local option files and implicit extra recipients; groups and fuzzy user IDs
-are rejected before existing secrets are decrypted.
+Run `shine env secret seal --workspace shine.workspace.toml` on a machine that can decrypt the
+existing secrets and has both encryption tools. Either recipient group can then decrypt the shared
+secrets independently. Use full primary-key fingerprints for GPG recipients; groups and partial
+names are not accepted, and implicit recipients from local GPG settings are not included.
 
-Shine may cache the merged environment in encrypted form, but does not save an unlocked session.
-Backend authorization still applies each time. If decryption fails or you cancel authorization,
-the command stops.
-
-Changes to workspace inputs invalidate the cached environment. Older cache versions are
-rebuilt from the sources, which may require authorizing each source again on the first run
-after upgrading; existing encrypted source files do not need to be resealed.
-
-Hybrid key decryption suppresses backend diagnostics by default. Phone QR prompts and explicitly
-enabled phone messages remain visible as they arrive. Diagnostic output is limited to 64 KiB per
-key decryption, including these interactive messages; exceeding the limit stops the operation
-without trying another backend.
+Each use still follows the selected backend's authorization requirements. If decryption fails or
+you cancel, the command stops instead of trying another backend. After upgrading or changing
+workspace inputs, the first run may ask you to authorize more source files; you do not need to
+reseal existing sources just for that reason.
 
 For a personal project preference, create `shine.config.local.toml` alongside the
 selected `shine.workspace.toml` (also when using `--workspace`):
@@ -793,14 +670,10 @@ selected `shine.workspace.toml` (also when using `--workspace`):
 hybrid_decrypt_backend = "age"
 ```
 
-Add `/shine.config.local.toml` to that project's `.gitignore`. Local `env run`,
-`env secret seal`, and `env workspace export` use this preference. An absent file
-or field inherits global `config.toml`; without either preference, existing
-capability checks and interactive selection apply. Invalid configuration fails
-explicitly. The file currently accepts only `hybrid_decrypt_backend = "gpg" | "age"`.
-It is trusted local project configuration, so a program able to edit it can change
-the chosen authorization path. SSH broker requests do not load or transmit this file;
-the decrypting broker machine retains its own configured choice and release checks.
+The value can be `gpg` or `age`. Add `/shine.config.local.toml` to the project's `.gitignore`.
+Local run, seal, and export commands use it; otherwise they use the global preference or ask you
+to choose an available backend. A program that can edit this file can change which authorization
+method is used. SSH broker requests use the decrypting machine's own choice.
 
 Seal regular source files, not symbolic links or, on Unix, files with multiple hard links.
 Do not edit workspace or source files while sealing, including while approving hardware prompts.
@@ -814,10 +687,8 @@ Before enabling temporary secret files, upgrade all clients reading the same wor
 Shine 2.5 or later.
 
 Use workspace version 3 to keep signing keystores, password files, and service credentials encrypted
-in Git. A file group is a named collection of mappings, not a directory. Each mapping declares a
-ciphertext `source` and a plaintext `target`; one group may span several directories, and repeatable
-`--file-group` selects multiple groups. Application code reads ordinary files and does not need a
-Shine API. Only the wrapped build workflow requires the Shine CLI.
+in Git. Organize the files into named groups: `source` is the encrypted file and `target` is where
+ordinary tools will read its decrypted contents. Select one or more groups with `--file-group`.
 
 Replace the recipient placeholder with a real public recipient. Identities stay outside the repository:
 
@@ -845,79 +716,83 @@ source = ".secrets/{mode}/service-account.json.enc"
 target = "app/.credentials/service-account.json"
 ```
 
-Both paths are relative to the workspace directory and support `{mode}`. `--mode` overrides
-`env.default_mode`; the selected mode must be declared in `env.modes` or `env.default_mode`.
-Missing files fail without falling back to another environment. All modes use the same mapping
-list. Version 2 workspaces remain supported; older clients reject version 3. A version 3 workspace
-with file groups may omit `env.files`; such a workspace requires `--file-group` for `env run`.
+Paths are relative to the workspace directory. `{mode}` uses `--mode`, or `env.default_mode` when
+omitted; the mode must be declared in the workspace. Missing files stop the operation rather than
+falling back to another environment. If a workspace has only file groups and no `env.files`,
+`env run` requires an explicit `--file-group`.
 
-Ignore all plaintext targets before use in a Git repository, for example `.android-signing/` and
-`app/.credentials/`. Tracked or non-ignored targets are rejected, including case or Unicode
-aliases of tracked paths whose working files are missing. Shine does not edit `.gitignore`.
-Checks use each target's own repository, including nested repositories. Git inspection failures
-stop the operation before plaintext is released.
-File groups also work outside Git repositories, including directories on separate filesystems.
-Use the following commands after preparing the plaintext files:
+### Prepare and seal the files
+
+In a Git repository, add every plaintext target to `.gitignore` before use, for example
+`.android-signing/` and `app/.credentials/`. Targets must be untracked and ignored in their own
+repository, including nested repositories. Shine does not edit `.gitignore`; resolve Git inspection
+errors before continuing. File groups also work outside Git repositories.
+
+After preparing the plaintext target files, preview and seal them:
 
 ```bash
 shine env secret seal --mode production --file-group android-signing --file-group service-account --dry-run
 shine env secret seal --mode production --file-group android-signing --file-group service-account --remove-plaintext
+```
+
+Sealing reads each `target` and writes its encrypted `source` using the workspace's encryption
+settings. It keeps plaintext unless you add `--remove-plaintext`. That option needs a usable
+decryption identity and verifies all written ciphertext before deletion; verification failure or
+cancellation before deletion preserves all original plaintext. A later write or deletion failure
+can leave partial results, so inspect the reported files before retrying. Sealing file groups
+requires plaintext targets, including when changing recipients.
+
+### Run a command with temporary files
+
+```bash
 shine env run --mode production --file-group android-signing --file-group service-account -- pnpm android:build
 ```
 
-`seal --file-group` reads `target` and creates or updates `source`. It reuses existing GPG, age,
-and hybrid policies, including CLI overrides and hybrid recipient restrictions. By default it retains
-plaintext. `--remove-plaintext` decrypts and compares every written ciphertext before starting
-plaintext deletion, so it needs a usable identity and may prompt for authorization. Verification or
-cancellation before deletion retains all original plaintext. If writing or deleting several files fails partway through, earlier changes remain;
-inspect the reported completed and remaining files. There is no ciphertext-only
-recipient rotation workflow in this first version.
+Shine decrypts all selected files before starting the command and refuses to overwrite existing
+targets. When the command ends or is interrupted normally, Shine attempts to remove the files it
+created. Files replaced during the run are preserved and reported; inspect cleanup warnings for
+plaintext left behind.
 
-To keep decrypted files for ordinary tools without wrapping each command in Shine, export the
-selected groups to their configured `target` paths:
+Do not start detached tasks that need the files after the command ends; remaining managed child
+processes are terminated. Changes to decrypted files are not automatically encrypted back into
+the repository.
+
+### Keep decrypted files for other tools
+
+To use ordinary tools without wrapping each command, export the selected groups:
 
 ```bash
 shine env workspace export --format files --mode production --file-group android-signing --file-group service-account --dry-run
 shine env workspace export --format files --mode production --file-group android-signing --file-group service-account
 ```
 
-`--mode` is required. This exports only the selected groups; it does not export environment variables.
-All files must decrypt successfully before target creation starts. Existing targets are always
-rejected, including during concurrent writes; inspect and move them before retrying. There is no
-`--force`, `--output`, or `--include-secrets` option for the `files` format. Workspace and ciphertext
-files remain unchanged. The same path, Git exclusion, size, and private-permission requirements apply.
+`--mode` is required. This exports files to their configured targets, not environment variables.
+All selected files must decrypt before writing starts. Existing targets are preserved: inspect
+and move them before retrying. The `files` format has no `--force`, `--output`, or
+`--include-secrets` option. Workspace configuration and encrypted sources stay unchanged.
 
-Successful exports remain on disk until you manage or remove them yourself. `env run --file-group`
-will refuse these existing targets and will not clean them up. If export fails or is interrupted,
-Shine attempts to remove files and empty directories created by that export, preserves replacements,
-and reports cleanup failures and possible leftovers. An interrupted export can leave some files behind, especially after force-killing Shine or losing power. Do not commit the plaintext.
+Successful exports remain on disk until you remove them. `env run --file-group` refuses those
+existing targets and will not clean them up. If export fails or is interrupted, Shine attempts to
+remove files and empty directories created by that export, preserves replacements, and reports
+possible leftovers. Check these warnings before retrying. Never commit the plaintext.
 
-`env run --file-group` starts the command only after all selected files are decrypted and ready.
-It never overwrites existing targets. After the command ends or is interrupted normally, Shine
-attempts to remove the files it created; files replaced during the run are preserved and reported.
-Inspect any cleanup warnings for plaintext left behind.
+### Limits and precautions
 
-Temporary files are restricted to the current user. Windows requires a filesystem supporting
-private user permissions. Command output remains available for piping, and failures are reported.
-Do not start detached background tasks that need these files after the command ends; remaining
-managed child processes are terminated.
-
-`--dry-run` inspects configuration and metadata only: it does not read plaintext, decrypt, write
-files, or execute the command. It cannot verify ciphertext integrity or private-key availability.
-`--file-group` conflicts with `seal <FILE>`. For `env run`, it also conflicts with `--no-workspace` and `--secret-broker`; persistent file export supports `--secret-broker`.
-Plain `seal` and `env run` do not implicitly select file groups.
-
-Paths must stay inside the workspace; absolute paths, traversal, symbolic links/reparse points,
-hard links, and overlapping mappings are rejected. Mappings cannot overlap the workspace definition,
-including names that differ only in case or Unicode normalization. These aliases are conservatively
-rejected across platforms.
-Each plaintext file is limited to 16 MiB, with 64 MiB per invocation. Encoded ciphertext is limited to 32 MiB per file and 128 MiB per invocation. File ciphertext uses
-Shine's existing tagged storage encoding, not a native `.age` or `.gpg` file.
-
-The child and other processes with sufficient local permissions can read the temporary plaintext.
-Force-killing Shine or losing power can leave files behind: inspect existing targets manually before
-retrying. Removing files is not secure erasure. Builds never automatically encrypt modified targets
-back into the repository. Removing a recipient does not revoke access to ciphertext in Git history.
+- Plaintext files are accessible only to the current user; Windows requires a filesystem that
+  supports these private permissions. The command and other processes with sufficient local
+  permissions can still read them.
+- Paths must remain inside the workspace. Links, overlapping mappings, and mappings that conflict
+  with the workspace definition are rejected. Use distinct paths for every source and target.
+- A plaintext file can be at most 16 MiB, with 64 MiB total per invocation. Encrypted files are
+  limited to 32 MiB each and 128 MiB total. Use Shine to read these encrypted files; they are not
+  native `.age` or `.gpg` files.
+- `--dry-run` checks configuration and metadata without reading plaintext, decrypting, writing,
+  or starting commands. It cannot verify ciphertext integrity or private-key availability.
+- Select groups explicitly. `--file-group` cannot accompany `seal <FILE>`, or `env run` with
+  `--no-workspace` or `--secret-broker`. Persistent file export supports `--secret-broker` below.
+- Force-killing Shine or losing power can leave plaintext behind. Inspect targets before retrying.
+  Deleting files is not secure erasure, and removing a recipient does not revoke access to old
+  ciphertext in Git history.
 
 ### Export through the SSH broker
 
@@ -927,3 +802,8 @@ file groups and a matching file policy; it is unavailable for dotenv export. Wit
 manual export continues to use the executing machine's backend. See
 [SSH file authorization](ssh-transfer.md#file-secret-broker) and
 [automatic App secret installation](app-presets.md#managed-secret-files).
+
+## Manual upgrade and rollback for env layering
+
+When upgrading from 2.3.x or earlier, follow [Upgrades and migration](./upgrading.md#from-23x-or-earlier-environment-layering)
+to check value precedence, update scripts, and prepare for rollback.

@@ -8,9 +8,7 @@ sidebar_position: 1
 本页适用于 Shine 2.10.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
 请阅读对应指南；本页只提供便于查找的命令索引。
 
-命令失败信息写入 stderr。stderr 支持颜色时，顶层 `Error:` 摘要使用红色加粗，`Caused by:`
-标题加粗，诊断详情保持默认文字颜色。设置 `NO_COLOR=1` 可禁用颜色；重定向 stderr 时默认输出
-纯文本，除非显式强制启用颜色。
+命令失败信息写入 stderr。设置 `NO_COLOR=1` 可禁用彩色输出。
 
 ## 目标名称
 
@@ -63,19 +61,13 @@ shine upgrade app/starship
 名称放在其后，例如 `shine app uninstall --dry-run -- -demo`。
 终端建议的命令在 Unix 上使用 POSIX shell 语法，在 Windows 上使用 PowerShell 语法。
 
-普通内置 Shell 安装使用 Source / Commands / Changes / Backup 摘要，添加 `--verbose` 可展开。
-需要非敏感环境变量时，Environment 行会列出变量名；涉及敏感变量时仍使用展开审阅。
-需要额外审阅的操作仍保留详细信息。
+确认变更前，请审阅受影响的文件、权限、代码来源和执行步骤。添加 `--verbose` 查看详情；
+升级时可同时添加 `--full-plan`，包括未变化的项目。审阅后相关文件或设置发生变化时，
+请重新审阅计划。
 
-应用变更前，请审阅 Plan 中受影响的文件、计划影响、代码来源和执行时机。内置代码显示发行版
-信任；外部代码保留信任状态及所需确认。缺失声明、管理员权限和阻断诊断仍会显示。
-
-使用 `--verbose` 查看完整权限、作者能力说明、路径和诊断详情。默认视图省略通用脚本执行
-免责声明和抽象的无限制代码权限项，信任与审批检查保持不变。升级时可同时添加 `--full-plan`
-和 `--verbose`，包含未变化的项目。审阅后相关文件或设置发生变化时，需要重新审阅 Plan。
-
-交互确认可仅授权本次使用外部代码，不保存长期信任。自动化与 `--yes` 必须已有匹配的信任授权。
-预设脚本未被沙箱隔离。
+交互确认可以仅授权本次列出的外部代码，不保存长期信任。通过自动化或 `--yes` 执行外部代码时，
+必须已有信任授权。
+`--yes` 只跳过提示，不跳过权限和执行检查，也不能与 `--dry-run` 同时使用。预设脚本没有沙箱隔离。
 
 ## Shell 预设
 
@@ -94,7 +86,6 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
 - `shell list` 展示当前可用预设，包括 overlay 新增的命令和覆盖后的描述。
 - `--replace-managed` 可能覆盖安装后被修改的受管内容，请先运行 `shine info <TARGET> --diff`。
 - 如果 Shine 报告操作曾被中断，请运行 `shine shell recover`。发生过变化的文件会保留，可能需要人工处理。
-
 - Shell 卸载遇到归属冲突时，会列出未删除的启动器路径。Shell 没有 `--force` 覆盖选项；
   请先检查这些文件，再决定是否移动或删除。冲突文件可能在安装记录清理后仍保留，输出会明确说明。
 
@@ -114,8 +105,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 ```
 
 - `app info` 和 `update` 只有在传入 `--run-generators` 时才会运行生成器。
-- `app refresh` 显式刷新生成文件；`--force` 允许替换用户修改过的受管目标。安装收据必须属于
-  该类别下的同一个源文件；`--force` 不能刷新由其他来源管理的目标。
+- `app refresh` 显式刷新生成文件；`--force` 允许替换用户修改过的受管目标。目标必须已由
+  该类别下的同一个源文件管理；`--force` 不能接管其他来源的目标。
   汇总会区分 `user-modified (kept)`（用户修改已保留）和执行失败；两者都会使刷新结果为未完成，
   并返回非零退出码，其他选中的文件仍可能刷新成功。
 - `app uninstall --force` 可能删除用户修改过的受管内容，务必先使用 `--dry-run` 预览。
@@ -157,46 +148,42 @@ shine completions <bash|zsh|powershell>
 `info` 查看文件但不修复它们。`state migrate --dry-run` 预览受支持的旧状态迁移；
 如果配置校验失败，请修正提示的文件后重试。
 
-版本检查失败时，`update` 仍会报告配置更新。恢复连接后，可用 `--refresh-release` 重试版本检查。
+版本检查失败时，`update` 仍会报告配置更新。恢复连接后，可用 `shine update --refresh-release`
+重试版本检查；该选项不能与目标名称同时使用。
 
-不指定目标时，`shine update` 会按 App 类别显示跳过的文件数。加上 `--run-generators` 可执行生成器来检查这些文件。
-如果类别中的文件全部来自内置预设，无需额外授权。如果该类别有生效文件来自外部预设目录或 overlay，
-执行生成器就需要匹配的信任授权。授权不足时，`update` 会说明涉及哪些来源。请先审阅列出的生成器，再决定是否授权。
-指定目标时，`shine update surge --run-generators` 会先列出无法检查的文件，再显示有更新的文件差异。
-即使只指定一个文件，同一 App 类别中其他生成器失败也会使这次检查返回退出码 1。
-加上 `--verbose` 可查看生成器和静态分析摘要。多个文件共用一个生成器且非阻断诊断相同时，
-只显示一份报告，按类型列出数量和一个示例位置。阻断诊断会逐条列出位置。
-用 `shine preset lint <PATH> --format json` 单独检查预设源码，可查看全部位置。
-如果配置了 overlay，请将 `<PATH>` 指向完整预设目录，其中包含实际生效的基础文件和 overlay 文件。
-不指定目标时，详细模式会在状态列表前说明哪些文件无法检查。
-评估失败或未完成时，无法据此确认已安装内容是最新的。
+`update` 默认不执行生成器；添加 `--run-generators` 可求值并检查生成结果。完全来自内置预设的
+类别无需额外授权；类别中含外部或 overlay 文件时，需要匹配的信任授权。请先审阅报告的来源再授权。
+
+评估失败或未完成时，无法据此确认已安装内容是最新的。即使只检查一个文件，同一 App 类别中
+其他生成器失败也可能使命令返回退出码 1。使用 `--verbose` 查看诊断，或通过 `preset lint`
+[检查预设源码](../guides/custom-presets.md#执行前检查-app-代码)。
 
 外部 Shell 预设使用 `snapshot` 模式时，`update --diff` 也会显示类别共享文件的变化。
 `content: unchanged` 仅说明命令脚本未变，不代表辅助文件或元数据无需更新。
 `update <TARGET>` 默认显示这些详情。差异用于审阅，不能直接作为补丁；仅换行格式变化也可能需要更新。
 
-`update --verbose` 也会列出已安装且暂无更新的受管系统配置。
-`up-to-date (recorded)` 表示期望配置与安装记录一致，并非实时系统检查；Preset 来源缺失会单独提示。
-App 汇总分别说明生成器未评估、需要信任或评估失败，不会将这些状态归为用户修改。
+`update --verbose` 也会列出暂无更新的受管系统配置。`up-to-date (recorded)` 表示期望配置与
+Shine 的安装记录一致，并非实时系统检查。请处理来源缺失或生成器未检查等提示，再判断是否全部为最新。
 
-如果 App 类别或文件条目已从当前 Preset 中移除，`update --verbose`（包括同时使用 `--diff`）
-仍会提示已保留的安装内容，并提供卸载预览命令。即使整个类别已不存在，这些检查也不会删除
-文件或安装记录。
+已安装的 App 类别或文件从预设来源中消失后，`update --verbose` 仍会报告保留的文件，并提供
+卸载预览命令；检查本身不会删除它们。
 
-`update` 只读检查；`upgrade` 显示计划，并在存在动作时等待确认。
-完整计划没有待处理工作或未解决的检查时，只报告 `Nothing to upgrade.`，不要求确认、写入状态或启动后台检查。
-仅命令内容未变还不够：快照更新、profile 修复和过期记录仍可能需要处理。
-只有审阅过同一范围后才应使用 `--yes`。
-`--pull` 会先更新符合条件的 Git 预设来源；`--prune-stale` 允许删除预设中已经不存在且未被修改的受管项。
-`trust grant --development` 会让所显示本地来源中的代码修改继续受信任，但 target、capability、
-来源目录与来源层必须保持不变。这是来源级长期授权，不代表持续代码审阅。
-使用 `trust list` 检查当前预设的信任状态，添加 `--verbose` 查看详情。查看列表不会续授信任。
+`update` 只检查、不应用改动。`upgrade` 在需要修改时请求批准；没有待处理工作或未解决的检查时，
+报告 `Nothing to upgrade.`。即使命令内容未变，配置或 Shell 集成仍可能需要更新。
+使用 `--yes` 前请先审阅计划。
 
-交互式生命周期确认可仅授权本次外部代码，不保存 grant；自动化与 `--yes` 必须已有 trust，
-Shell live 必须使用 Development trust。
+| 选项 | 作用 |
+| --- | --- |
+| `--pull` | 检查或升级前，先更新符合条件的 Git 预设来源 |
+| `--prune-stale` | 允许删除预设中已不存在且未被修改的受管 App 文件 |
+| `trust grant --development` | 授权所显示本地来源中未来的代码修改 |
 
-来源缺失、用户修改、外部命令冲突、env/admin 契约缺失或外部代码尚未信任时，Shine 会提示需要处理，
-不会静默覆盖。请恢复来源或按终端给出的命令处理。
+Shell live 部署需要开发信任。授权仅覆盖批准的目标、能力及来源目录与来源层，不代表持续审阅
+未来代码。使用 `trust list` 查看授权，添加 `--verbose` 查看详情；查看列表不会续授信任。
+详见[信任与能力声明](../guides/custom-presets.md#声明权限)。
+
+来源缺失、用户修改、命令入口冲突、缺少必需输入或管理员授权，以及外部代码尚未信任时，
+请按报告的提示处理；这些情况不会授予覆盖文件的权限。
 
 ## 系统预设
 
@@ -220,7 +207,20 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 这些操作可能在计划获批后请求管理员权限。`--force-profile` 可能替换冲突的配置文件内容，请先查看
 dry run。
 
-应用或删除系统配置前，可用 `--dry-run` 预览变更。
+应用或删除系统配置前，可用 `--dry-run` 预览变更。它不能与 `--yes` 同时使用。
+`--yes` 用于非交互确认，只跳过提示，不会跳过计划展示、权限检查或执行前复核。
+交互确认可以仅授权本次列出的外部代码，不保存长期信任；使用 `--yes` 执行外部代码前，
+必须已有相应的[信任授权](../guides/custom-presets.md)。
+
+`bootstrap` 的位置参数按输入顺序选择项目，并忽略重复项；也可以重复使用 `--item`，例如
+`shine sys bootstrap --item rust --item mise --yes`。位置参数、`--item` 和 `--preset` 不能组合。
+非交互环境下，未指定项目或配置组合时使用预设的默认配置组合。
+项目 ID 以 `-` 开头时，将选项放在 `--` 前、名称放在其后，例如
+`shine sys apply --dry-run -- -custom`。
+
+对于受管系统配置，`shine update` 对比期望配置与安装记录，`shine upgrade` 还会检查实际系统资源。
+Windows 的 split-DNS 配置与记录和期望配置一致时，无需更新或管理员权限。
+若只想升级 Shell 预设，可使用 `shine upgrade shell/<CATEGORY>`。
 
 参见 [初始化与管理系统](../guides/system-init.md)。
 
@@ -253,8 +253,7 @@ shine preset pull
 先用 `migrate --dry-run` 预览元数据变更，审阅并确认后再应用。Git 管理的 overlay 应在上游
 checkout 中迁移、验证并提交，推送后在各使用设备上运行 `shine preset pull`。
 
-新模板不会生成空表或推测性能力清单。`--unrestricted` 会添加可选的 unrestricted 作者说明，
-但无论是否使用，所有任意代码都未隔离。
+`--unrestricted` 会为新模板添加可选的作者说明，但不会隔离脚本执行，也不会授予信任或执行权限。
 
 参见 [自定义预设](../guides/custom-presets.md)与
 [将系统预设迁移到 v2](../guides/sys-preset-v2-migration.md)。
@@ -289,7 +288,7 @@ shine env secret identity list
 范围参数互斥；省略时选择当前项目，否则全局。`--env-file` 选择该范围的 `shine.env.toml`；
 `--overlay` 只允许手动目录。默认写入会拒绝被高层遮蔽的键；显式目标允许维护被遮蔽项，
 输出会分别报告保存位置和当前有效来源。`set`、`delete` 与 `secret encrypt` 的旧 `--force`
-已停用并拒绝零写入；请改用明确的范围与文件参数。
+已移除，仍使用时会拒绝执行；请改用明确的范围与文件参数。
 
 `env explain --reveal`、`env list --reveal`、`env get`、`env secret decrypt`、带 `--include-secrets` 的导出，以及 `env run`
 启动的子进程都可能接触明文。只在可信终端运行，也不要把密钥直接写入命令参数或文档。
@@ -297,6 +296,8 @@ shine env secret identity list
 Broker policy 命令及完整远程流程见
 [SSH 会话、密钥代理与文件传输](../guides/ssh-transfer.md)。本地变量、工作区加密、命令包装和 hybrid
 后端见 [管理环境变量与密钥](../guides/environment.md)。
+
+文件组的配置、封存、持久导出、临时执行和清理边界见[临时机密文件](../guides/environment.md#workspace-secret-files)。
 
 ## 任务与主题
 
@@ -339,7 +340,7 @@ shine clear serve
 `clear` 必须指定目标；单独运行不会清理所有内容。`clear serve` 会停止并移除旧版用户服务，
 无需加载 Shine 配置，也不会删除已发布的文件。成功后重复清理也是安全的；系统服务管理器
 报错时会报告失败。整个 `shine serve` 命令已移除。参见
-[系统管理](../guides/system-init.md#retire-legacy-http-service)。
+[升级与迁移](../guides/upgrading.md#清理旧版本的本地-http-服务)。
 
 版本化运行时状态迁移仍使用 `shine state migrate`。
 
@@ -370,5 +371,3 @@ shine self uninstall [--dry-run | --yes]
 
 `stable` 跟随正式发布，`preview` 跟随会被持续替换的预览构建。参见
 [安装与升级](../installation.md)。
-
-文件组的配置、封存、持久导出、临时执行和清理边界见[临时机密文件](../guides/environment.md#workspace-secret-files)。

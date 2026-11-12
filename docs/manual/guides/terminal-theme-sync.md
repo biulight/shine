@@ -44,8 +44,15 @@ manage yourself:
 
 ```bash
 shine shell install utils
-eval "$(shine-theme-sync)"
 ```
+
+Open a new shell, then run the command directly:
+
+```bash
+shine-theme-sync
+```
+
+This command applies the settings to the current session; no additional `eval` is needed.
 
 ## SSH sessions
 

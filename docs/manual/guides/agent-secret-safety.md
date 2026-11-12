@@ -61,20 +61,9 @@ including how to handle plaintext produced by `--include-secrets`.
 
 ## What Shine environment protection covers
 
-`shine env secret seal` seals pending secrets in workspace environment files into an encrypted
-payload. The repository then contains ciphertext rather than plaintext tokens, passwords, or API
-keys.
-
-```bash
-shine env secret seal
-```
-
-`shine env run` merges environment files, decrypts secrets, and provides the result only to the
-started child process:
-
-```bash
-shine env run --mode development -- bun run build
-```
+After sealing, the project stores ciphertext. `shine env run` decrypts and supplies environment
+values when it starts the selected program. That program and its children can read the values they
+receive, so review the command and the code it executes before running it.
 
 This primarily reduces three risks:
 
@@ -143,9 +132,9 @@ On macOS, create a Secure Enclave and Touch ID identity:
 shine env secret identity init --touch-id
 ```
 
-`age-plugin-se` generates the identity. Decryption requires the local Secure Enclave and a Touch ID
-or system PIN authorization. Copying its identity file to another machine is normally insufficient
-to decrypt.
+`age-plugin-se` generates the identity. Decryption requires the original Mac’s Secure Enclave and
+authorization under the selected access policy, using Touch ID by default. Copying its identity
+file to another machine is normally insufficient to decrypt.
 
 New Touch ID identities use an `age1tag...` public recipient, so age 1.3 or newer can encrypt on
 other platforms without the Secure Enclave plugin. A tagged recipient is more discoverable:
@@ -176,25 +165,24 @@ macOS remains experimental. Use only synthetic or disposable data and configure
 an independent recovery key before using it. For supported devices, usage limitations, and setup
 instructions, see [experiment with phone authorization on Windows and macOS](./environment.md#experiment-with-phone-authorization-on-windows).
 
-A normal age identity remains suitable for ordinary team development when its file and
-user-directory permissions are protected. For stable hardware-backed protection on Windows, prefer an
-organization-approved YubiKey/PIV or GPG with YubiKey workflow.
+When using a normal age identity, protect the identity file and user-directory permissions.
+If your team requires hardware keys, use its approved setup and confirm that each member has a
+working decryption device and a recovery method.
 
 ## Choose a secret backend
 
-A rough ordering by isolation strength is:
+Choose according to your team's devices, authorization workflow, and recovery requirements:
 
-1. GPG with YubiKey or another hardware smart card;
-2. age with Secure Enclave and Touch ID;
-3. a normal age identity file;
-4. plaintext secrets.
+| Option | Check before use |
+| --- | --- |
+| Normal age identity file | Restrict access and keep a safe backup; a program that reads the file may be able to decrypt |
+| macOS Touch ID identity | Use a device with Secure Enclave and review system authorization prompts; add a separate recovery recipient |
+| GPG identity | Confirm where the private key is stored; for a hardware card, configure and test its PIN or touch requirements |
+| Phone authorization | Check the plugin's supported setups; limit use to experimental, disposable data and add an independent recovery key |
 
-Age with Touch ID is often more convenient for team development and staging. For valuable production
-secrets, long-lived credentials, or strong hardware-isolation requirements, prefer GPG with YubiKey
-or an organization-approved hardware-backed design.
-
-The experimental phone design aims for hardware-backed, authorization-per-use isolation, but it is
-not included in this stable-backend ordering until its protocol and release gates are complete.
+A backend name alone is not a complete security guarantee. Hardware keys can restrict private-key
+copying, but a program authorized to decrypt still receives plaintext. Follow your team's access
+and recovery requirements for production credentials, and test recovery before relying on it.
 
 ## Permissions for AI agents
 
@@ -203,8 +191,8 @@ Treat an agent as a capable local collaborator, not as an inherently trusted sec
 - Never add `~/.shine/age/identity.txt`, GPG private keys, or cloud credential files to a workspace.
 - Do not let an agent keep an interactive shell with high-privilege secrets for long periods.
 - Prefer letting the agent edit code and running `shine env run` yourself in a trusted terminal.
-- Use a normal age identity for low-risk development and Touch ID or YubiKey for sensitive work;
-  limit `age-plugin-phone` to its documented synthetic-data preview.
+- Choose an identity according to the device and access conditions above; limit `age-plugin-phone`
+  to its documented experimental scope.
 - Cancel unexpected Touch ID, phone biometric, PIN, or YubiKey-touch prompts.
 
 Removing a recipient after an identity leaks, a device becomes untrusted, or a member leaves does not

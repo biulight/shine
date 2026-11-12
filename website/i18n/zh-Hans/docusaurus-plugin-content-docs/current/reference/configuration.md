@@ -8,15 +8,18 @@ sidebar_position: 2
 Shine 将全局配置和状态保存在 `~/.shine/`，需要时创建 `config.toml`。
 Unix 上，若 `SUDO_USER` 指明发起 sudo 的用户，主目录相对路径使用该用户的主目录。
 
-交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
-必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
+本页用于查询配置字段和覆盖顺序。具体操作见[环境变量与密钥](../guides/environment.md)或
+[自定义预设](../guides/custom-presets.md)。
 
 ## 常用全局字段
 
+在 `~/.shine/config.toml` 中只添加所需配置，并替换示例路径与接收者。
+敏感值应先加密，不要直接写入 `[env]`。
+
 ```toml
 presets_dir = "~/dotfiles/shine-presets"
-# 外部 Shell 预设默认使用 snapshot；预设开发时才设为 live
-external_shell_mode = "live"
+# 预设开发时才设为 live
+external_shell_mode = "snapshot"
 presets_overlay_git = "https://example.com/team/shine-overlay.git"
 presets_overlay_git_branch = "main"
 app_default_dest_root = "~/.config"
@@ -36,7 +39,7 @@ PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
 IMAGE_QUALITY = "80"
 IMAGE_MAX_WIDTH = "1920"
 IMAGE_MAX_HEIGHT = "1080"
-MY_API_TOKEN = { value = "<令牌>", description = "内部 API 的访问令牌" }
+API_URL = { value = "https://api.example.com", description = "API 地址" }
 
 [[env_proxy]]
 command = "gh"
@@ -49,10 +52,11 @@ enabled = false
 | --- | --- |
 | `presets_dir` | 使用完整的外部预设目录替代内置预设 |
 | `external_shell_mode` | 外部 Shell 预设的部署方式；默认 `snapshot`，可显式设为 `live` |
-| `presets_overlay_git` | 由 Shine 浅克隆并镜像到 `~/.shine/overlay/` 的 Git overlay URL |
+| `presets_overlay_dir` | 覆盖同路径预设文件的本地目录；不能与 `presets_overlay_git` 同用 |
+| `presets_overlay_git` | 由 Shine 管理在 `~/.shine/overlay/` 下的 Git overlay URL；仅用于全局配置 |
 | `presets_overlay_git_branch` | Git overlay 跟踪的分支；省略时使用远端默认分支 |
 | `app_default_dest_root` | 未声明目标路径的旧式 app 预设默认根目录 |
-| `sync_terminal_theme` | 控制受管 Unix shell profile 是否自动运行终端主题同步，默认为启用 |
+| `sync_terminal_theme` | 受管 Unix Shell 的自动终端主题同步，默认启用；仅用于全局配置 |
 | `gpg_recipients` | `shine env secret encrypt` 默认 GPG recipient 列表 |
 | `secret_backend` | 默认密钥后端，省略时为 `gpg` |
 | `age_recipients` | `age` 后端默认加密接收者列表 |
@@ -61,18 +65,19 @@ enabled = false
 | `[env]` | 模板变量及 shell helper 使用的值 |
 | `[[env_proxy]]` | 一个透明命令代理规则；`command` 为裸命令名，`with` 为允许注入的 `KEY` 或 `KEY=ALIAS` 列表，`enabled` 默认为 `true` |
 
-`gpg_key_id` 与 workspace 的 `[env.encryption].recipient` 是旧版单 recipient 字段。Shine 不会在普通读取配置时改写文件；用 `shine state migrate --dry-run` 预览并用 `shine state migrate` 迁移为 `gpg_recipients`。同一迁移也会把旧版 `age1se...` 转为 age 1.3 原生支持的 `age1tag...`；这能免除加密端的 Secure Enclave 插件依赖，但已经知道 recipient 的人可以判断密文是否发给它。遇到旧 workspace 时，`env run` 和 `env secret seal` 会提示迁移。
-
-phone recipient 不由 `state migrate` 自动转换。升级并验证插件和手机应用的 tag 支持后，用 `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag` 导出，替换对应 `age_recipients` 值并重新 seal；保留独立恢复 recipient。
+旧的 `gpg_key_id`、`[env.encryption].recipient` 或 `age1se...` 接收者可用
+`shine state migrate --dry-run` 预览转换，审阅后运行 `shine state migrate`。普通读取不会改写这些配置。
+重新封存前，请阅读[加密设置](../guides/environment.md#使用-gpg-加密值)和
+[age identity](../guides/environment.md#使用-age-identity)。
+手机接收者需要单独[手动转换](../guides/environment.md#在-windows-上实验手机授权)。
 
 ## 外部代码信任
 
-外部 App hook、generator、artifact、Sys 安装脚本、可执行 profile 内容，以及每个外部 Shell
-command 都使用 target-scoped grant，并保存在仅所有者可读写的
-`~/.shine/trust.toml`。不要手改该文件，也不能从项目配置授予信任。
+执行外部预设代码前，请审阅它要执行的操作和访问范围。交互确认可以只授权本次列出的代码，
+不保存长期信任；自动化与 `--yes` 需要已有授权。Live Shell 预设要求开发信任，
+这也会授权未来的代码修改。显式 `--run-generators` 检查同样需要已有授权。
 
-先检查目标，再按需选择一种授权或撤销操作。
-开发信任也会授权未来的代码变更，仅在你明确接受此范围时使用。
+使用以下命令检查和管理信任。不要手改 `~/.shine/trust.toml`，也不要把授权写入项目配置。
 
 | 操作 | 命令 |
 | --- | --- |
@@ -84,14 +89,12 @@ command 都使用 target-scoped grant，并保存在仅所有者可读写的
 | 授予快照信任 | `shine trust grant preset` |
 | 信任未来的代码变更 | `shine trust grant app/example --development` |
 
-快照 Grant 只适用于已经审阅的 target、capability、来源层与完整有效类别快照。显式使用
-`--development` 建立的开发信任允许所显示本地来源中的代码继续修改，但 target、capability、
-来源目录/层必须保持不变。这是对未来来源内容的长期授权，不代表持续代码审阅。
-Grant 不能替代每次操作前显示的 Plan。旧的 `allow_app_hooks` 和
-`allow_sys_code` 已被忽略，并会在下次保存配置时移除。
-`preset` target 可批量审阅或授权当前生效的目标；新增 target
-或 capability 变化后仍须重新授权；开发信任还会在来源变化后失效。旧 schema v1 trust
-grant 仍可查看和撤销，但必须重新审阅。
+快照授权涵盖目标所在的整个预设类别，以及已审阅的目标、来源和能力；变化后需要重新审阅。`--development`
+允许所显示本地来源中的代码继续修改，但目标、能力、来源目录或来源层变化后仍须授权。
+它不代表持续代码审阅，也不能替代每次操作前的计划确认。
+
+`preset` 覆盖当前生效的目标，不包括将来新增的目标。旧授权即使仍可查看和撤销，也可能需要
+重新审阅。已停用的 `allow_app_hooks` 和 `allow_sys_code` 不再授予信任，并会在下次保存配置时移除。
 
 ## Env 条目格式与说明
 
@@ -108,27 +111,25 @@ DETAILED_VALUE = { value = "example", description = "供构建任务使用的示
 - 详细格式中的 `value` 参与 `env get`、模板替换、`env secret encrypt`、`env secret export` 和
   `env run --with`，行为与字符串格式相同。
 - `description` 只用于 `shine env list` 的可读说明，不会传入子进程或模板。
-- 当前配置中的内联 `description` 优先于预设 `<presets>/env.toml` catalog 的同名说明。
+- 当前配置中的内联 `description` 优先于预设 `<presets>/env.toml` 中的同名说明。
 - `shine env set` 更新已有详细条目时会保留其 `description`。
 - 字符串与仅有 `value` 的详细项只覆盖值并继承低层说明。只有显式 `description` 才替换说明；
-  空字符串清空说明并阻止 catalog 兜底。值和说明分别追踪来源。
+  空字符串清空说明并阻止使用预设中的默认说明。
 - 数字、数组、缺少字符串 `value` 等无效类型会报告文件路径和变量名，不会被静默忽略。
 
 ## 项目配置
 
-Shine 从当前目录向上查找最近的 `shine.config.toml`。项目配置是全局配置之上的稀疏覆盖层；没有声明的字段继续继承全局值，相对路径以声明它的配置文件所在目录为基准。
+Shine 从当前目录向上查找最近的 `shine.config.toml`。项目配置覆盖全局配置，未声明的字段继续
+使用全局值；相对路径以声明它的配置文件所在目录为基准。
 
 `[[env_proxy]]` 也遵循项目覆盖规则：项目内同名 `command` 的规则会取代全局规则，其它全局代理规则继续生效。优先用 `shine env proxy install`、`enable` 和 `disable` 管理这些条目，避免手改后忘记对应的 `~/.shine/bin/` shim。
 
-Shine 0.40.0 不再识别项目中的旧式 `config.toml` 和 `.env.toml`。升级前请分别改名为
-`shine.config.toml` 和 `shine.env.toml`；普通同名文件会被忽略，不会作为 Shine 配置读取。
-
-Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前可先运行一次 v0.39 完成迁移；已经升级时，请将旧文件移动为 `~/.shine/shine.env.toml`，若目标文件已存在则手动合并。检测到旧文件时，普通配置加载会停止并显示恢复提示，避免悄悄忽略仍在使用的值。
+如果仍在使用旧的 `config.toml`、`.env.toml` 或全局 `env.toml`，请按
+[旧配置恢复步骤](../troubleshooting.md#升级到-040-后提示旧配置文件)处理。
 
 ## 目录与来源优先级
 
-相对的 `--config-dir`、`SHINE_CONFIG_DIR` 和 `SHINE_PRESETS` 路径会在生命周期规划或脚本执行前，
-按调用时的工作目录解析。子进程切换工作目录不会改变选定的运行时根目录。
+相对的 `--config-dir`、`SHINE_CONFIG_DIR` 和 `SHINE_PRESETS` 路径以运行 Shine 时所在的目录为基准。
 
 `SHINE_CONFIG_DIR` 的优先级最高。它会改变全局配置和运行时状态目录；不在 Shine 项目中时，
 预设目录也固定为 `$SHINE_CONFIG_DIR/presets/`，此时 `SHINE_PRESETS` 和全局 `presets_dir`
@@ -145,10 +146,8 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 3. 全局 `config.toml` 中的 `presets_dir`
 4. 默认 `~/.shine/presets/`
 
-外部预设或 overlay 的根目录可以是符号链接。Shine 会先解析该链接，并把解析后的来源
-用于 development trust；重新指向另一个目录需要重新审阅。失效的根目录链接会报错，
-预设树内部的符号链接仍不参与快照。
-FIFO、套接字和设备等特殊条目会使快照捕获报错；Shine 不会将它们作为预设文件读取。
+外部预设或 overlay 根目录可以是符号链接；更改链接目标后需要重新审阅，失效的根目录链接会报错。
+预设树内部的链接不会被包含，请使用普通文件和目录；套接字、设备等特殊文件会被拒绝。
 
 外部 Shell 预设默认使用 `snapshot` 模式：修改来源后，需运行 `shine update` 和
 `shine upgrade` 才能应用。仅在开发时使用 `external_shell_mode = "live"`；该模式下来源修改
@@ -176,14 +175,13 @@ Overlay 在选定的基础预设来源上按相同相对路径覆盖文件，不
 5. 项目 `shine.config.toml` 的 `[env]`；
 6. 项目 `shine.env.toml`。
 
-所有安装统一使用此顺序。`SHINE_CONFIG_DIR` 选择全局根目录，以上路径不硬编码为 `~/.shine/`。
-内置默认值不会因加载或保存其他配置而写入文件。已有项全部按显式配置保留，即使等于旧默认值；
-主动删除指定层的项后才恢复继承。单独存在 `shine.env.toml` 不构成项目。
+`SHINE_CONFIG_DIR` 可将全局根目录改为 `~/.shine/` 之外的位置。显式保存的值即使等于默认值，
+也会继续生效；从对应层删除后才恢复继承。单独存在 `shine.env.toml` 不构成项目。
 项目 env 文件只从最近 `shine.config.toml` 所在目录读取，不合并多个祖先项目。
 
 用 `shine env explain KEY` 查看值来源、描述来源、覆盖链和默认写入目标；默认不显示值，
-`--reveal` 才显示且不会解密。`env get` 保持单值输出。参见
-[环境管理指南](../guides/environment.md)中的人工升级和回退步骤。
+`--reveal` 才显示且不会解密。旧版本用户请参阅
+[升级与回退步骤](../guides/upgrading.md#从-23x-或更早版本升级环境分层)。
 
 `shine.env.toml` 是不带 `[env]` 表头的覆盖文件，例如：
 
@@ -219,12 +217,11 @@ gpg_recipients = ["user@example.com", "team-backup@example.com"]
 
 环境源按 `files` 顺序合并。默认保留当前进程已经存在的变量；设置 `env.override_process_env = true` 后，改由 workspace 值覆盖。
 
-执行 `shine env secret seal` 或 `shine env run` 时，加密设置的优先级为命令行参数、
-`[env.encryption]`、全局 `~/.shine/config.toml`。因此，全局配置适合个人默认值；项目团队的
-GPG 或 age recipient 列表应放在此文件中。recipient 是公钥信息，可提交到仓库；不要提交
-`age_identity`/`age_identities` 指向的私有身份文件或本机路径。
+工作区加密设置覆盖全局默认值。执行 `shine env secret seal` 时，显式 `--backend` 和
+`--recipient` 选项优先于工作区设置。团队接收者名单放在 `[env.encryption]` 中；recipient
+是公开信息，但私有身份文件及本机 `age_identity`/`age_identities` 路径不能提交到共享仓库。
 
-每个环境源文件使用以下结构：
+创建包含普通变量和待封存秘密的环境源文件：
 
 ```toml
 version = 1
@@ -233,42 +230,37 @@ version = 1
 PUBLIC_VALUE = "example"
 
 [secret]
-EXISTING_SECRET = true
-PROMPT_ON_SEAL = false
-PLAINTEXT_TO_SEAL = "<待封存的值>"
-
-[payload]
-data = "<由 Shine 管理的 GPG 密文>"
+API_TOKEN = false
 ```
 
-`shine env secret seal` 会把 `[secret]` 中的待处理值合并进加密 payload，并将已封存项改为
-`true`。`shine env run` 按文件顺序合并 `[plain]` 和解密后的 secret。
+| 环境源条目 | 含义 |
+| --- | --- |
+| `[plain]` 字符串 | 非敏感值 |
+| `[secret]` 值为 `false` | 下次运行 `shine env secret seal` 时提示输入 |
+| `[secret]` 值为 `true` | 保留此文件中已封存的值 |
+| `[secret]` 字符串 | 等待封存的明文，不能提交 |
+| `[payload].data` | Shine 写入的密文，不要手工填入 |
+
+封存会加密待处理值，并将对应条目改为 `true`。`shine env run` 按环境源顺序合并普通值和解密值。
 
 `shine env run --with KEY[=ALIAS]` 还可注入当前 Shine 配置 `[env]` 中的值。它优先读取
 `KEY_SECRET`，不存在时读取 `KEY`；显式注入值覆盖 workspace 和当前进程中的同名变量。
 
 ## 受管目录
 
-```text
-~/.shine/
-├── config.toml
-├── shine.env.toml
-├── app-manifest.toml
-├── shell-manifest.toml
-├── proxy-manifest.toml
-├── tasks.toml
-├── bin/
-├── http/
-├── installed/
-├── overlay/
-├── rendered/
-└── presets/
-    ├── app/
-    ├── shell/
-    └── sys/
-```
+以下路径位于全局根目录下，通常是 `~/.shine/`：
 
-不要手工删除 manifest 后再期望 Shine 识别旧安装；优先使用对应的 `uninstall --dry-run` 和 `uninstall`。
+| 路径 | 用途 |
+| --- | --- |
+| `config.toml` | 全局配置 |
+| `shine.env.toml` | 全局环境覆盖值 |
+| `bin/` | 已安装命令入口，需要加入 `PATH` |
+| `presets/` | 运行时预设，按 `app/`、`shell/`、`sys/` 分类 |
+| `overlay/` | Shine 管理的 Git overlay，应修改上游仓库而非这份副本 |
+
+Shine 还在这里保存安装记录和恢复文件。不要手工删除后再期望 Shine 重新识别旧安装，
+请使用对应的 `uninstall --dry-run` 和 `uninstall` 命令。旧服务残留的 `http/` 文件请按
+[HTTP 服务迁移步骤](../guides/upgrading.md#清理旧版本的本地-http-服务)处理。
 
 ## 工作区混合加密
 
@@ -279,11 +271,22 @@ data = "<由 Shine 管理的 GPG 密文>"
 在本机全局 `config.toml` 中设置 `hybrid_decrypt_backend = "gpg"` 或 `"age"`。
 本机工作区操作可用工作区旁的 `shine.config.local.toml` 覆盖此字段；文件或字段缺失则继承
 全局设置。共享的 `shine.config.toml` 不能覆盖或保存此偏好。将个人文件加入 `.gitignore`；
-它只接受该字段，格式错误或未知字段会报错。它不改变单后端路由，也不授予秘密释放权限。
-SSH broker 不接受远端个人配置。全局 `secret_backend` 仍只接受 `gpg` 或 `age`。
+它只接受该字段，格式错误或未知字段会报错。此偏好只影响混合密文的解密选择，不授予秘密访问权限。
+SSH broker 使用解密机器的选择，不接受远端个人配置。全局 `secret_backend` 只接受 `gpg` 或 `age`。
 
 配置步骤和授权要求见[环境指南](../guides/environment.md)。
 
 ## Workspace 文件组
 
-Workspace version 3 增加 `file_groups.<名称>.files` 数组，每项要求 `source`（密文）和 `target`（明文）。组必须非空，组名仅含字母、数字、短横线和下划线。路径支持 `{mode}`，解析基准为 workspace 所在目录。声明了文件组时可省略 `env.files`。Version 2 不接受文件组。加密复用 `[env.encryption]`，没有组级或环境级策略。详见[临时机密文件](../guides/environment.md#workspace-secret-files)。
+Workspace version 3 支持 `file_groups.<名称>.files`，version 2 不支持。
+
+| 配置 | 要求 |
+| --- | --- |
+| 组名 | 字母、数字、短横线和下划线；每组必须包含文件 |
+| `source` | 密文文件路径 |
+| `target` | 明文文件路径 |
+| 路径 | 相对工作区目录，可使用 `{mode}` |
+| `env.files` | 声明文件组时可省略 |
+| 加密设置 | 共享 `[env.encryption]`，不提供按组或按环境覆盖 |
+
+封存、运行、导出、路径限制和明文清理步骤见[临时机密文件](../guides/environment.md#workspace-secret-files)。

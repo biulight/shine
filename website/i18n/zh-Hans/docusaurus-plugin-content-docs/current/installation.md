@@ -13,20 +13,19 @@ Shine 支持 macOS、Linux 和 Windows。官方安装脚本从 GitHub Releases �
 curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
 ```
 
-默认安装到 `~/.local/bin/shine`，安装脚本不会修改 shell 配置。
-如果安装目录不在 `PATH` 中，请复制并执行为你的 shell 显示的命令，然后打开新终端。
-安装脚本参考 `$SHELL`（默认登录 shell）：Bash 追加到 `~/.bashrc`，Zsh 追加到
-`${ZDOTDIR:-$HOME}/.zshrc`。
-Bash/Zsh 的命令不会重复追加相同内容。如果实际使用的 shell 与提示不同，或使用 Fish 等其他 shell，
-请手动将安装目录加入相应的 shell 配置。随后验证：
+默认安装到 `~/.local/bin/shine`，安装脚本不会修改 Shell 配置。
+如果提示安装目录不在 `PATH` 中，请执行为你的 Shell 显示的命令，再打开新终端。
+如果使用的 Shell 与提示不同，或使用 Fish 等其他 Shell，请手动将该目录加入相应的配置。
+随后验证：
 
 ```bash
 shine --version
 ```
 
-如需指定位置或版本：
+如需指定位置或版本，先下载脚本，再选择一种方式运行：
 
 ```bash
+curl -fsSLo install.sh https://github.com/biulight/shine/releases/latest/download/install.sh
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
 SHINE_VERSION=2.10.0 sh install.sh
 ```
@@ -37,9 +36,13 @@ SHINE_VERSION=2.10.0 sh install.sh
 irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
-默认安装到 `%LOCALAPPDATA%\Programs\shine\shine.exe`，不会修改用户 `PATH`。如需指定位置或版本：
+默认安装到 `%LOCALAPPDATA%\Programs\shine\shine.exe`，不会修改用户 `PATH`。
+如果提示找不到安装目录，请按输出指引将其加入用户 `PATH`，打开新终端并运行 `shine --version`。
+
+如需指定位置或版本，先下载脚本，再选择一种方式运行：
 
 ```powershell
+Invoke-WebRequest https://github.com/biulight/shine/releases/latest/download/install.ps1 -OutFile install.ps1
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
 $env:SHINE_VERSION = "2.10.0"; .\install.ps1
 ```
@@ -149,10 +152,9 @@ Shine 按各自的卸载规则处理受管 App 文件、Shell 配置、Sys 项�
 如果 Shine 无法查询账户的服务管理器，请切换到能查询它的会话后重试。如果使用自定义配置
 目录时检测到旧服务，请单独核查 `shine clear serve` 的清理范围。
 
-如果恢复日志或被修改的受管文件阻止清理，请按提示处理对应模块的恢复或卸载，再运行本命令。
+如果未完成的操作或被修改的受管文件阻止清理，请按提示处理对应类型的恢复或卸载，再运行本命令。
 如果 Shell 启动块指向另一套 Shine 配置或含有手动修改，请核查提示中的文件。只有与当前配置生成内容一致的启动块才会自动移除。
-此前已成功的步骤继续生效。Shine 最后才移除有安装回执的程序副本，并核对文件身份及其内容
-是否与当前运行的构建一致。已更换或版本不同的副本需要单独核查。
+此前已成功的步骤继续生效。Shine 最后才移除能够确认由它安装且未被修改的程序副本。已更换或版本不同的副本需要单独核查。
 
 如果通过 Cargo 安装，请使用 Shine 输出的 Cargo 卸载命令。手动下载或缺少匹配回执的旧安装，
 请在受管资源清理完成后按原安装渠道移除程序。在 Windows 上，先关闭正在运行的实例，
