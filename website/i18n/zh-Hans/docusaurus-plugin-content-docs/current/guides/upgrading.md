@@ -12,8 +12,6 @@ slug: /upgrading
 
 从 **1.x** 升级时，还需阅读[从 Shine 1.x 升级](./upgrade-to-2.md)。
 
-<span id="upgrade-to-shine-28" />
-
 本页只记录需要提前准备或人工迁移的事项；新增功能与修复列表见
 [版本说明](https://github.com/biulight/shine/releases)。
 
@@ -23,6 +21,15 @@ slug: /upgrading
 再将预设用于自动化。2.10 能识别一些 2.9 会漏报的未声明访问，例如通过先前保存的
 `Bun.file` 句柄读取文件。遇到阻塞执行的诊断时，请修正脚本或声明所需权限，再运行一次 lint。
 详见[执行前检查 App 代码](./custom-presets.md#执行前检查-app-代码)。
+
+## 从 2.7.x 或更早版本升级：SSH 与降级准备 {#upgrade-to-shine-28}
+
+- **使用 Shine SSH 时，先协调两端升级。** 本机与远端一起升级后再重新连接；只更新一端可能中断现有工作流。
+- **启用 SSH 文件授权前，先备份策略并阅读[文件授权迁移](./ssh-transfer.md#file-secret-broker)。**
+  已有环境变量策略不会自动授权文件，降级程序也不会撤销策略迁移。
+- **已安装的 App 需要兼容版本的 Shine 管理。** 新版本写入 App 状态后，2.7.x 及更早版本无法读取。
+  降级前应备份配置，并按[升级与降级](./app-presets.md#upgrade-and-downgrade)使用新版本完成卸载。
+  不要删除安装记录来绕过兼容性检查。
 
 ## 从 2.6.x 或更早版本升级：Preset 环境输入 {#upgrade-to-shine-27}
 

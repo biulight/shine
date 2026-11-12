@@ -36,11 +36,16 @@ Shine 用 **Preset（预设）** 把脚本、个性化配置和安装方式集�
 
 ## 先试一个内置预设
 
-安装图片处理命令、缩放一张图片，再看看 Shine 加入了哪些内容：
+先安装 Bun 1.3.14 或更高版本并确保它在 `PATH` 中，再安装图片处理命令：
 
 ```bash
 shine list --available
 shine install shell/image-tools
+```
+
+按 [Shell 预设](./guides/shell-presets.md) 的说明打开新终端或重新加载 shell 配置，再缩放图片并查看 Shine 加入的内容：
+
+```bash
 img-resize photo.jpg
 shine info shell/image-tools
 ```

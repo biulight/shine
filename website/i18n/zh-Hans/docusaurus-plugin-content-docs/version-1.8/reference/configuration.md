@@ -95,7 +95,8 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 
 ## 目录与来源优先级
 
-`SHINE_CONFIG_DIR` 的优先级最高。它会改变全局配置和运行时状态目录；不在 Shine 项目中时，
+显式传入的 `--config-dir` 会在本次调用中覆盖 `SHINE_CONFIG_DIR`。下文的 `SHINE_CONFIG_DIR`
+均指最终选定的目录，也包括通过 `--config-dir` 指定的目录。它会改变全局配置和运行时状态目录；不在 Shine 项目中时，
 预设目录也固定为 `$SHINE_CONFIG_DIR/presets/`，此时 `SHINE_PRESETS` 和全局 `presets_dir`
 都不能覆盖它。
 

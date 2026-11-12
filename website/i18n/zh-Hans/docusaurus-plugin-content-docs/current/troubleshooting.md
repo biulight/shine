@@ -150,7 +150,8 @@ shine local download ./remote.log ./remote.log --dry-run
 shine local upload ./local.log /tmp/local.log --dry-run
 ```
 
-目标文件已存在时默认拒绝覆盖；确认无误后加 `--force`。目录目标已存在时，`--force` 表示合并写入。
+使用 rsync 时默认跳过已有文件，添加 `--force` 后才允许覆盖；目录目标已存在时，`--force` 表示合并写入。
+SCP（包括自动回退）即使不带 `--force` 也可能覆盖文件。传输前请预览路径，并备份目标中需要保留的文件。
 
 ## 没有显示维护提醒
 
