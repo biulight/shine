@@ -1896,6 +1896,77 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn agent_config_only_overlay_is_deployed_and_upgraded_with_embedded_script() {
+        let dir = make_temp_dir().await;
+        let overlay = dir.join("overlay");
+        let overlay_category = overlay.join("shell/agent");
+        fs::create_dir_all(&overlay_category).await.unwrap();
+        let first = r#"defaultProvider = "custom"
+[[providers]]
+id = "custom"
+label = "Custom"
+enabled = true
+credentialKey = "CUSTOM_TOKEN"
+[providers.env]
+ANTHROPIC_MODEL = "first-model"
+"#;
+        let overlay_config = overlay_category.join("cc.providers.toml");
+        fs::write(&overlay_config, first).await.unwrap();
+        let config = Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(overlay));
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "shell/agent/ccenv").await;
+
+        handle_install_approved(&config, Some("agent/ccenv"), false, true)
+            .await
+            .unwrap();
+        let deployed = config.presets_dir().join("shell/agent");
+        let script = crate::presets::read_embedded_asset_bytes("shell/agent/cc.ts").unwrap();
+        assert_eq!(fs::read(deployed.join("cc.ts")).await.unwrap(), script);
+        assert_eq!(
+            fs::read_to_string(deployed.join("cc.providers.toml"))
+                .await
+                .unwrap(),
+            first
+        );
+        assert!(!overlay_category.join("cc.ts").exists());
+        assert!(!overlay_category.join("shine.toml").exists());
+
+        let second = first.replace("first-model", "second-model");
+        assert_ne!(
+            first, second,
+            "the fixture must change between install and upgrade"
+        );
+        fs::write(&overlay_config, &second).await.unwrap();
+        // Source edits must not change the deployed configuration before upgrade.
+        assert_eq!(
+            fs::read_to_string(deployed.join("cc.providers.toml"))
+                .await
+                .unwrap(),
+            first
+        );
+        crate::trust::grant_current_for_test(&config, "shell/agent/ccenv").await;
+        handle_upgrade_installed_target_with_result_approved(
+            &config,
+            Some("agent/ccenv"),
+            false,
+            true,
+            &mut crate::output::SectionSeparator::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(deployed.join("cc.providers.toml"))
+                .await
+                .unwrap(),
+            second
+        );
+        assert_eq!(fs::read(deployed.join("cc.ts")).await.unwrap(), script);
+        assert_eq!(fs::read_to_string(&overlay_config).await.unwrap(), second);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn upgrade_link_summary_uses_production_reporter() {

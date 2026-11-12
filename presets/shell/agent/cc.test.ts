@@ -1,15 +1,136 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildClaudeEnvironment,
   claudeArgs,
   main,
   providerFromChoice,
-  providers,
+  loadProviderConfig,
+  parseProviderConfig,
   isSecretDecryptCommand,
   resolveCredential,
   type CommandRunner,
-  type ProviderId,
 } from "./cc.ts";
+
+const config = loadProviderConfig();
+const { providers } = config;
+
+const customConfig = `
+defaultProvider = "second"
+[[providers]]
+id = "first"
+label = "First"
+aliases = ["One"]
+enabled = true
+credentialKey = "FIRST_TOKEN"
+[providers.env]
+CUSTOM_PROVIDER_VALUE = "first-only"
+[[providers]]
+id = "second"
+label = "Second"
+enabled = true
+credentialKey = "SECOND_TOKEN"
+[providers.env]
+ANTHROPIC_BASE_URL = "http://127.0.0.1:9999"
+CLAUDE_CODE_MAX_CONTEXT_TOKENS = "983616"
+`;
+
+describe("provider configuration", () => {
+  test("custom IDs, menu order, aliases and default are independent", () => {
+    const custom = parseProviderConfig(customConfig);
+    expect(providerFromChoice("1", custom).id).toBe("first");
+    expect(providerFromChoice("  oNe ", custom).id).toBe("first");
+    expect(providerFromChoice("SECOND", custom).id).toBe("second");
+    expect(providerFromChoice("  ", custom).id).toBe("second");
+    const reordered = { ...custom, providers: [...custom.providers].reverse() };
+    expect(providerFromChoice("1", reordered).id).toBe("second");
+    expect(providerFromChoice("2", reordered).id).toBe("first");
+    expect(providerFromChoice("", reordered).id).toBe("second");
+    const removed = { ...custom, providers: custom.providers.slice(1) };
+    expect(providerFromChoice("1", removed).id).toBe("second");
+    for (const choice of ["0", "01", "-1", "1.5", "3", "99999999999999999999", "first"]) {
+      expect(() => providerFromChoice(choice, removed)).toThrow("invalid provider");
+    }
+  });
+
+  test.each([
+    ["missing default", customConfig.replace('defaultProvider = "second"', ""), "defaultProvider"],
+    ["unknown default", customConfig.replace('defaultProvider = "second"', 'defaultProvider = "missing"'), "defaultProvider"],
+    ["disabled default", customConfig.replaceAll("enabled = true", "enabled = false"), "defaultProvider"],
+    ["empty list", 'defaultProvider = "first"\nproviders = []', "providers"],
+    ["duplicate ID", customConfig.replace('id = "second"', 'id = "first"'), "duplicate choice"],
+    ["alias/ID collision", customConfig.replace('aliases = ["One"]', 'aliases = ["SECOND"]'), "duplicate choice"],
+    ["alias collision", customConfig.replace('id = "second"', 'id = "second"\naliases = ["one"]'), "duplicate choice"],
+    ["numeric alias", customConfig.replace('["One"]', '["1"]'), "textual aliases"],
+    ["numeric ID", customConfig.replace('id = "first"', 'id = "1"'), ".id"],
+    ["invalid enabled", customConfig.replaceAll("enabled = true", 'enabled = "true"'), ".enabled"],
+    ["missing credential", customConfig.replace('credentialKey = "FIRST_TOKEN"', ""), ".credentialKey"],
+    ["invalid credential key", customConfig.replace('"FIRST_TOKEN"', '"invalid key"'), ".credentialKey"],
+    ["numeric environment", customConfig.replace('"983616"', "983616"), "string values"],
+    ["invalid environment name", customConfig.replace("CUSTOM_PROVIDER_VALUE", '"INVALID=KEY"'), "environment names"],
+    ["NUL environment", customConfig.replace('"first-only"', '"\\u0000"'), "invalid TOML"],
+    ["inline credential", customConfig.replace("CUSTOM_PROVIDER_VALUE", "ANTHROPIC_AUTH_TOKEN"), "use credentialKey"],
+    ["lowercase credential", customConfig.replace("CUSTOM_PROVIDER_VALUE", "anthropic_auth_token"), "use credentialKey"],
+    ["unknown field", customConfig.replace('label = "First"', 'unknown = "First"'), "unknown field"],
+    ["syntax", 'secret = "do-not-echo', "invalid TOML"],
+  ])("rejects %s", (_name, text, error) => {
+    expect(() => parseProviderConfig(text)).toThrow(error);
+  });
+
+  test("invalid configuration stops before provider selection or credentials", async () => {
+    const calls: string[] = [];
+    await expect(main([], {
+      loadConfig: () => parseProviderConfig('secret = "do-not-echo'),
+      selectProvider: async () => { calls.push("select"); return providerFromChoice("1", config); },
+      resolveProviderCredential: async () => { calls.push("credential"); return "token"; },
+      launchClaude: async () => { calls.push("launch"); return 0; },
+    })).rejects.toThrow("cc.providers.toml: invalid TOML");
+    expect(calls).toEqual([]);
+  });
+
+  test("reads the config beside the delivered script, independently of cwd", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shine-cc-config-"));
+    try {
+      copyFileSync(join(import.meta.dir, "cc.ts"), join(dir, "cc.ts"));
+      writeFileSync(join(dir, "cc.providers.toml"), customConfig);
+      const probe = join(dir, "probe.ts");
+      writeFileSync(probe, `import { loadProviderConfig } from "./cc.ts";
+        console.log(JSON.stringify(loadProviderConfig()));`);
+      const probeChild = Bun.spawn([process.execPath, "--no-install", probe], {
+        cwd: tmpdir(), stdout: "pipe", stderr: "pipe",
+      });
+      const result = await new Response(probeChild.stdout).text();
+      expect(await probeChild.exited).toBe(0);
+      expect(await new Response(probeChild.stderr).text()).toBe("");
+      expect(JSON.parse(result)).toEqual(parseProviderConfig(customConfig));
+      const menu = Bun.spawn([process.execPath, "--no-install", join(dir, "cc.ts")], {
+        cwd: tmpdir(), stdin: new TextEncoder().encode("invalid\n"), stdout: "pipe", stderr: "pipe",
+      });
+      const menuOutput = await new Response(menu.stdout).text();
+      expect(await menu.exited).toBe(1);
+      expect(menuOutput).toContain("1) First");
+      expect(menuOutput).toContain("2) Second");
+      expect(menuOutput).toContain("Provider [2]:");
+      expect(await new Response(menu.stderr).text()).toContain("invalid provider");
+      for (const content of [undefined, 'secret = "do-not-echo']) {
+        if (content === undefined) rmSync(join(dir, "cc.providers.toml"));
+        else writeFileSync(join(dir, "cc.providers.toml"), content);
+        const child = Bun.spawn([process.execPath, "--no-install", join(dir, "cc.ts")], {
+          cwd: tmpdir(), stdin: "ignore", stdout: "pipe", stderr: "pipe",
+        });
+        expect(await child.exited).toBe(1);
+        expect(await new Response(child.stdout).text()).toBe("");
+        const stderr = await new Response(child.stderr).text();
+        expect(stderr).toContain("ccenv: cc.providers.toml:");
+        expect(stderr).not.toContain("do-not-echo");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("provider selection", () => {
   const selections = [
@@ -20,15 +141,15 @@ describe("provider selection", () => {
     ["DEEPSEEK", "deepseek"],
     ["3", "qwen"],
     ["Qwen", "qwen"],
-  ] satisfies [string, ProviderId][];
+  ] satisfies [string, string][];
 
   test.each(selections)("%s selects %s", (choice, expected) => {
-    expect(providerFromChoice(choice).id).toBe(expected);
+    expect(providerFromChoice(choice, config).id).toBe(expected);
   });
 
   test("rejects unknown and disabled providers", () => {
-    expect(() => providerFromChoice("other")).toThrow("invalid provider");
-    expect(() => providerFromChoice("4")).toThrow("glm5 is not configured yet");
+    expect(() => providerFromChoice("other", config)).toThrow("invalid provider");
+    expect(() => providerFromChoice("4", config)).toThrow("glm5 is not configured yet");
   });
 });
 
@@ -127,6 +248,30 @@ describe("credential resolution", () => {
 });
 
 describe("provider environments", () => {
+  test("preserves configured environment names that match object properties", () => {
+    const custom = parseProviderConfig(customConfig.replace(
+      "CUSTOM_PROVIDER_VALUE", "__proto__",
+    ));
+    const environment = buildClaudeEnvironment(
+      providerFromChoice("first", custom), "token", {}, custom.providers,
+    );
+    expect(Object.hasOwn(environment, "__proto__")).toBe(true);
+    expect(environment["__proto__"]).toBe("first-only");
+    expect(Object.getPrototypeOf(environment)).toBe(Object.prototype);
+  });
+
+  test("clears custom values owned by other providers without mutating the caller", () => {
+    const custom = parseProviderConfig(customConfig);
+    const base = { CUSTOM_PROVIDER_VALUE: "stale", PATH: "/bin", ANTHROPIC_API_KEY: "stale" };
+    const environment = buildClaudeEnvironment(providerFromChoice("", custom), "token", base, custom.providers);
+    expect(environment.CUSTOM_PROVIDER_VALUE).toBeUndefined();
+    expect(environment.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(environment.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("983616");
+    expect(environment.ANTHROPIC_AUTH_TOKEN).toBe("token");
+    expect(base.CUSTOM_PROVIDER_VALUE).toBe("stale");
+    expect(environment.PATH).toBe("/bin");
+  });
+
   test.each(providers.filter((provider) => provider.enabled))(
     "$id clears stale provider values and applies its complete mapping",
     (provider) => {
@@ -159,7 +304,7 @@ describe("provider environments", () => {
 
 describe("launcher orchestration", () => {
   test("passes the provider environment, Claude arguments, and exit code", async () => {
-    const provider = providerFromChoice("qwen");
+    const provider = providerFromChoice("qwen", config);
     let launchedArgs: readonly string[] = [];
     let launchedEnvironment: Readonly<Record<string, string>> = {};
     const stdout = spyOn(console, "log").mockImplementation(() => {});
@@ -167,6 +312,7 @@ describe("launcher orchestration", () => {
 
     try {
       const exitCode = await main(["--", "--run"], {
+        loadConfig: () => config,
         selectProvider: async () => provider,
         resolveProviderCredential: async (key) => {
           expect(key).toBe("QWEN_API_KEY");

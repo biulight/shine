@@ -1,0 +1,64 @@
+# Overlay this file to customize providers while inheriting the built-in cc.ts.
+# This replaces the complete provider list; it is not a field-level merge.
+# The default must be an enabled provider ID, independent of menu order.
+defaultProvider = "codex"
+
+# Menu numbers follow this list's order. IDs also work as choices.
+# IDs start with a lowercase ASCII letter; use only letters, digits, _ and -.
+# Optional aliases allow uppercase letters too. All IDs/aliases must be unique
+# ignoring case; do not repeat an ID as an alias or use numeric aliases.
+[[providers]]
+id = "codex"
+label = "codex"
+enabled = true
+# Store the value in Shine env, not here. _SECRET and _GPG_SECRET are also supported.
+credentialKey = "CLIPROXYAPI_AUTH_TOKEN"
+configuredMessage = "Claude Code environment configured for Codex through CLIProxyAPI."
+
+# Every environment value must be a string, including numeric values.
+# Authentication variables are supplied from credentialKey, not from this table.
+[providers.env]
+ANTHROPIC_BASE_URL = "http://127.0.0.1:8317"
+ANTHROPIC_DEFAULT_OPUS_MODEL = "gpt-6.1-sol"
+ANTHROPIC_DEFAULT_SONNET_MODEL = "gpt-6.1-terra"
+ANTHROPIC_DEFAULT_HAIKU_MODEL = "gpt-6-luna"
+CLAUDE_CODE_SUBAGENT_MODEL = "gpt-6.1-terra"
+CLAUDE_CODE_EFFORT_LEVEL = "high"
+
+[[providers]]
+id = "deepseek"
+label = "deepseek"
+enabled = true
+credentialKey = "DEEPSEEK_API_KEY"
+configuredMessage = "Claude Code environment configured for DeepSeek."
+
+[providers.env]
+ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+ANTHROPIC_MODEL = "deepseek-v4-pro[1m]"
+ANTHROPIC_DEFAULT_OPUS_MODEL = "deepseek-v4-pro[1m]"
+ANTHROPIC_DEFAULT_SONNET_MODEL = "deepseek-v4-pro[1m]"
+ANTHROPIC_DEFAULT_HAIKU_MODEL = "deepseek-flash"
+CLAUDE_CODE_SUBAGENT_MODEL = "deepseek-flash"
+CLAUDE_CODE_EFFORT_LEVEL = "max"
+
+[[providers]]
+id = "qwen"
+label = "qwen"
+enabled = true
+credentialKey = "QWEN_API_KEY"
+configuredMessage = "Claude Code environment configured for Qwen."
+
+[providers.env]
+ANTHROPIC_BASE_URL = "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic"
+ANTHROPIC_MODEL = "qwen3.8-max"
+ANTHROPIC_DEFAULT_HAIKU_MODEL = "qwen3.8-flash"
+ANTHROPIC_DEFAULT_SONNET_MODEL = "qwen3.8-max"
+ANTHROPIC_DEFAULT_OPUS_MODEL = "qwen3.8-max"
+CLAUDE_CODE_SUBAGENT_MODEL = "qwen3.8-max"
+CLAUDE_CODE_MAX_CONTEXT_TOKENS = "983616"
+
+[[providers]]
+id = "glm5"
+label = "glm5 (not configured yet)"
+aliases = ["glm"]
+enabled = false

@@ -21,7 +21,7 @@ test("Bun pre-commit hook covers all maintained TypeScript sources and tooling i
   expect(hook?.entry).toBe("bash -c 'mise exec -- bun run --bun check:ts'");
   expect(hook?.files).toBeDefined();
   const filter = new RegExp(hook!.files!);
-  const paths = [".pre-commit-config.yaml", "mise.toml", "package.json", "tsconfig.json", "bun.lock"];
+  const paths = [".pre-commit-config.yaml", "mise.toml", "package.json", "tsconfig.json", "bun.lock", "presets/shell/agent/cc.providers.toml"];
   for await (const path of new Bun.Glob("presets/**/*.ts").scan({ cwd: ROOT, onlyFiles: true })) {
     paths.push(path.replaceAll("\\", "/"));
   }
