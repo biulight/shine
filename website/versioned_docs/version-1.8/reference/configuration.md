@@ -106,7 +106,9 @@ instead of silently dropping active values.
 
 ## Directory and source precedence
 
-`SHINE_CONFIG_DIR` has the highest priority. It changes the global configuration and runtime root
+An explicit `--config-dir` overrides `SHINE_CONFIG_DIR` for that invocation. In the rules below,
+`SHINE_CONFIG_DIR` refers to the selected directory, including one supplied through `--config-dir`.
+It changes the global configuration and runtime root
 and, outside a project, fixes the preset directory at `$SHINE_CONFIG_DIR/presets/`; `SHINE_PRESETS`
 and a global `presets_dir` do not override it.
 

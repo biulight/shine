@@ -238,8 +238,11 @@ The remote side resolves the source; the local side resolves the destination. Wi
 the item is placed in the local directory from which `shine ssh` started, using the source name.
 
 The local side starts system `rsync` or `scp`, preferring rsync and falling back to scp. Both ends need
-SSH, and directory transfer requires a common tool. Existing files are not overwritten by default;
-for an existing directory, `--force` merges into it. Use `--scp` to skip rsync probing.
+SSH, and directory transfer requires a common tool. Rsync skips existing files unless `--force`
+is supplied; for an existing directory, `--force` merges into it. Use `--scp` to skip rsync probing.
+SCP, including automatic fallback, may overwrite files even without `--force`, and Shine prints a
+warning. Its `--dry-run` shows resolved paths without copying files. Back up any destination files
+you need before transferring.
 
 ## Upload from local to remote
 

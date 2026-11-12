@@ -173,8 +173,9 @@ shine local download ./remote.log ./remote.log --dry-run
 shine local upload ./local.log /tmp/local.log --dry-run
 ```
 
-Existing files are not overwritten by default. Add `--force` only after confirming the target. For
-an existing directory target, `--force` means merge into the directory.
+With rsync, existing files are skipped unless you add `--force`; for an existing directory target,
+`--force` means merge into the directory. SCP, including automatic fallback, may overwrite files
+even without `--force`. Preview paths and back up any destination files you need before transferring.
 
 ## Maintenance reminders are missing
 

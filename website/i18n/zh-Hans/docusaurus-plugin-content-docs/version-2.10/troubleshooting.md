@@ -83,7 +83,11 @@ shine app refresh surge subscription-proxies.conf
 
 ## `shine preset pull` 拒绝更新来源
 
-`shine preset pull` 只对干净、已设置 upstream 的普通分支执行快进更新。先进入错误信息显示的仓库并检查：
+如果 overlay 是通过 `shine preset overlay link --git` 创建的，pull 会丢弃本地镜像中的改动和额外文件。
+请在上游仓库修改，不要直接编辑镜像；见 [Git overlay](./guides/custom-presets.md)。
+
+对于自行维护的外部来源或手动链接的 overlay，`shine preset pull` 只对干净、已设置 upstream 的
+普通分支执行快进更新。先进入错误信息显示的仓库并检查：
 
 ```bash
 git status
@@ -92,7 +96,7 @@ git branch -vv
 git pull --ff-only
 ```
 
-请自行提交、stash 或处理本地改动和分支分歧，再重新运行 `shine preset pull`。Shine 不会自动丢弃改动或解决冲突。若提示找不到 Git，请先安装 Git 并确认 `git` 在 `PATH` 中；非 Git 预设目录被跳过属于正常行为。
+请自行提交、stash 或处理本地改动和分支分歧，再重新运行 `shine preset pull`。对于这些手动维护的来源，Shine 不会自动丢弃改动或解决冲突。若提示找不到 Git，请先安装 Git 并确认 `git` 在 `PATH` 中；非 Git 预设目录被跳过属于正常行为。
 
 ## 系统初始化前想确认影响
 
@@ -140,7 +144,8 @@ shine local download ./remote.log ./remote.log --dry-run
 shine local upload ./local.log /tmp/local.log --dry-run
 ```
 
-目标文件已存在时默认拒绝覆盖；确认无误后加 `--force`。目录目标已存在时，`--force` 表示合并写入。
+使用 rsync 时默认跳过已有文件，添加 `--force` 后才允许覆盖；目录目标已存在时，`--force` 表示合并写入。
+SCP（包括自动回退）即使不带 `--force` 也可能覆盖文件。传输前请预览路径，并备份目标中需要保留的文件。
 
 ## 没有显示维护提醒
 

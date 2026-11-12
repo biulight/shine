@@ -327,11 +327,17 @@ env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 These commands compress, resize, and convert JPEG, PNG, and WebP. Every machine that runs them
 needs Bun 1.3.14 or newer in `PATH`; Shine does not bundle Bun. No separate image library is needed.
 
-Install the category or one command, then use the same lifecycle as any other shell preset:
+The workflow below uses all three commands, so install the whole category:
 
 ```bash
 shine info shell/image-tools
-shine install shell/image-tools/img-compress
+shine install shell/image-tools
+```
+
+After installation, open a new terminal or reload your shell profile as described in
+[Shell presets](./shell-presets.md#browse-and-install), then run the commands:
+
+```bash
 img-compress photo.jpg screenshots/
 img-resize --width 1280 --output-dir ./resized photos/
 img-convert --format webp --quality 75 --output-dir ./webp hero.png gallery/
@@ -339,6 +345,9 @@ shine info shell/image-tools --diff
 shine upgrade shell/image-tools
 shine shell uninstall image-tools/img-compress --dry-run
 ```
+
+The last command previews removal of `img-compress` only. If you only need that command in the
+first place, install `shell/image-tools/img-compress` instead of the whole category.
 
 Each command accepts multiple file or directory inputs. A directory scan processes direct JPEG,
 PNG, and WebP children only; it never recurses. Without `--output-dir`, output stays beside its

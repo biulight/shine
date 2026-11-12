@@ -334,11 +334,16 @@ env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 ImageMagick、Sharp 或其它图片库。运行命令的每台机器都必须在 `PATH` 中安装 Bun 1.3.14 或更高
 版本；Shine 不内置 Bun。命令会检测缺失的 `Bun.Image` API，并给出升级提示。
 
-可以安装整个类别或其中一个命令，再沿用普通 Shell 预设的生命周期：
+下面的流程会使用三个命令，因此先安装整个类别：
 
 ```bash
 shine info shell/image-tools
-shine install shell/image-tools/img-compress
+shine install shell/image-tools
+```
+
+安装后，按 [Shell 预设](./shell-presets.md) 的说明打开新终端或重新加载 shell 配置，再运行：
+
+```bash
 img-compress photo.jpg screenshots/
 img-resize --width 1280 --output-dir ./resized photos/
 img-convert --format webp --quality 75 --output-dir ./webp hero.png gallery/
@@ -346,6 +351,9 @@ shine info shell/image-tools --diff
 shine upgrade shell/image-tools
 shine shell uninstall image-tools/img-compress --dry-run
 ```
+
+最后一条命令只预览移除 `img-compress`。如果一开始就只需要这个命令，可以安装
+`shell/image-tools/img-compress`，无需安装整个类别。
 
 每个命令都接受多个文件或目录输入。目录只扫描第一层的 JPEG、PNG、WebP，不会递归。未指定
 `--output-dir` 时，结果保存在来源旁边，名称形如 `photo.compressed.jpg`、

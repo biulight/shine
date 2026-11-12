@@ -105,8 +105,12 @@ not extract one section from a configuration whose sections may reference each o
 
 ## `shine preset pull` refuses to update a source
 
-`shine preset pull` performs a fast-forward update only for a clean normal branch with an upstream.
-Enter the repository shown in the error and inspect it:
+For an overlay created with `shine preset overlay link --git`, pulling discards local edits and extra files
+in the managed mirror. Edit the upstream repository instead. See [Git overlays](./guides/custom-presets.md).
+
+For an external source or manually linked overlay that you maintain yourself, `shine preset pull`
+only fast-forwards a clean normal branch with an upstream. Enter the repository shown in the error
+and inspect it:
 
 ```bash
 git status
@@ -116,7 +120,7 @@ git pull --ff-only
 ```
 
 Commit or stash local changes and resolve branch divergence yourself, then rerun `shine preset pull`.
-Shine never discards changes or resolves conflicts automatically. If Git is missing, install it and
+For these manually maintained sources, Shine does not discard changes or resolve conflicts automatically. If Git is missing, install it and
 make sure `git` is in `PATH`. Non-Git preset directories are skipped normally.
 
 ## Preview system initialization effects
@@ -169,8 +173,9 @@ shine local download ./remote.log ./remote.log --dry-run
 shine local upload ./local.log /tmp/local.log --dry-run
 ```
 
-Existing files are not overwritten by default. Add `--force` only after confirming the target. For
-an existing directory target, `--force` means merge into the directory.
+With rsync, existing files are skipped unless you add `--force`; for an existing directory target,
+`--force` means merge into the directory. SCP, including automatic fallback, may overwrite files
+even without `--force`. Preview paths and back up any destination files you need before transferring.
 
 ## Maintenance reminders are missing
 

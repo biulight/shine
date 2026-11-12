@@ -44,11 +44,16 @@ This manual applies to **Shine 1.8.0**.
 
 ## Try a built-in preset
 
-Install the image helpers, resize a photo, and inspect what Shine added:
+With Bun 1.3.14 or newer installed and available in `PATH`, install the image helpers:
 
 ```bash
 shine list --available
 shine install shell/image-tools
+```
+
+Open a new terminal or reload your shell profile as described in [Shell presets](./guides/shell-presets.md#browse-and-install). Then resize a photo and inspect what Shine added:
+
+```bash
 img-resize photo.jpg
 shine info shell/image-tools
 ```
