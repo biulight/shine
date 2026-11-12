@@ -18,6 +18,30 @@ fn embedded_shell_metadata_returns_proxy_and_utils() {
 }
 
 #[test]
+fn agent_provider_config_is_embedded_auxiliary_data_on_every_platform() {
+    use shine_core::runtime::RuntimePlatform;
+    for platform in [
+        RuntimePlatform::Macos,
+        RuntimePlatform::Linux,
+        RuntimePlatform::Windows,
+    ] {
+        let runtime = super::support::runtime(platform);
+        let categories = runtime.shell_categories(Some("agent")).unwrap();
+        let agent = categories.first().unwrap();
+        assert_eq!(agent.files.len(), 1);
+        assert_eq!(agent.files[0].command_name, "ccenv");
+        assert_eq!(agent.files[0].source_rel, std::path::Path::new("cc.ts"));
+        assert_eq!(
+            runtime
+                .presets()
+                .get("shell/agent/cc.providers.toml")
+                .unwrap(),
+            include_bytes!("../../presets/shell/agent/cc.providers.toml")
+        );
+    }
+}
+
+#[test]
 fn embedded_shell_metadata_proxy_scripts_have_descriptions() {
     let cats = super::support::runtime(shine_core::runtime::RuntimePlatform::Linux)
         .shell_categories(None)
