@@ -22,7 +22,7 @@ Then inspect the preset:
 
 ```bash
 shine list
-shine info proxy
+shine info shell/proxy
 ```
 
 If a command entry is missing, use `shine info shell/<CATEGORY>` to inspect it. Rebuild the
@@ -47,14 +47,9 @@ External directories, project configuration, and environment variables can chang
 source. Check `Preset Source` and `Presets Overlay` in command output and compare the precedence rules in the
 [configuration reference](./reference/configuration.md).
 
-To isolate the check from existing configuration, use a separate directory:
-
-```bash
-SHINE_CONFIG_DIR=/tmp/shine-check shine app list
-```
-
-Shine uses this directory for configuration and runtime state and does not read the original
-`~/.shine/`.
+To inspect account configuration alone, move outside projects containing `shine.config.toml`
+before checking the source. `SHINE_CONFIG_DIR` changes the account configuration and state directory;
+it does not disable project configuration discovery.
 
 ## Installed configuration does not change after updating an environment value
 
@@ -93,20 +88,30 @@ shine env list
 shine app refresh surge subscription-proxies.conf
 ```
 
-The built-in Surge generator requires Bun and an HTTPS URL in the selected file's input:
-`SURGE_SUBSCRIPTION_URL` or `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`. A failed refresh reports a safe
-failure category such as an HTTP status, timeout, oversized response, or no
-compatible proxy nodes; URLs, response bodies, and node content remain redacted. It does not remove
-the last successfully generated file. If the destination is user-modified, inspect the difference
-and use `--force` only when you intend to replace it. Routine `shine update` and `shine upgrade` runs
-never access this manual subscription generator. If the provider returns a complete Surge managed
-configuration, use its generic URI/Base64 subscription URL instead; the generator deliberately does
-not extract one section from a configuration whose sections may reference each other.
+Check these prerequisites in order:
+
+1. Install Bun and make sure `SURGE_SUBSCRIPTION_URL` or `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`
+   contains an HTTPS subscription URL.
+2. For an HTTP error, timeout, oversized response, or no compatible nodes, check the subscription
+   service. If it returns a complete Surge managed configuration, use its generic URI/Base64
+   subscription URL instead; Shine does not extract proxy sections from a complete configuration.
+3. If the destination was modified, inspect the difference. Add `--force` only if you intend to
+   replace those local changes.
+
+A failed refresh preserves the last successfully generated file. Routine `shine update` and
+`shine upgrade` do not refresh this manual subscription; run `shine app refresh` explicitly.
+Errors redact subscription URLs, response bodies, and node content. Still check output for
+secrets before including it in a bug report.
 
 ## `shine preset pull` refuses to update a source
 
-`shine preset pull` performs a fast-forward update only for a clean normal branch with an upstream.
-Enter the repository shown in the error and inspect it:
+First check the source type. An overlay created with `shine preset overlay link --git` is a
+Shine-managed mirror: pulling discards local edits and extra files in that mirror. Edit its
+upstream repository instead. See [Git overlays](./guides/custom-presets.md).
+
+For an external source or manually linked overlay that you maintain yourself, `shine preset pull`
+only fast-forwards a clean normal branch with an upstream. Enter the repository shown in the error
+and inspect it:
 
 ```bash
 git status
@@ -116,7 +121,7 @@ git pull --ff-only
 ```
 
 Commit or stash local changes and resolve branch divergence yourself, then rerun `shine preset pull`.
-Shine never discards changes or resolves conflicts automatically. If Git is missing, install it and
+For these manually maintained sources, Shine does not discard changes or resolve conflicts automatically. If Git is missing, install it and
 make sure `git` is in `PATH`. Non-Git preset directories are skipped normally.
 
 ## Preview system initialization effects
@@ -127,16 +132,15 @@ shine sys bootstrap --dry-run
 shine sys uninstall <ITEM> --dry-run
 ```
 
-Do not infer available items from planning documents. Use `shine sys list` and `shine sys info` from
-the installed version.
+Use `shine sys list` and `shine sys info` to check the items and prerequisites available in your
+installed version.
 
 If an older version left conflict markers in your shell profile, resolve them manually before
 rerunning `shine sys bootstrap --dry-run` or the relevant `upgrade`.
 
 ## A saved task behaves differently from the original command
 
-`shine task` does not invoke a shell; it starts the saved argument array directly. Commands that use
-pipes, redirection, variable expansion, or globs must save an explicit shell:
+For tasks that use pipes, redirection, variable expansion, or globs, include a shell explicitly:
 
 ```bash
 shine task save kill-port -- sh -c 'lsof -ti :3000 | xargs kill'

@@ -37,8 +37,15 @@ export SHINE_SYNC_TERMINAL_THEME=0
 
 ```bash
 shine shell install utils
-eval "$(shine-theme-sync)"
 ```
+
+打开新的 Shell 后，直接运行：
+
+```bash
+shine-theme-sync
+```
+
+这个命令会让设置在当前会话生效，不需要额外使用 `eval`。
 
 ## SSH 会话
 

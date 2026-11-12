@@ -123,9 +123,8 @@ shine trust inspect sys/neovim
 shine trust grant sys/neovim
 ```
 
-能力说明是可选、未经验证的审阅信息；trust grant 表示你已审阅并允许执行 external code。
-纯 package-provider item 不需要空声明。Snapshot trust 会绑定完整有效 Sys OS 快照，任何文件、
-来源层或作者/env/admin 说明变化后都需重新审阅。授权后再运行一次安装预览。持续开发本地 Preset
-时可使用 `--development` 接受同一已登记来源中的代码修改；说明或来源变化仍须审阅。
+权限说明本身不会授予执行代码的权限。预设文件、来源或权限要求变化后，请重新审阅授权，
+再运行安装预览。持续开发时可使用 `--development` 信任同一来源的后续代码修改，
+但只有明确接受这一范围时才使用；来源或权限要求变化仍须审阅。
 
 本地验证无错误、实际来源正确且安装预览符合预期后，迁移准备完成。需要实际安装时运行 `shine sys bootstrap neovim`，审阅计划后确认执行；后续操作见[初始化与管理系统](./system-init.md)。

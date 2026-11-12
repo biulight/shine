@@ -20,7 +20,7 @@ source ~/.zshrc
 
 ```bash
 shine list
-shine info proxy
+shine info shell/proxy
 ```
 
 命令入口缺失时，先用 `shine info shell/<CATEGORY>` 检查详情。确认本地修改后，执行
@@ -41,13 +41,8 @@ shine info app/starship --diff
 外部目录、项目配置和环境变量可能改变当前来源。检查命令输出中的 `Preset Source` 与
 `Presets Overlay`，并按[配置参考](./reference/configuration.md)核对优先级。
 
-临时排除配置干扰时，可使用独立目录：
-
-```bash
-SHINE_CONFIG_DIR=/tmp/shine-check shine app list
-```
-
-该目录会被 Shine 用于配置和运行时状态，不会读取原来的 `~/.shine/`。
+如果只想检查账户配置，请先切换到没有 `shine.config.toml` 的项目之外，再查看来源。
+`SHINE_CONFIG_DIR` 只切换账户配置与状态目录，不会关闭当前项目配置的查找。
 
 ## 修改 env 后配置没有变化
 
@@ -79,11 +74,26 @@ shine env list
 shine app refresh surge subscription-proxies.conf
 ```
 
-内置 Surge generator 运行时需要 Bun，并要求所选文件对应的 `SURGE_SUBSCRIPTION_URL` 或 `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` 使用 HTTPS。刷新失败时会报告 HTTP 状态、超时、响应过大或无兼容代理节点等安全分类；URL、响应正文和节点内容仍会隐去。失败不会删除上次成功生成的文件。若提示目标被用户修改，先检查差异；只有确定要以新生成内容覆盖时才使用 `--force`。日常 `shine update` 和 `shine upgrade` 不会访问这个手动订阅 generator。若服务商返回完整的 Surge 托管配置，应改用其通用 URI/Base64 订阅地址；配置各区段可能互相引用，generator 不会自动截取其中一段。
+按以下顺序检查：
+
+1. 安装 Bun，并确认 `SURGE_SUBSCRIPTION_URL` 或 `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`
+   为 HTTPS 订阅地址。
+2. 如果报错为 HTTP 状态、超时、响应过大或无兼容节点，检查订阅服务。服务商返回完整 Surge
+   托管配置时，请改用通用 URI/Base64 订阅地址；Shine 不会从完整配置中截取代理部分。
+3. 如果目标文件已被修改，先查看差异；只有确定要覆盖本地修改时才加 `--force`。
+
+刷新失败会保留上次成功生成的文件。日常 `shine update` 和 `shine upgrade` 不会刷新这类手动订阅，
+需要显式运行 `shine app refresh`。报错会隐去订阅 URL、响应正文和节点内容；提交问题时仍请检查
+输出，避免附上秘密。
 
 ## `shine preset pull` 拒绝更新来源
 
-`shine preset pull` 只对干净、已设置 upstream 的普通分支执行快进更新。先进入错误信息显示的仓库并检查：
+先区分来源类型：通过 `shine preset overlay link --git` 创建的覆盖层是 Shine 管理的镜像，
+拉取时会丢弃镜像内的本地修改和额外文件。请在上游仓库修改，不要直接编辑本机镜像；
+详见[Git 覆盖层](./guides/custom-presets.md)。
+
+对于自己维护的外部来源或手动链接的覆盖层，`shine preset pull` 只对干净、已设置 upstream
+的普通分支执行快进更新。进入错误信息显示的仓库并检查：
 
 ```bash
 git status
@@ -92,7 +102,7 @@ git branch -vv
 git pull --ff-only
 ```
 
-请自行提交、stash 或处理本地改动和分支分歧，再重新运行 `shine preset pull`。Shine 不会自动丢弃改动或解决冲突。若提示找不到 Git，请先安装 Git 并确认 `git` 在 `PATH` 中；非 Git 预设目录被跳过属于正常行为。
+请自行提交、stash 或处理本地改动和分支分歧，再重新运行 `shine preset pull`。对于这些手动维护的来源，Shine 不会自动丢弃改动或解决冲突。若提示找不到 Git，请先安装 Git 并确认 `git` 在 `PATH` 中；非 Git 预设目录被跳过属于正常行为。
 
 ## 系统初始化前想确认影响
 
@@ -102,14 +112,14 @@ shine sys bootstrap --dry-run
 shine sys uninstall <ITEM> --dry-run
 ```
 
-不要依赖计划文档推断可用项目；以当前版本 `shine sys list` 和 `shine sys info` 为准。
+使用 `shine sys list` 和 `shine sys info` 确认当前版本提供的项目及安装要求。
 
 若旧版本在 shell profile 中留下冲突标记，请先手动处理，再运行
 `shine sys bootstrap --dry-run` 或对应的 `upgrade`。
 
 ## 任务运行结果和手动执行不同
 
-`shine task` 不经过 shell，而是直接按保存的参数数组启动程序。包含管道、重定向、变量展开或通配符的命令需要显式保存 shell：
+保存的任务需要管道、重定向、变量展开或通配符时，请显式调用 Shell：
 
 ```bash
 shine task save kill-port -- sh -c 'lsof -ti :3000 | xargs kill'

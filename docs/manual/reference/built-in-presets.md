@@ -5,7 +5,7 @@ sidebar_position: 3
 
 # Built-in presets
 
-Shine compiles these presets into the CLI. They are usable defaults and copyable starting points,
+Shine includes these presets as usable defaults and copyable starting points,
 not an exhaustive catalog of every tool Shine can support. Shell and app presets manage declared
 commands and configuration; system presets initialize selected development tools or manage a small
 set of reversible system resources. App presets do not automatically install the corresponding
@@ -21,8 +21,8 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-This page reflects the built-in `presets/` directory for Shine 2.10.0. For another version, use
-`shine list --available` and `--help` as the authority.
+This page describes the presets in the current development version (Next). Use
+`shine list --available` and `--help` to check what your installed version provides.
 
 The table below shows platform availability.
 
@@ -53,9 +53,9 @@ The table below shows platform availability.
 
 ## Shell presets
 
-Installing a shell category creates entries under `~/.shine/bin/` and wrappers in supported Bash,
-Zsh, or PowerShell profiles. Commands described as acting on the current session are sourced by the
-wrapper; do not bypass it and execute the script directly.
+After installing a Shell category, open a new Bash, Zsh, or PowerShell session and use the command
+names below. Use these names for commands that change the current session too; do not run the
+script files from the preset directory directly.
 
 <div className="built-in-presets-shell-table" aria-hidden="true" />
 
@@ -69,7 +69,7 @@ wrapper; do not bypass it and execute the script directly.
 | `proxy` | `usetproxy` | Clear session proxy variables and Yarn settings written by `setproxy`. |
 | `utils` | `copyfile` | Copy a file to the local clipboard through OSC 52. Unix only; the terminal or multiplexer must allow OSC 52. |
 | `utils` | `shine-env-export` | Load a Shine value into the current session, using plaintext or decrypting `<KEY>_SECRET`. |
-| `utils` | `shine-theme-sync` | Export `SHINE_TERMINAL_THEME` and `BAT_THEME` for the terminal appearance. |
+| `utils` | `shine-theme-sync` | Set `SHINE_TERMINAL_THEME` and `BAT_THEME` for the current session’s terminal appearance. |
 
 The Codex provider in `ccenv` uses local CLIProxyAPI with `CLIPROXYAPI_AUTH_TOKEN`; DeepSeek and Qwen
 use their matching `*_API_KEY`. Resolution order is `_SECRET`, legacy `_GPG_SECRET`, then plaintext.
@@ -94,10 +94,10 @@ commands to connect those files to the active application configuration; follow 
 | --- | --- | --- |
 | `archey4` | Unix; `~/.config/archey4/` | Archey4 system-information configuration. |
 | `clash-verge` | macOS, Linux, Windows; merge source under `~/.shine/clash-verge/`, local rule references under CVR's user data directory | Clash Verge Rev subscription enhancement example. Option 1 uses managed HomeDir rule files; HTTP/HTTPS modes ignore them. Apply and teardown require Bun; see the [complete workflow](../guides/app-presets.md#clash-verge-rev). |
-| `docker-desktop` | Windows; `~/AppData/Roaming/Docker/settings-store.json` | JSON-merge manages only `proxy` and `containersProxy`; restart Docker Desktop afterward. |
-| `docker-engine` | Unix: `/etc/docker/daemon.json`; Windows: `~/.docker/daemon.json` | Template plus JSONC conversion. Unix needs administrator access; restart Docker Engine afterward. |
+| `docker-desktop` | Windows; `~/AppData/Roaming/Docker/settings-store.json` | Changes only `proxy` and `containersProxy`; restart Docker Desktop afterward. |
+| `docker-engine` | Unix: `/etc/docker/daemon.json`; Windows: `~/.docker/daemon.json` | Docker daemon configuration. Unix needs administrator access; restart Docker Engine afterward. |
 | `fastfetch` | `~/.config/fastfetch/` | Fastfetch system-information configuration. |
-| `ghostty` | Unix; `~/.config/ghostty/` | Main configuration and built-in light/dark themes; backgrounds use `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK`. Ctrl + `\` creates a split to the right; Ctrl + `-` creates one below. Ctrl + H/J/K/L focuses the left/down/up/right split; Super + [ / ] is unbound (Cmd on macOS). The navigation bindings use `performable:`: Ghostty consumes the keys only when it can perform the navigation; otherwise, terminal applications receive them. |
+| `ghostty` | Unix; `~/.config/ghostty/` | Main configuration and built-in light/dark themes; backgrounds use `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK`. Ctrl + `\` creates a split to the right; Ctrl + `-` creates one below. Ctrl + H/J/K/L focuses the left/down/up/right split; Super + [ / ] is unbound (Cmd on macOS). When no split can be selected, the keys reach the terminal application. |
 | `git` | `~/.gitconfig` | Common aliases and defaults; an unmanaged existing file is backed up by normal app rules. |
 | `JetBrains` | `~/.ideavimrc` | IdeaVim configuration; enable the IdeaVim plugin in the IDE. In Normal mode, Ctrl + H/J/K/L focuses the left/down/up/right editor split, matching the Ghostty preset. |
 | `starship` | `~/.config/starship.toml` | Starship prompt configuration; install and enable Starship separately. |
@@ -110,22 +110,14 @@ Surge, Starship, or another application.
 
 ## System presets
 
-`shine sys bootstrap` runs package managers or installation scripts for
-selected development-environment items. Interactive mode selects items, positional IDs run only
-those items, and non-interactive mode uses the platform default profile.
-The recorded result means that the bootstrap step ran; it is not a live assertion that a package is
-still installed or current. Rerunning bootstrap checks presence but does not upgrade third-party
-software. Run `--dry-run` first because package managers, downloads, and profile merging may require
-privileges or change the machine.
+Use `shine sys bootstrap` to install selected development tools, or choose a group from the table
+with `--preset`. Preview the steps and permissions with `--dry-run` first. Follow
+[Initialize and manage a system](../guides/system-init.md) for the complete workflow.
 
-Shell integration is item-owned: a successful targeted bootstrap enables that item's generated
-content without pulling in integrations for unselected software. Earlier enabled integrations stay
-active until explicitly disabled with `shine sys profile disable <ITEM>`.
-
-The `mise` item installs mise and activates it through Shine-managed shell profile content. Shine
-does not write mise configuration or manage runtime versions; use mise itself for those operations.
-Shine does not check or upgrade third-party bootstrap software; use Homebrew, apt, winget, mise,
-rustup, or the upstream tool that owns the software.
+Installation enables the selected tools' shell integrations and keeps previously enabled ones.
+Use `shine sys profile disable <ITEM>` to turn one off. Shine does not upgrade installed software;
+use its package manager or upstream tool. The `mise` item only installs and activates mise;
+use mise itself for tool configuration and version management.
 
 <div className="built-in-presets-system-table" aria-hidden="true" />
 
@@ -140,6 +132,19 @@ rustup, or the upstream tool that owns the software.
 | Windows | `required` | Rust, Yazi, Starship. |
 | Windows | `recommended` (default) | `required` plus Neovim, zoxide, Atuin, fzf, bat, eza, ZeroTier. |
 | Windows | `all` | `recommended` plus Bun, pnpm, mise. |
+
+### Ubuntu installation notes {#ubuntu-installation-notes}
+
+- **Atuin:** open a new shell after installation and run `atuin import auto` to import existing
+  history. Run `atuin register` or `atuin login` if you want history synchronization.
+- **Yazi:** installs from the official stable APT repository with preview dependencies. It requires
+  administrator access, but not Rust or Cargo. Existing installations are skipped without changing
+  their installation method.
+- **pnpm:** does not require Node.js, npm, or Corepack beforehand. It installs under
+  `~/.local/share/pnpm`; Shine configures the command path. Open a new shell to use it.
+- **Minimal server setup:** `minimal` includes only the tools listed above, without history sync,
+  a prompt, the Node.js toolchain, or Homebrew. Review the actual steps with
+  `shine sys bootstrap --preset minimal --dry-run` before installing.
 
 ### Private split DNS
 
@@ -160,6 +165,10 @@ shine sys apply split-dns --dry-run
 shine sys apply split-dns
 shine sys uninstall split-dns --dry-run
 ```
+
+On Ubuntu, `split-dns` requires local DNS queries to pass through the `127.0.0.53`
+systemd-resolved stub. If Shine reports that the stub is disabled, re-enable `DNSStubListener`
+or confirm that local resolution passes through systemd-resolved before applying the configuration.
 
 It does not install ZeroTier or CoreDNS or create DNS zones. Set up the private network and DNS first.
 See the Chinese guide

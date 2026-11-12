@@ -8,9 +8,7 @@ sidebar_position: 1
 This page reflects Shine 2.10.0. Run `shine <COMMAND> --help` for every option supported by the
 installed version. The task guides explain complete workflows; this page is a compact command index.
 
-Command failures are reported on stderr. When stderr supports color, the top-level `Error:`
-summary is bold red and `Caused by:` is bold; diagnostic details keep the default text color.
-Set `NO_COLOR=1` to disable color. Redirected stderr is plain unless color is explicitly forced.
+Command failures are written to stderr. Set `NO_COLOR=1` to disable colored output.
 
 ## Targets
 
@@ -64,23 +62,14 @@ Quote target names containing spaces or shell punctuation. For names beginning w
 options before `--` and the name after it, for example `shine app uninstall --dry-run -- -demo`.
 Suggested commands use POSIX shell syntax on Unix and PowerShell syntax on Windows.
 
-Ordinary built-in Shell installs use a Source / Commands / Changes / Backup summary.
-An Environment row lists non-sensitive variable names when needed; secret variables keep the expanded review.
-Use `--verbose` to expand it. Operations requiring additional review keep their detailed information.
+Before confirming a change, review the affected files, permissions, code sources, and execution
+steps. Add `--verbose` for details; for upgrades, add `--full-plan` with `--verbose` to include
+unchanged items. If relevant files or settings change after review, review the new plan.
 
-Before applying changes, review the Plan's affected files, planned effects, code sources, and
-execution timing. Built-in code is shown with distribution trust; external code retains its trust
-status and any required confirmation. Missing declarations, administrator access, and blocking
-diagnostics remain visible.
-
-Use `--verbose` for full permissions, author capability statements, paths, and diagnostic details.
-The default view omits general script-execution disclaimers and the abstract unrestricted-code
-permission. These display choices do not change trust or approval checks. For upgrades, add
-`--full-plan` with `--verbose` to include unchanged items. If relevant files or settings change
-after review, review a new Plan.
-
-Interactive confirmation can authorize external code for that operation without saving persistent
-trust. Automation and `--yes` require existing trust. Preset scripts are not sandboxed.
+Interactive confirmation can authorize listed external code for that operation without saving
+persistent trust. Automation and `--yes` require existing trust for external code. `--yes` skips only the prompt,
+not permissions or execution checks, and cannot be combined with `--dry-run`. Preset scripts are
+not sandboxed.
 
 ## Shell presets
 
@@ -101,10 +90,9 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
   with `shine info <TARGET> --diff` first.
 - If Shine reports an interrupted operation, run `shine shell recover`. Changed files are preserved
   and may require manual review.
-
 - Shell uninstall identifies retained launcher paths when ownership conflicts prevent removal.
   It has no `--force` override: inspect those files before deciding whether to move or remove them.
-  A conflicting file may remain even after its installation receipt is cleared; the report says so.
+  A conflicting file may remain after Shine removes its installation record; check the reported paths.
 
 See [Manage shell presets](../guides/shell-presets.md).
 
@@ -123,8 +111,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 
 - `app info` and `update` do not run generators unless `--run-generators` is present.
 - `app refresh` runs a generated-file refresh explicitly. `--force` permits replacing a
-  user-modified managed destination. The installed receipt must belong to that exact category and
-  source file; `--force` cannot refresh a destination owned by another source.
+  user-modified managed destination. The destination must already be managed for that category and
+  source file; `--force` cannot take over another source's destination.
   Its summary distinguishes `user-modified (kept)` from execution failures. Either leaves the
   refresh incomplete and returns a nonzero exit status; other selected files may still refresh.
 - `app uninstall --force` may delete user-modified managed content. Always preview it with
@@ -169,54 +157,49 @@ Tab completion does not execute Preset code or grant trust.
 state migrations; if configuration validation fails, correct the reported file before retrying.
 
 If a release check fails, `update` still reports configuration updates. Retry the release check
-with `--refresh-release` after restoring connectivity.
+with `shine update --refresh-release` after restoring connectivity; this option cannot be combined
+with a target.
 
-With no target, `shine update` counts skipped files by App category. Use `--run-generators` to
-evaluate them. A fully built-in category needs no additional grant. If the category includes files
-from an external preset directory or an overlay, the generator needs matching trust. When blocked,
-`update` identifies the contributing sources. Review the listed generator before granting trust.
-With a target, `shine update surge --run-generators` lists files it could not check before
-showing diffs for files with updates. A generator failure elsewhere in the same App category
-still makes a single-file check exit with status 1.
-Add `--verbose` to see the generator and its static analysis summary. Files sharing a generator and identical advisory findings are listed together, with counts and
-an example location for each kind of finding. Blocking findings retain their individual locations.
-Use `shine preset lint <PATH> --format json` for all locations in a separate source check.
-If an overlay is configured, supply a complete preset directory containing the effective base and overlay files.
-Without a target, verbose mode shows blocked files before the inventory. Failed or incomplete
-evaluation does not establish that installed content is current.
+`update` normally checks generated files without running their generators. Add `--run-generators`
+to evaluate their output. Fully built-in categories need no additional grant; a category containing
+external or overlay files needs matching trust. Review the reported sources before granting it.
+
+A failed or incomplete evaluation cannot establish that installed content is current. Even when
+checking one file, a generator failure elsewhere in its App category can make the command exit
+with status 1. Use `--verbose` for diagnostics or
+[check the preset source](../guides/custom-presets.md#check-app-code-before-execution) with `preset lint`.
 
 For external Shell presets in `snapshot` mode, `update --diff` includes shared category files,
 not just the selected command script. `content: unchanged` does not rule out changes to helpers
 or metadata. `update <TARGET>` shows these details by default. Displayed diffs are review previews,
 not patches; line-ending-only changes can still require an update.
 
-`update --verbose` includes installed managed system configurations even when no update is pending.
-`up-to-date (recorded)` compares the desired configuration with the installation record; it is not a
-live system check. Missing Preset sources are shown explicitly. App summaries distinguish generators
-that were not evaluated, require trust, or failed evaluation from user-modified files.
+`update --verbose` includes managed system settings with no pending update. The label
+`up-to-date (recorded)` means the desired settings match Shine's installation record, not that
+Shine checked the live system. Resolve any missing sources or unchecked generators before
+assuming everything is current.
 
-If an App category or file entry is removed from the active Preset, `update --verbose` (also with
-`--diff`) still reports its retained installed content and offers an uninstall preview. These checks
-do not remove files or installation records, even when the entire category is gone.
+If an installed App category or file disappears from the Preset source, `update --verbose` still
+reports its retained files and offers an uninstall preview. Checking does not delete them.
 
-`update` is read-only. `upgrade` displays the planned changes and asks for approval when there is
-an action. When the full plan has no pending work or unresolved checks, it reports
-`Nothing to upgrade.` without confirmation, state writes or background checks. Unchanged command
-content alone is not enough: snapshot updates, profile repairs and stale entries may still need work.
-Use `--yes` only after reviewing the same scope. `--pull` first updates eligible Git-managed Preset sources.
-`--prune-stale` permits removal of unchanged managed entries no longer present in the Preset.
-`trust grant --development` keeps code edits from the displayed local source trusted while the
-target, capability, source directory, and source layer remain unchanged. This is long-term source
-authorization, not continuous code review.
-Use `trust list` to check grants against the active Preset and `--verbose` for details. Listing
-grants does not renew them.
+`update` checks without applying changes. `upgrade` asks for approval when work is needed and
+reports `Nothing to upgrade.` when no work or unresolved checks remain. Unchanged command contents
+can still require updated configuration or shell integration. Review the plan before using `--yes`.
 
-Interactive lifecycle confirmation may authorize external code for that operation without saving
-a grant. Automation and `--yes` require existing trust; Shell live requires Development trust.
+| Option | Effect |
+| --- | --- |
+| `--pull` | Update eligible Git-managed Preset sources before checking or upgrading |
+| `--prune-stale` | Allow removal of unchanged managed App files no longer present in the Preset |
+| `trust grant --development` | Authorize future code edits from the displayed local source |
 
-Missing Presets, user-modified files, foreign command entries, missing env/admin contracts, and untrusted
-external code are reported as attention items rather than silently overwritten. Restore the source
-or follow the command shown by Shine.
+Development trust is required for live Shell deployment. It covers only the approved target,
+capabilities, and source directory/layer; it does not continuously review future code. Use
+`trust list` to inspect grants and `trust list --verbose` for details. Listing does not renew them.
+See [trust and capability declarations](../guides/custom-presets.md#declare-permissions).
+
+Missing sources, user-modified files, conflicting command entries, missing required inputs or
+administrator authorization, and untrusted external code require attention. Follow the reported
+remedy; these conditions are not permission to overwrite files.
 
 ## System presets
 
@@ -240,7 +223,22 @@ Use `bootstrap` to ensure selected software and shell integration are present. U
 access after you approve their plan. `--force-profile` may replace conflicting profile content, so
 review a dry run first.
 
-Preview changes with `--dry-run` before applying or removing system configuration.
+Preview changes with `--dry-run` before applying or removing system configuration. It cannot be
+combined with `--yes`. Use `--yes` for non-interactive approval; it skips only the prompt, not the
+plan, permission checks, or final validation. Interactive confirmation can authorize the listed
+external code for one operation without saving trust. Running external code with `--yes` requires
+an existing [trust grant](../guides/custom-presets.md).
+
+Positional `bootstrap` IDs select items in order and ignore duplicates. Repeated `--item` is an
+equivalent option, for example `shine sys bootstrap --item rust --item mise --yes`.
+Positional IDs, `--item`, and `--preset` cannot be combined. Non-interactive runs without explicit
+items or a profile use the preset's default profile. For IDs beginning with `-`, put options
+before `--` and the ID after it, for example `shine sys apply --dry-run -- -custom`.
+
+For managed system settings, `shine update` compares the desired configuration with installation
+records; `shine upgrade` also checks the actual system resource. Windows split-DNS settings that
+match both the record and desired configuration need no update or administrator access.
+Use `shine upgrade shell/<CATEGORY>` to limit an upgrade to Shell presets.
 
 See [Initialize and manage a system](../guides/system-init.md).
 
@@ -275,8 +273,8 @@ it without installing it. Use `migrate --dry-run` to preview metadata changes, t
 confirm before applying them. For a Git-managed overlay, migrate and validate its upstream checkout,
 commit and push the changes, then run `shine preset pull` on each consuming device.
 
-New templates omit empty and speculative capability tables. `--unrestricted` adds the optional
-unrestricted author statement, but all arbitrary code is unisolated with or without it.
+`--unrestricted` adds an optional author statement to a new template. It neither isolates script
+execution nor grants trust or permission to run the code.
 
 See [Customize presets](../guides/custom-presets.md) and
 [Migrate system presets to v2](../guides/sys-preset-v2-migration.md).
@@ -323,6 +321,8 @@ Broker policy commands are documented with the complete remote workflow in
 workspace encryption, command wrappers, and hybrid backends, see
 [Manage environment variables and secrets](../guides/environment.md).
 
+See [temporary secret files](../guides/environment.md#workspace-secret-files) for file-group configuration, sealing, persistent export, execution, and cleanup boundaries.
+
 ## Tasks and theme
 
 ```text
@@ -365,7 +365,7 @@ shine clear serve
 stops and removes an older version's user service without loading Shine configuration or deleting
 published files. Repeating successful cleanup is safe; service-manager errors are reported.
 The `shine serve` namespace is removed. See
-[System management](../guides/system-init.md#retire-legacy-http-service).
+[Upgrades and migration](../guides/upgrading.md#retire-an-older-local-http-service).
 
 `shine state migrate` remains the command for versioned runtime-state migrations.
 
@@ -397,5 +397,3 @@ shine self uninstall [--dry-run | --yes]
 
 `stable` follows released versions. `preview` follows the replaceable preview build. See
 [Installation and upgrades](../installation.md).
-
-See [temporary secret files](../guides/environment.md#workspace-secret-files) for file-group configuration, sealing, persistent export, execution, and cleanup boundaries.

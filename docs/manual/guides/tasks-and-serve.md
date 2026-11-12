@@ -28,8 +28,7 @@ shine task info kill-port
 
 Tasks are saved in `tasks.toml` under the active Shine configuration directory. Use
 `SHINE_CONFIG_DIR` or `--config-dir` to select a different task list. A task saved with `--cwd`
-always starts in that directory; without it, the task uses your current directory. `--cwd` accepts
-`~` but requires a UTF-8 path.
+always starts in that directory; without it, the task uses your current directory. `--cwd` accepts `~`.
 
 If saving or deleting a task times out because another command is updating the list, wait for that
 command to finish and retry. Do not delete `tasks.lock` to force an update.
@@ -57,26 +56,14 @@ configuration:
 shine app artifact apply surge
 ```
 
-`app artifact apply` is explicit. `shine app install`, `shine update`, and `shine upgrade` do not
-implicitly run artifact scripts. It displays a security Plan; non-interactive callers must add
-`--yes`. A script failure fails the command and its output is shown directly.
+Shine shows a plan and asks for confirmation before running the script. Scripts run with your
+permissions without sandbox isolation; review external code before approving it. Non-interactive
+runs require `--yes` and an existing trust grant for external code. A script failure fails the
+command, with details shown in the terminal.
 
-Artifact scripts receive configured `[artifact].env` sources only, plus Shine-provided path
-variables:
+Some presets also declare automatic actions after installation or upgrade; those actions require
+review and approval too. `shine update` only checks for updates. Follow the
+[application preset guide](./app-presets.md) for setup, prerequisites, and removal instructions.
 
-| Variable | Purpose |
-| --- | --- |
-| `SHINE_APP_ID` | Current application preset ID |
-| `SHINE_APP_DIR` | Temporary App snapshot for this invocation, containing effective base and overlay files |
-| `SHINE_APP_SOURCE_DIR` | Same effective source snapshot directory as `SHINE_APP_DIR` |
-| `SHINE_APP_OVERLAY_DIR` | Captured effective overlay files for this invocation; explicitly empty without an overlay, overriding inherited values |
-| `SHINE_CONFIG_DIR` | Current Shine runtime directory |
-| `SHINE_CACHE_DIR` | Current application cache directory |
-| `SHINE_STATE_DIR` | Current application state directory |
-
-Each structured `env` entry declares its source, optional target alias, and sensitivity together; missing optional sources
-are omitted. Values are passed as stored. Secret-classified inputs are not decrypted automatically and do not trigger GPG, age, or Touch ID prompts.
-
-Generators, hooks, and artifacts run from a temporary copy of the reviewed preset. Write files you
-want to keep to `SHINE_STATE_DIR` or `SHINE_CACHE_DIR`; the temporary copy is removed afterward.
-Scripts run with your permissions and are not sandboxed.
+If you want to write an artifact script, see [Custom presets](./custom-presets.md) for its runtime,
+input declarations, and output directories.

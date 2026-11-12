@@ -5,262 +5,157 @@ sidebar_position: 3
 
 # Initialize and manage a system
 
-System presets provide selectable development-environment initialization steps for macOS, Ubuntu,
-and Windows, plus a small set of reversible managed system resources. They are not a general machine
-configuration or package-version manager. Use `shine sys list` from the installed version as the
-authoritative list of available items.
+Use system presets to install selected development tools on macOS, Ubuntu, or Windows and enable
+their shell integration. Shine can also manage system settings such as private DNS separately.
+It does not upgrade third-party software.
 
-See [built-in presets](../reference/built-in-presets.md#system-presets) for each platform's profiles
-and for `split-dns` environment variables and safe preview steps.
+## Inspect before installing {#inspect-before-applying}
 
-Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
-without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
-Development trust; explicit `--run-generators` inspection also requires a grant.
-
-## Inspect before applying
+List the items available for your system and inspect any prerequisites:
 
 ```bash
 shine sys list
-shine sys list --all
-shine sys info split-dns
-shine sys bootstrap --dry-run
+shine sys info rust
 ```
 
-`--dry-run` shows selection results, provider/script invocations, and each persistent item-owned
-shell integration without changing the system. Some items require administrator access or additional environment variables;
-`shine sys info <ITEM>` lists those requirements.
+Use `shine sys list --all` to browse other platforms. Available items and named selections
+(profiles) are listed in [Built-in presets](../reference/built-in-presets.md#system-presets).
 
-For item IDs beginning with `-`, put options before `--`, then the item name, for example
-`shine sys apply --dry-run -- -custom`.
+Preview the items you want to install:
 
-## Select interactively or apply a profile
+```bash
+shine sys bootstrap rust mise --dry-run
+```
 
-Choose one initialization method; review the Plan before using `--yes`:
+The preview shows the installation steps and shell changes without applying them. Check any
+administrator access, downloads, or required environment variables before continuing.
 
-| Operation | Command |
+## Choose and install tools {#select-interactively-or-apply-a-profile}
+
+Choose one method:
+
+| Goal | Command |
 | --- | --- |
 | Choose items interactively | `shine sys bootstrap` |
-| Initialize only mise | `shine sys bootstrap mise` |
-| Initialize these items in order | `shine sys bootstrap rust mise` |
-| Explicit items; approve non-interactively | `shine sys bootstrap --item rust --item mise --yes` |
-| Use the recommended profile | `shine sys bootstrap --preset recommended` |
-| Use the minimal profile | `shine sys bootstrap --preset minimal` |
-| Preview with proxy settings | `shine sys bootstrap --proxy --dry-run` |
+| Install only mise | `shine sys bootstrap mise` |
+| Install Rust, then mise | `shine sys bootstrap rust mise` |
+| Use the recommended selection | `shine sys bootstrap --preset recommended` |
+| Use Ubuntu's minimal server selection | `shine sys bootstrap --preset minimal` |
 
-- Positional item IDs bootstrap only those items, preserving their order and ignoring duplicates.
-- Repeated `--item` is the explicit equivalent for scripts and setup orchestrators.
-- Positional items, repeated `--item`, and `--preset` cannot be combined. Managed resources use `sys apply`, not
-  `sys bootstrap`.
-- In a non-interactive environment without an explicit profile, Shine uses the configured default.
+Before changing the system, Shine shows a plan and asks for confirmation; the default is No.
+Review the changes, permissions, and recovery limits. Add `--verbose` if you need more detail.
+Custom scripts run with your permissions without sandbox isolation; approve external code only
+after reviewing it.
 
-After selection, a mutating run displays the planned changes and required permissions. Interactive
-approval defaults to No. Automation must pass `--yes`; this skips only the prompt, while the Plan is
-still shown and validated. `--dry-run` is an earlier preview and cannot be combined with `--yes`.
+Follow any installer prompts and wait for the operation to finish. Items run in order, and Shine
+stops at the first failure or timeout; each installer has a 30-minute limit. Use Shine's final
+result to confirm success, rather than a success message within an installer's log.
 
-Review the Plan's administrator access, network access, and recovery limitations before approving.
-Use `--verbose` for detailed paths and steps. A permission declaration is not a safety guarantee:
-custom scripts and executable profile content run with your permissions and are not sandboxed.
-External code requires review and authorization.
+For scripts, see [system command options](../reference/commands.md#system-presets), including
+`--yes` and the authorization required for external code.
 
-During installation, Shine streams both standard output and standard error with the same item
-label, such as `[rust]`. Standard error can contain normal progress messages. Shine's own start
-and result messages use `[shine]`. The final result follows
-the installer's exit status and an installation check; a success message inside an installer log
-alone does not confirm success. Logs are not repeated after each item finishes. Output can still
-be delayed by the installer's own buffering.
+## Open a new terminal and check the result
 
-A blank line separates the previous item’s result from the next installer’s start.
-
-Installer colors and bold text are preserved on color-capable terminals. Set `NO_COLOR=1` to
-disable them; redirected logs are plain text. Explicit `CARGO_TERM_COLOR` settings are respected.
-Labels stay aligned and independent of installer styles. Tabs in installer logs appear as four
-spaces to preserve readable indentation. On an interactive terminal, single-line
-progress updates refresh in place. Completed logs start on their own lines, including while an
-installer changes terminal modes or replaces a Cargo progress row. Long live rows are clipped to
-the current terminal width. Redirected output and `TERM=dumb` use ordinary log lines. Multi-line
-progress panels and full-screen installer interfaces are not emulated.
-
-Shine enables Cargo's single-line progress on supported terminals, respecting explicit
-`CARGO_TERM_PROGRESS_WHEN` and `CARGO_TERM_PROGRESS_WIDTH` settings. Other installers may still
-suppress progress when their output is captured.
-
-Optional command-version checks run non-interactively and wait at most 3 seconds. If a version
-check fails or times out, Shine still recognizes the executable as installed and uses its path
-instead of version details.
-
-Installers may prompt for terminal input. Follow the current item's instructions and wait for it to
-finish before starting another operation.
-
-On Ubuntu, the built-in Atuin installer runs non-interactively. Shine detects its default
-`~/.atuin/bin` installation before the current shell has loaded the new PATH, then enables its
-shell integration. After opening a new shell, run
-`atuin import auto` to import existing history, and `atuin register` or `atuin login` if you want
-history synchronization. Bootstrap runs items sequentially, allows up to 30 minutes per installer,
-and stops at the first failed or timed-out item. Shine retains only a bounded tail for diagnostics
-while streaming output; log volume alone does not stop installation.
-
-On Ubuntu, the built-in Yazi item installs prebuilt packages from the official stable APT
-repository, along with preview/runtime dependencies. It requires administrator access to add
-the repository key and source; Yazi installation itself does not require Rust or Cargo.
-Existing Yazi installations are detected and skipped rather than migrated between installers.
-
-On Ubuntu, the built-in pnpm item uses the official standalone installer; Node.js, npm and
-Corepack are not prerequisites. It installs under `~/.local/share/pnpm`; Shine manages its PATH
-integration. Open a new shell after bootstrap to use `pnpm`.
-
-Ubuntu includes a `minimal` profile for production servers. It installs only Neovim, fzf, bat, eza,
-and zoxide, without shell-history synchronization, a prompt, the Node.js toolchain, or Homebrew.
-Always review the current steps with `shine sys bootstrap --preset minimal --dry-run` first.
-
-Add `--proxy` when downloads require an HTTP proxy. Shine derives uppercase and lowercase proxy
-variables from `PROXY_HOST`, `HTTP_PROXY_PORT`, and `PROXY_NO_PROXY` in `[env]`; the default address
-is `http://127.0.0.1:6152`. Combine it with `--dry-run` to inspect the effective values.
-
-Windows `winget` does not read these environment variables, so Shine also passes
-`winget install --proxy`. If that option is disabled, first run in an administrator PowerShell:
-
-```powershell
-winget settings --enable ProxyCommandLineOptions
-```
-
-After initialization, inspect the recorded state:
+Open a new shell after installation so that new commands and integrations become available.
+To view saved results, run:
 
 ```bash
 shine sys status
 ```
 
-This view shows the latest recorded result for each item, including bootstrap and managed system
-operations such as `shine sys apply`. Entries can come from different runs. It does not perform
-live checks of software versions or system configuration.
+This shows the latest saved result for each item, possibly from different runs. It does not check
+whether software is still installed or whether the current system configuration matches.
 
-## Upgrade bootstrap software with its owner
+Software-specific steps, including Atuin history import, are in
+[Ubuntu installation notes](../reference/built-in-presets.md#ubuntu-installation-notes).
 
-`shine sys bootstrap` is an ensure-present initializer, not a software update manager. Shine does
-not check or upgrade bootstrap software. Use the package manager or upstream tool that owns each
-item—such as Homebrew, apt, winget, mise, or rustup—to check for and install updates. Rerunning
-`shine sys bootstrap` only verifies that the selected software is present and does not upgrade it.
+## Use a download proxy
 
-The built-in mise step follows the same boundary: it can install mise and add activation to managed
-shell profile content, but it does not create or update mise configuration and does not manage
-runtime versions. Use mise for `mise.toml`, tool installation, and version upgrades.
+Add `--proxy` to use Shine's HTTP proxy settings. Preview first, then install:
 
-## Manage shell integration state
+```bash
+shine sys bootstrap mise --proxy --dry-run
+shine sys bootstrap mise --proxy
+```
 
-Rust bootstrap makes the default Cargo binary directory (`~/.cargo/bin`) available in Ubuntu
-Bash/Zsh, macOS Zsh, and Windows PowerShell profiles. Open a new shell after bootstrap to use
-`rustup`, `cargo`, and `rustc`; bootstrap cannot change the calling shell's PATH.
+Configure `PROXY_HOST`, `HTTP_PROXY_PORT`, and `PROXY_NO_PROXY` in Shine's
+[environment settings](./environment.md). The default address is `http://127.0.0.1:6152`;
+check the effective values in the preview.
 
-If an older Ubuntu setup reports Rust as installed but the commands are missing, upgrade Shine,
-then run `shine sys bootstrap rust` and open a new shell. This repairs the shell integration without
-reinstalling an already detected Rust installation. For the current Bash/Zsh session, you can run
-`. "$HOME/.cargo/env"` if that file exists.
+On Windows, winget may first require this command in an administrator PowerShell:
 
-A successful bootstrap enables only the selected items' declared shell integrations. It does not
-disable integrations enabled by an earlier run, and a named selection profile is not a desired-state
-replacement for software or shell configuration.
+```powershell
+winget settings --enable ProxyCommandLineOptions
+```
 
-Preview before disabling; re-enable only when needed:
+## Enable or disable shell integration {#manage-shell-integration-state}
 
-| Operation | Command |
+Shell integration makes a tool available in your terminal or enables features such as its prompt
+or history search. Installing selected items enables their integrations and keeps previously
+enabled integrations active, even when you choose a different profile.
+
+| Goal | Command |
 | --- | --- |
-| Preview disabling the integration | `shine sys profile disable mise --dry-run` |
-| Disable the shell integration | `shine sys profile disable mise` |
-| Re-enable the shell integration | `shine sys profile enable mise` |
+| Preview disabling mise integration | `shine sys profile disable mise --dry-run` |
+| Disable it | `shine sys profile disable mise` |
+| Enable it again | `shine sys profile enable mise` |
 
-Declared PATH integrations add a directory only when it is absent; reloading the generated profile
-does not add duplicate entries, including paths containing spaces or shell pattern characters.
+These commands change only Shine-managed shell configuration. Disabling does not uninstall the
+software; enabling requires it to be installed first. `shine upgrade` does not enable or disable
+these integrations. Open a new shell to use the updated configuration.
 
-These commands modify only Shine-owned generated profile content. Disabling does not uninstall the
-software. Enabling first verifies the item's declared detection and asks you to bootstrap it when it
-is missing. A mutating run displays and freshly validates a snapshot-bound security Plan;
-automation must pass `--yes`, while `--dry-run` remains a separate preview. `shine upgrade` does not
-change or re-render profile enablement implicitly; use these explicit profile commands when that
-state should change.
+If the result says `needs action`, inspect the files identified in the output. Shine preserves the
+current file when a merge needs manual attention; a successful command exit alone does not mean
+the requested integration is active.
 
-Profile commands distinguish completed changes, an already enabled/disabled integration, and
-`needs action`. If profile merging needs manual attention, the current profile is preserved and
-the output points to the files to review. This warning alone does not cause a nonzero exit status;
-check the result before assuming the requested integration is active.
+## Upgrade installed software {#upgrade-bootstrap-software-with-its-owner}
 
-`shine update` and `shine upgrade` still manage only Shine configuration and managed system
-resources. They never upgrade this third-party software.
+Use the package manager or upstream tool that installed the software, such as Homebrew, apt,
+winget, mise, or rustup. Rerunning `shine sys bootstrap` skips software it detects as already
+installed; it does not upgrade it. `shine update` and `shine upgrade` manage Shine configuration,
+not third-party software versions.
 
-Top-level `shine list` includes managed system configuration recorded for the current operating
-system. Use `shine sys status` and `shine sys info <ITEM>` for details. `update --verbose` and
-`upgrade --verbose` also show skipped, current, and attention-required managed resources.
+For mise, use mise itself to configure and install tools and manage their versions.
 
-## Managed system items
+## Manage system settings {#managed-system-items}
 
-Some system configuration is managed declaratively and can be reapplied or safely removed:
+Use `apply` and `uninstall` for managed settings such as `split-dns`. Before using that item,
+complete the [private DNS setup](../reference/built-in-presets.md#private-split-dns).
 
-Choose the operation you need; preview before applying or removing. Use `--yes` only after
-reviewing the same Plan, and run recovery only for an interrupted operation.
-
-| Operation | Command |
+| Goal | Command |
 | --- | --- |
-| Preview changes | `shine sys apply --dry-run` |
-| Apply split-dns | `shine sys apply split-dns` |
-| Non-interactive approval | `shine sys apply split-dns --yes` |
+| Preview private DNS changes | `shine sys apply split-dns --dry-run` |
+| Apply them | `shine sys apply split-dns` |
 | Preview removal | `shine sys uninstall split-dns --dry-run` |
-| Remove after review | `shine sys uninstall split-dns` |
-| Review an interrupted managed operation | `shine sys recover` |
-| Non-interactive approval | `shine sys recover --yes` |
+| Remove the configuration | `shine sys uninstall split-dns` |
 
-For managed system items, `shine update` compares the desired configuration with the installation
-record; `shine upgrade` also checks the actual system resource. On Windows, a split-DNS NRPT rule
-that matches both the recorded and desired configuration needs no update or administrator access.
-Use `shine upgrade shell/<CATEGORY>` to limit an upgrade to Shell presets.
+Review the plan before confirming. If administrator access is needed, Shine requests it after
+approval. Use `shine sys info split-dns` for details and `shine sys status` for saved results.
 
-Non-dry-run managed operations display a snapshot-bound Plan and default to No. `--yes` skips only
-the prompt, not Plan rendering, permission blockers, or fresh validation. Administrator access, if
-required, is requested separately after Plan approval.
+## Handle failures and conflicts
 
-If another Sys operation is running, wait for it to finish. If relevant state changes while waiting,
-review the new Plan before retrying.
+- **Installation failed or timed out:** check the named item's error and follow its installer or
+  package manager's repair instructions. `shine sys recover` does not undo software installation.
+- **A managed operation was interrupted:** when Shine requests recovery, run `shine sys recover`
+  and review its plan. Recovery completes or rolls back the interrupted operation only when the
+  relevant state has not changed. It preserves modified resources and unrelated shell content.
+- **Another system operation is running:** wait for it to finish. If Shine reports that the state
+  changed, review the new plan before retrying.
+- **Shell configuration conflicts:** inspect the files identified by Shine. Use
+  `shine sys bootstrap --force-profile` only if you want to back up and replace the conflicting
+  profile instead of preserving and merging your edits.
+- **Rust commands are missing on an older Ubuntu setup:** upgrade Shine, run
+  `shine sys bootstrap rust`, and open a new shell. This repairs integration without reinstalling
+  detected Rust. In Bash/Zsh, you can also run `. "$HOME/.cargo/env"` for the current session if
+  that file exists.
 
-If a managed operation is interrupted, later Sys changes stop and ask you to run
-`shine sys recover`. Recovery completes or rolls back only state that has not changed since the
-interruption. It never overwrites modified resources or unrelated shell-profile content.
+## Supported shells {#platform-notes}
 
-Bootstrap scripts and package-manager operations are not undone by `sys recover`; follow the
-reported item and its package manager when they fail partway through.
-
-For routing private domains across remote LANs to ZeroTier DNS, see the Chinese Biulight guide
-[使用 ZeroTier、CoreDNS 和 Shine 搭建异地私有域名网络](https://blog.biulight.top/timeline/knowledge/zerotier-coredns-split-dns).
-
-On Ubuntu, `split-dns` expects applications to query the `127.0.0.53` systemd-resolved stub. Shine
-warns or refuses to write ineffective configuration when the stub is disabled. Re-enable
-`DNSStubListener`, or confirm that local resolution really passes through systemd-resolved, before
-applying the item.
-
-System profiles merge with and preserve user content where possible. Use
-`shine sys bootstrap --force-profile` only when you explicitly want to back up and replace a
-conflicting profile.
-
-## Platform notes
-
-- Managed shell profiles target zsh on macOS.
-- Ubuntu supports bash and zsh.
-- Windows system presets and profile integration use PowerShell.
-- Ubuntu and macOS can detect the terminal background and set `SHINE_TERMINAL_THEME`; set
-  `SHINE_SYNC_TERMINAL_THEME=0` to disable it.
+Shell integration supports zsh on macOS, bash and zsh on Ubuntu, and PowerShell on Windows.
+For automatic terminal appearance settings on Ubuntu and macOS, see
+[terminal theme synchronization](./terminal-theme-sync.md).
 
 ## Retire an older local HTTP service {#retire-legacy-http-service}
 
-Version 2.4.0 removes HTTP serving and the `SHINE_APP_HTTP_DIR` script variable. Use local
-files for Surge and Clash Verge rules; application artifacts can keep persistent output in
-`SHINE_STATE_DIR` or `SHINE_CACHE_DIR`.
-
-If you installed the old background service, remove it after upgrading to 2.4.0:
-
-```bash
-shine clear serve
-```
-
-Run this command as the user who installed the service. It stops the old service and removes
-its user service registration, even if the old configuration can no longer be loaded.
-
-Before upgrading, the old binary's `shine serve uninstall` can also remove the service.
-
-Upgrading does not remove existing files under the old runtime directory's `http/`. Keep any files
-you still need and update application references before deleting them.
+If you used Shine's old HTTP service, follow the
+[cleanup steps in Upgrades and migration](./upgrading.md#retire-an-older-local-http-service).

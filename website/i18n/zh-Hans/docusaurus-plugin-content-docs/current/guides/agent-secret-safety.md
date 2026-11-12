@@ -35,17 +35,8 @@ mode 应选用 workspace 已声明的值，`bun run build` 应替换为项目实
 
 ## Shine env 保护什么
 
-`shine env secret seal` 把 workspace 环境文件中的待处理 secret 封存到加密 payload 中。封存后，团队仓库里保留的是密文，不再是明文 token、密码或 API key。
-
-```bash
-shine env secret seal
-```
-
-`shine env run` 在启动目标命令前合并环境文件、解密 secret，并只把结果提供给这个子进程：
-
-```bash
-shine env run --mode development -- bun run build
-```
+封存后，项目保存的是密文；`shine env run` 只在启动所选程序时解密并提供环境变量。
+程序及其子进程仍能读取获得的值，因此运行前需要审阅命令和它执行的代码。
 
 这种方式主要减少三类风险：
 
@@ -106,7 +97,8 @@ macOS 上可以生成 Secure Enclave / Touch ID identity：
 shine env secret identity init --touch-id
 ```
 
-这种身份由 `age-plugin-se` 生成。解密时需要本机 Secure Enclave，并触发 Touch ID 或系统 PIN 授权。即使 identity 文件被复制到另一台机器，通常也不能直接解密。
+这种身份由 `age-plugin-se` 生成。解密需要原 Mac 的 Secure Enclave，并按所选访问策略授权，
+默认使用 Touch ID。即使身份文件被复制到另一台机器，通常也不能直接解密。
 
 新建 Touch ID identity 使用 `age1tag...` 公开 recipient，因此 age 1.3 或更高版本可在其它平台
 加密，而不需要 Secure Enclave 插件。Tagged recipient 更容易被识别：知道它的人可以判断密文
@@ -136,20 +128,22 @@ shine env secret identity list
 
 Windows 和 macOS 用户也可以试用 [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)，通过手机生物验证授权解密。插件已提供有限技术 Beta，支持 Windows/macOS 源码安装，macOS 仍属实验性支持。仅使用合成或可丢弃数据，使用前请配置独立的恢复密钥。支持的设备、使用限制和配置步骤见[在 Windows 和 macOS 上实验手机授权](./environment.md#在-windows-上实验手机授权)。
 
-普通团队开发仍可使用普通 age identity，但要保护好 identity 文件和用户目录权限。Windows 上需要稳定硬件保护时，应继续采用组织认可的 YubiKey/PIV 或 GPG + YubiKey 方案。
+使用普通 age identity 时，需保护好身份文件和用户目录权限。团队要求硬件密钥时，
+请使用组织认可的方案，并确认每位成员都有可用的解密设备和恢复方式。
 
 ## 如何选择密钥后端
 
-可以按下面的粗略顺序理解安全强度：
+根据团队设备、授权方式和恢复需求选择后端：
 
-1. GPG + YubiKey / 硬件智能卡
-2. age + Secure Enclave / Touch ID
-3. 普通 age identity 文件
-4. 明文 secret
+| 方案 | 使用前要确认的条件 |
+| --- | --- |
+| 普通 age 身份文件 | 限制身份文件访问并妥善备份；能读取该文件的程序可能拥有解密能力 |
+| macOS Touch ID 身份 | 解密设备能使用 Secure Enclave，并由用户确认系统授权提示；另设恢复接收者 |
+| GPG 身份 | 确认私钥实际存放位置；使用硬件卡时，另行配置并验证 PIN、触摸等授权要求 |
+| 手机授权 | 按插件文档确认支持范围；限实验性、可丢弃数据，并设置独立恢复密钥 |
 
-`age + Touch ID` 通常比 `GPG + YubiKey` 更顺手，适合团队开发和预发环境。生产高价值 secret、长期凭据或需要强硬件隔离的场景，仍建议使用 GPG + YubiKey 或组织认可的硬件密钥方案。
-
-实验性手机方案的目标也是提供硬件托管和逐次授权隔离，但在协议与发布门槛全部完成前，不把它列入上述稳定后端排序。
+后端名称本身不能代表完整的安全保证。硬件密钥可以限制私钥的复制，但获准解密的程序仍会拿到明文。
+生产凭据应遵循团队的访问控制和恢复要求，并在使用前验证恢复方式。
 
 ## 给 AI Agent 的权限建议
 
@@ -158,7 +152,7 @@ Windows 和 macOS 用户也可以试用 [`age-plugin-phone`](https://github.com/
 - 不把 `~/.shine/age/identity.txt`、GPG 私钥、云厂商 credential 文件加入工作区。
 - 不让 Agent 长时间运行带有高权限 secret 的交互式 shell。
 - 需要 secret 时，优先让 Agent 修改代码，由用户在可信终端中执行 `shine env run`。
-- 对低风险开发任务使用普通 age identity；对高敏感任务使用 Touch ID 或 YubiKey；`age-plugin-phone` 仅限其文档规定的合成数据预览。
+- 根据上述设备与权限条件选择身份；`age-plugin-phone` 仅限其文档规定的实验范围。
 - 看到非预期的 Touch ID、手机生物验证、PIN 或 YubiKey 触摸提示时取消授权。
 
 如果 identity 文件泄露、设备不再可信，或成员离开团队，仅从 `age_recipients` 删除 recipient 不会撤销它对历史密文的访问。需要重新封存或重新加密，并在必要时轮换上游服务中的真实 token。

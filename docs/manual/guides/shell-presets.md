@@ -5,10 +5,9 @@ sidebar_position: 1
 
 # Manage shell presets
 
-Shell presets install scripts into Shine's managed directory and create directly callable command
-entries in `~/.shine/bin/`. Shine manages profiles and command directories for Bash, Zsh, and
-PowerShell. Native entries use `.sh` or `.ps1`; Bun is also available as a cross-platform command
-runtime.
+Shell presets install reusable scripts as commands you can call directly in Bash, Zsh, or
+PowerShell. Some commands need an additional runtime such as Bun; check the preset's requirements
+before installing.
 
 See [built-in presets](../reference/built-in-presets.md#shell-presets) for categories, platform
 limits, commands available in the current session, and required environment variables.
@@ -24,42 +23,18 @@ List the presets first, then choose one installation scope:
 | Install only this command | `shine shell install utils/shine-env-export` |
 | Install every category available on this platform | `shine shell install` |
 
-You can also let Shine identify whether a category is a shell or application preset:
+Installing a category enables all its commands available on the current platform. Use
+`category/command` to select just one. Do not pass only a command name, since commands in different categories
+can share a name.
 
-```bash
-shine install proxy
-shine install shell/utils/shine-env-export
-```
+Before installing, review the commands, configuration changes, backups, and permissions in the
+plan. Confirmation defaults to No. Add `--verbose` for detailed paths and permissions.
 
-A category target activates every command available for the current platform. Use an explicit
-`category/command` target when you need only one command. Mutation does not accept a bare command
-name because the same name may appear in more than one category.
-
-A normal built-in Shell installation shows a short summary before confirmation:
-
-```text
-Install · utils
-  Source       built-in · Shine distribution
-  Commands     copyfile, shine-env-export, shine-theme-sync
-  Changes      install 3 commands; update shell integration and ~/.bashrc
-  Backup       ~/.bashrc
-
-Apply? [y/N]
-```
-
-The commands, changed profile paths, and recovery backup paths reflect the current Plan.
-When commands use non-sensitive environment variables, the summary also lists their names, for
-example when installing `image-tools`:
-
-```text
-  Environment  IMAGE_MAX_HEIGHT, IMAGE_MAX_WIDTH, IMAGE_QUALITY
-```
-
-Variable names appear in blue when color is enabled. Redirected output and `NO_COLOR` use plain text.
-
-Use `--verbose` for cache and state files, exact permissions, author statements, and identities.
-Secret environment variables, external code, code executed during installation, other additional
-permissions, conflicts, and unfamiliar diagnostics retain the expanded review.
+Shell commands run with your permissions without sandbox isolation. Review and authorize external
+or overlay code before using it. Interactive confirmation can approve one operation; automation
+with `--yes` requires an existing trust grant. This option skips only the prompt, keeps safety
+checks, and cannot be combined with `--dry-run`. See
+[Custom presets](./custom-presets.md#declare-permissions) for authorization steps.
 
 Open a new terminal or reload the shell profile after installation. To install completions, run:
 
@@ -69,15 +44,15 @@ shine completions install
 
 ## Repair an installation
 
-Rebuild managed scripts, command entries, and the `PATH` fragment from the active preset:
-
-First inspect `shine info shell/proxy --diff`: `--replace-managed` overwrites managed content.
-The two commands are equivalent; choose one:
+If command entries or shell configuration are damaged, inspect differences before replacing
+managed content with the preset:
 
 ```bash
+shine info shell/proxy --diff
 shine shell install proxy --replace-managed
-shine install shell/proxy --replace-managed
 ```
+
+`--replace-managed` overwrites managed content, including your local edits.
 
 If a command conflicts with an existing file, inspect the reported path before removing or
 replacing it. After switching preset sources or updating Shine, run
@@ -98,8 +73,7 @@ shine shell recover
 
 Review the recovery plan and confirm to proceed. Depending on where the operation stopped,
 Shine rolls back unfinished changes or keeps completed changes and cleans up leftover files.
-When restoring a managed block in your shell profile, Shine preserves unrelated content and the
-current file permissions on Unix.
+When restoring shell configuration, Shine preserves unrelated content.
 
 If relevant files have changed since the interruption, Shine stops recovery and preserves them
 to avoid overwriting your edits. Keep the error details and affected files, and follow the
@@ -116,56 +90,40 @@ still apply.
 | Apply after review | `shine shell uninstall proxy` |
 | Alternative: remove only this command | `shine shell uninstall utils/shine-env-export` |
 
-Uninstall and `shine upgrade` also show their planned changes.
-Confirmation defaults to No; automation must pass `--yes`, while the Plan and safety checks still
-run. `--dry-run` remains a separate preview and cannot be combined with `--yes`.
+Review and confirm the uninstall plan. Removing one command preserves other installed commands
+in its category and the shared files they need. External preset sources, `~/.shine/config.toml`,
+and unrelated shell configuration are preserved.
 
-Shell commands run with your permissions and are not sandboxed. External and overlay commands
-require confirmation of the current Plan or a matching trust grant, regardless of their permission
-declarations. Follow the reported `shine trust inspect` and `shine trust grant` commands to review
-blocked operations. Only use `--development` when you also trust future edits from that source.
-See [custom Preset capabilities](./custom-presets.md#declare-permissions).
+Without a target, `shine shell uninstall` removes all Shell presets, remaining managed startup
+configuration, and the entire internal Shell cache, including extra files you stored there.
+Targeted category or command removal preserves those extra cache files. Check the scope with
+`shine shell uninstall --dry-run` first.
 
-Snapshot trust works with the default snapshot deployment. It copies the reviewed category content
-into Shine's managed directory; later source edits do not enter the installed command until an
-explicit reviewed update. `external_shell_mode = "live"` requires development trust because later
-invocations or `source` operations read from a mutable trusted source. Snapshot trust cannot be used with live deployment.
+Uninstall and recovery do not require trust in the code being removed. If an old script still uses
+`--purge`, remove it as described in [Upgrades and migration](./upgrading.md#upgrade-to-shine-26).
 
-Updating shared files can affect other installed commands in the same category. The Plan lists
-all affected commands for review. Each affected external command needs one-time human consent or a matching grant for the new snapshot;
-uninstalled siblings do not need a grant and are not installed. Existing live launchers are kept
-after upgrading Shine, but `list`/`info` reports `development trust required` until they are reviewed.
-Uninstall and recovery remain available without granting trust to code being removed.
+## Update external presets
 
-Use `shine list` to inspect installed resources; `shine shell list` shows available Shell presets.
-Command-scoped uninstall preserves other installed commands in the category. Shared preset or
-snapshot files may remain while a sibling command still needs them.
-After uninstalling the last category, `shine shell uninstall` can remove the remaining managed
-profile and startup integration. Other content in your shell configuration is preserved; preview
-the cleanup with `shine shell uninstall --dry-run` before approving it.
+In the default snapshot mode, source edits affect installed commands only after you review and
+apply an update. Use `shine update shell/<CATEGORY>` to inspect changes, then
+`shine upgrade shell/<CATEGORY>`. Shared-file changes can affect other installed commands in the
+category; review the entire scope in the plan. Commands not already installed are not added.
 
-Uninstall includes empty managed directory cleanup. Without a target, it removes the entire internal
-Shell preset cache tree, including extra files stored there. With a category or command target,
-extra cache files are preserved, as are shared files still needed by installed sibling commands.
-External preset source directories are always preserved; managed launchers and
-installation snapshots are still removed as applicable. Uninstall never removes
-`~/.shine/config.toml`. Review the Plan and use `--dry-run` to inspect the selected scope.
-
-`shine uninstall shell/<category>[/<command>]` uses the same target-limited behavior.
-`--purge` has been removed; omit it from existing commands. Unlike targeted Shell uninstall,
-App category uninstall removes its entire internal category cache, including extra files;
-see [App presets](app-presets.md).
+Live mode uses edited source on the next invocation and requires `--development` trust.
+Use it only when you trust future code changes from that source; ordinary snapshot grants do not
+permit live mode. If `list` or `info` reports `development trust required`, review the source and
+follow the authorization guidance. See [Custom presets](./custom-presets.md) for setup.
 
 ## Common built-in commands
 
 | Category | Commands | Purpose |
 | --- | --- | --- |
 | `image-tools` | `img-compress`, `img-resize`, `img-convert` | Batch-process JPEG, PNG, and WebP files with Bun 1.3.14 or newer |
-| `proxy` | `setproxy`, `usetproxy` | Set or clear proxy variables in the current terminal session |
+| `proxy` | `setproxy`, `usetproxy` | Set or clear the session proxy and Yarn's persistent proxy settings |
 | `utils` | `copyfile` | Copy file content to the local clipboard through OSC 52 |
 | `utils` | `shine-env-export` | Load a Shine environment value into the current shell |
-| `utils` | `shine-theme-sync` | Print shell `export` statements for the terminal light/dark theme |
-| `agent` | `ccenv` | Select a Codex, DeepSeek, or Qwen provider and launch Claude Code in an isolated child environment; requires Bun |
+| `utils` | `shine-theme-sync` | Apply terminal light/dark theme settings to the current session |
+| `agent` | `ccenv` | Select a Codex, DeepSeek, or Qwen provider and launch Claude Code with provider-specific environment values; requires Bun |
 
 Some categories provide different scripts by platform. `shine shell list` shows only entries
 available on the current platform.

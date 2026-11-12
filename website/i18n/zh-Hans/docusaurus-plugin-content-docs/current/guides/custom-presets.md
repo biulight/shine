@@ -7,13 +7,21 @@ sidebar_position: 4
 
 少量个性化优先使用 overlay；需要完全维护一套预设时，再使用外部 `presets_dir`。
 
-两种模式的 fallback 规则不同：
+按目标选择起点：
+
+| 需求 | 从这里开始 |
+| --- | --- |
+| 定制少量内置文件 | [关联 Overlay](#使用-overlay-覆盖少量文件) |
+| 维护完整的自有预设集合 | [导出预设](#导出完整预设) |
+| 新建 App、Shell 或 Sys 类别 | [新建类别元数据](#新建类别元数据) |
+| 让 AI 起草预设 | [使用 AI 创建](#使用-ai-创建预设) |
+
+两种来源的补充规则不同：
 
 - 使用内置基础来源时，overlay 覆盖同路径内容，其余路径继续来自二进制内嵌预设；
 - 完整外部 `presets_dir` 是 App 与 Shell 类别的权威来源，缺少的内容不会悄悄从二进制补齐。
 
-Shine 会输出 `Preset Source`、可选的 `Presets Overlay`，以及外部 Shell 的部署模式，便于在解释
-`list`、`update` 或安装结果前确认当前模型。
+查看命令输出中的 `Preset Source` 和 `Presets Overlay`，确认 Shine 当前使用的文件来源。
 
 ## 使用 AI 创建预设
 
@@ -33,7 +41,11 @@ cd my-presets/app/my-editor
 shine preset new app
 ```
 
-添加配置文件并编辑 shine.toml。
+添加配置文件并编辑 `shine.toml`。
+
+## 验证与打包预设
+
+在类别目录中执行以下检查：
 
 ```bash
 shine preset validate . --format json
@@ -42,21 +54,6 @@ shine preset plan . --platform macos --format json
 shine preset test . --format json
 ```
 
-默认脚手架不会添加空权限表。以下选项会添加 unrestricted 作者说明：
-
-选择类别类型，只执行对应命令：
-
-| 操作 | 命令 |
-| --- | --- |
-| 创建带作者声明的 App 模板 | `shine preset new app --unrestricted` |
-| 创建带作者声明的 Shell 模板 | `shine preset new shell --unrestricted` |
-| 创建带作者声明的 Sys 模板 | `shine preset new sys --unrestricted` |
-
-无论是否使用该选项，所有任意代码都未隔离。该选项不会跳过 trust、安全 Plan、管理员授权、
-所有权检查或显式环境输入。
-
-其它类型把 `preset new` 的参数换成 `shell` 或 `sys`。定制内置类别时，进入仓库或 overlay 根目录
-并运行 `shine preset copy <kind>/<name>`；命令会创建类型与类别路径。
 `preset validate` 也接受仓库根目录、单个类别目录或其中的 `shine.toml`。根目录模式只扫描
 `app/`、`shell/`、`sys/` 下的直接类别目录；空仓库会失败。无论当前宿主是什么系统，它都会
 检查 macOS、Linux 与 Windows 声明、引用文件和锁定的 Bun 依赖策略；兼容的无 metadata App/Shell
@@ -64,8 +61,6 @@ shine preset test . --format json
 检查更新、写文件、联网或执行预设代码。
 
 默认输出文本；工具和 CI 可以使用 `--format json`。校验错误的退出码为 1，warning 不会导致失败。
-诊断代码表示未通过的检查，不受类别名称或消息措辞影响。例如，引用文件缺失时报告
-`missing_reference`，Bun 依赖声明不符合策略时报告 `bun_dependency_policy`。
 
 创作工具需要当前安装版本支持的精确报告与 fixture 格式时，运行
 `shine preset schema --format json`。App、Shell 和 Sys metadata 是否可用仍以
@@ -97,74 +92,47 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 
 ## 执行前检查 App 代码
 
-Shine 会自动检查 App 的 Bun generator、脚本 hook、artifact 和 teardown，以及能够解析的本地
-JavaScript/TypeScript 依赖。源码行为与声明存在确定差异，或受支持的源码解析失败时，会阻止执行。
-根据报告的文件和位置修复：准确声明预期行为，或修改脚本使其符合声明。trust、`--yes` 和
-`opaque_code = "unrestricted"` 都不能绕过此检查。
+分发 App 脚本前，运行：
 
-使用 `shine preset lint <PATH>` 检查所有 App 代码入口，包括当前缺少触发输入的 generator。
-`preset plan` 和 `preset test` 只检查假设输入下选中的入口，并在报告中显示范围；跳过的入口不算匹配。
-这些检查不会执行脚本、下载依赖或读取真实环境值。
+```bash
+shine preset lint <PATH>
+```
 
-动态目标、包依赖、子进程效果和不支持的语言等覆盖缺口只作提示；未被源码印证的声明也不阻断，
-可在详细审阅中查看。这些结果都不代表代码安全或已被完整分析。没有诊断时，常规审阅不增加分析
-输出；原有 trust 和批准检查仍然适用。
+Shine 会检查 Bun generator、脚本 hook、artifact、teardown，以及受支持的本地 JavaScript/TypeScript
+依赖。根据报告的文件和行号修复阻断问题：声明脚本实际需要的访问，或修改脚本使其符合声明。
+源码解析失败也会阻止执行。信任授权、`--yes` 和 `opaque_code = "unrestricted"` 都不能绕过这些检查。
 
-使用 `globalThis.fetch('https://example.org/data')` 时，与使用 `fetch` 一样，需声明网络主机 `example.org`。从 `node:https` 导入的 `https.get('https://example.org/data')` 使用同一主机声明，也可以传入内联回调。URL 为动态值，或 `https.get` 使用 options 对象时，无法确认目标主机，会报告覆盖缺口。
+常见声明如下：
 
-等价写法使用相同的权限检查：受支持的标识符/URL 转义、带引号的导入名称、括号、TypeScript 类型断言和泛型实例化都会保留已识别的调用。例如，`(fetch)(('https://example.org'))` 与 `fetch('https://example.org')` 的检查相同。不支持的转义（包括旧式数字转义）、未配对的代理码元、含控制字符的 URL 和动态值仍会报告覆盖缺口。
+| 脚本行为 | 所需声明 |
+| --- | --- |
+| 请求 `https://example.org/data` | 网络主机 `example.org` |
+| 用 `Bun.file('in').text()` 读取 `in` | 对 `in` 的文件系统 `read` |
+| 用 Node `copyFile` 复制文件 | 对来源的 `read` 和对目标的 `write` |
+| 用 Node `rename` 重命名文件 | 对来源的 `remove` 和对目标的 `write` |
+| 读取配置的环境值 | 含 `source`、可选 `target` 和 `sensitivity` 的 `env` 项 |
 
-如果 `declare namespace` 只包含类型，或仅包含 `export {}`，同名全局函数仍然可见。例如，
-`declare namespace fetch { type Options = {}; export { Options } }` 后对全局 `fetch` 的调用仍需检查网络权限。
-类或声明了值的命名空间可以遮蔽内置名称，使用 Unicode 转义拼写的名称也会被识别。
+脚本读取环境映射中的 `target` 名称。只有文档列出的固定变量可以免于声明，`SHINE_` 前缀本身不代表
+豁免。不要把环境值或 URL 凭据写入能力声明。
 
-脚本检查 `(await fetch('https://example.org')).status === 200` 时，即使稍后替换了 `fetch`，也需为
-`example.org` 声明网络权限。将响应属性用作计算下标时同样如此。在 `cb?.(fetch(url))` 中，
-如果 `cb` 为 null 或 undefined，就会跳过实参求值。如果发生过替换，Shine 无法确定实参会调用哪个函数时，会报告覆盖缺口。
-例如，在 `for (let dep = require('./dep'); false;) {}` 中，循环判断条件之前就会加载依赖。即使脚本稍后替换了 `require`，
-Shine 仍会检查该依赖。在 `if` 条件、`switch` 表达式或执行的 `finally` 块中加载依赖时，也按同一规则检查。
+`lint` 检查所有 App 代码入口，包括当前缺少触发输入的 generator。`preset plan` 和 `preset test`
+只检查假设输入下选中的入口。这些命令不会执行脚本、下载依赖或读取真实环境值。
 
-如果脚本保存原来的全局对象，随后将它赋回，之后对 `globalThis.fetch` 的写入仍可能替换全局函数。
-Shine 无法确认调用仍使用内置函数时，会报告覆盖缺口。反过来，如果对象或数组解构把一个新对象赋给 `globalThis`，
-修改该对象的 `fetch` 属性后，直接调用原来的 `fetch` 仍需检查网络权限。例如，执行 `({...globalThis} = source)` 后，
-`globalThis` 指向一个新对象，直接调用 `fetch(url)` 仍需声明对应的网络主机。
+动态路径、包依赖、子进程效果和不支持的语言等覆盖缺口只作提示；无法从所检查源码确认的声明也只作提示。
+检查通过不能证明代码安全或已被完整分析，仍需审阅代码并完成正常的信任与批准步骤。
 
-Shine 会检查运行时初始化表达式、enum 和命名空间的声明体，以及 `typeof process.env.NAME` 等表达式的行为。
-不支持的模块路径仍会保留依赖缺口及本地导入名称。
-
-环境变量读取检查会区分读取与普通赋值、解构赋值和删除。Shine 会检查计算键、实际执行的默认表达式、复合赋值和自增自减中的读取。这不会改变已声明环境输入的契约。
-
-对于 `const f = Bun.file('in'); await f.text()`，请为 `in` 声明 `read`。仅保存句柄无需声明读取权限，Shine 在脚本调用方法时检查路径。
-
-使用 Node 的 `copyFile` 时，为源路径声明 `read`，为目标路径声明 `write`。使用 `rename` 时，
-为源路径声明 `remove`，为目标路径声明 `write`。同步和 Promise 形式也适用。即使一侧路径是动态值，
-只要另一侧的路径是字面量，Shine 仍会检查它。
-
-如果脚本用 `Object.assign` 替换内置方法，通过被替换成员发起的调用会报告覆盖缺口。
-如果在替换前保存了原函数，调用该函数仍可能需要声明原有权限。
-
-使用 `--verbose` 查看详细审阅，或用 `shine preset lint <PATH> --format json` 获取全部诊断。
-`--deny-warnings` 可让 lint 告警使 CI 失败。详细输出不会执行生成器；执行仍需显式使用
-`--run-generators` 并具有信任授权。Lint 检查所有受支持入口，可能报告某次运行检查范围之外的问题。
-
-使用结构化 `env` 映射时，在同一项中声明 `source`、可选 `target` 与 `plain`/`secret` 敏感性；脚本读取目标名。
-只有文档列出的固定变量可以免于重复声明，任意 `SHINE_` 前缀名称不能获得豁免。不要把环境值或
-URL 凭据写入能力声明。源码位置采用从 1 开始的行号和 UTF-8 字节列号。
+使用 `--format json` 获取完整诊断；需要让 warning 导致 CI 失败时添加 `--deny-warnings`。
+`info` 或 `update` 中的 `--verbose` 会显示更多详情，但不会执行 generator；显式求值仍需
+`--run-generators` 和信任授权。
 
 ## 工具兼容性 {#tool-compatibility}
 
-若集成保存了报告或审批，升级工具后应重新生成并审阅。Shine 会拒绝格式不兼容或
-Plan 已变化的审批，旧审批不会静默授权新操作。普通交互使用无需在升级前准备审批。
-无人值守集成应在部署前验证报告消费方和外部 App 声明，以免任务中断。
+如果编辑器或 CI 读取 JSON 报告，升级 Shine 后请运行 `shine preset schema --format json`，
+确认工具支持当前安装版本。报告字段和 `shine.test.toml` 测试格式以生成的 schema 为准，不要从旧示例
+复制版本号。
 
-工具集成在升级后应重新读取 `preset schema`：lint 报告使用 schema 2，作者 Plan 报告使用 schema 3，
-fixture 报告使用 schema 2。Fixture 输入仍为 schema 1；可用 `expect.analysis_diagnostic_codes`
-配合 `ready` 断言诊断。正确预期阻断的用例可以通过，但取消或命令累计预算耗尽不能成为成功的负向
-测试。`complete = false` 表示作者报告未完成，fixture 报告还会列出 `unfinished_cases`。
-生命周期 Plan／批准／审阅契约使用 schema 4；应重新审阅，不能复用旧批准。
-
-升级到 Shine 2.8 时，使用 `shine-core` 的 Rust 集成需要适配公开类型变更并重新编译。
-请通过升级后的集成重新生成生命周期报告和审批。
+`complete = false` 或非空的 `unfinished_cases` 表示检查未完成。测试可以预期安装被阻止，
+但取消或分析超出限制仍表示测试无法完成。请解决报告中的问题后再接受结果。
 
 ## 迁移 1.x 来源
 
@@ -252,9 +220,7 @@ Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值�
 显式 `info`/`update --run-generators` 检查同样要求 grant；若只想授权一次 generator 操作，
 使用交互式 `shine app refresh`。
 
-需要持久授权时，先检查再登记目标：
-
-先检查目标，再选择快照信任或开发信任。
+需要持久授权时，先检查目标，再选择快照信任或开发信任。
 开发信任也会授权未来的代码变更，仅在你明确接受此范围时使用。
 
 | 操作 | 命令 |
@@ -271,9 +237,8 @@ Development trust 是对所显示本地来源中、指定 target/capability 的�
 Shell live 部署必须使用此模式。live 部署被阻止时，请先运行 `shine trust inspect <TARGET>`，
 再决定是否执行 `shine trust grant <TARGET> --development`。不愿授权未来代码修改时，
 可设置 `external_shell_mode = "snapshot"` 后重新审阅；普通 snapshot trust 不能授权 live 部署。
-`opaque_code = "unrestricted"` 不会启用开发信任。`trust list`、
-`trust inspect` 与安全 Plan 都会标注当前有效的开发信任。Grant 只保存在本机私有 trust
-store 中，Preset 不能随自身分发或启用它。
+`opaque_code = "unrestricted"` 不会启用开发信任。信任须在本机授予，Preset 不能随自身分发或
+启用授权。
 使用 `trust list` 检查授权，添加 `--verbose` 查看详情及复查指引。
 
 每个外部 Shell command 都采用规范 target `shell/<CATEGORY>/<COMMAND>`。使用 `preset` 可以一次审阅或信任当前激活 Preset 快照中的全部可执行
@@ -329,10 +294,8 @@ platforms = ["unix", "windows"]
 env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 ```
 
-这些命令使用
-[`Bun.Image`](https://bun.com/docs/runtime/image) 压缩、缩放和转换 JPEG、PNG、WebP，无需
-ImageMagick、Sharp 或其它图片库。运行命令的每台机器都必须在 `PATH` 中安装 Bun 1.3.14 或更高
-版本；Shine 不内置 Bun。命令会检测缺失的 `Bun.Image` API，并给出升级提示。
+这些命令压缩、缩放和转换 JPEG、PNG、WebP。运行命令的每台机器都必须在 `PATH` 中安装
+Bun 1.3.14 或更高版本；Shine 不内置 Bun，无需另外安装图片处理库。
 
 可以安装整个类别或其中一个命令，再沿用普通 Shell 预设的生命周期：
 
@@ -351,8 +314,7 @@ shine shell uninstall image-tools/img-compress --dry-run
 `--output-dir` 时，结果保存在来源旁边，名称形如 `photo.compressed.jpg`、
 `photo.resized.jpg` 或所选转换格式的扩展名。指定输出目录后，所有结果平铺到该目录；重复目标名会
 明确失败。已有目标也会失败，只有 `--force` 才允许替换；来源图片永远不会被原地修改。
-冲突检查涵盖仅大小写或 Unicode 规范化形式不同的名称、目录别名，以及通过硬链接指向输入的
-输出文件。`--force` 也不允许替换输入图片。
+`--force` 也不允许替换输入图片。
 
 批处理遇到单项失败后会继续，并在存在任意失败时返回非零状态。前 20 条失败会显示在终端；超过
 20 条时，完整列表还会写入 `--output-dir` 下唯一命名的 `image-tools-errors-*.log`，未指定输出目录
@@ -360,8 +322,7 @@ shine shell uninstall image-tools/img-compress --dry-run
 
 `IMAGE_QUALITY`、`IMAGE_MAX_WIDTH`、`IMAGE_MAX_HEIGHT` 默认分别为 `80`、`1920`、`1080`。
 命令参数只覆盖当次运行，本地 Shine 配置则会保留这台机器的长期偏好。默认 snapshot 模式下，修改
-复制或外部来源后仍需执行 `shine upgrade`，已安装命令才会变化。这就是“同步一个脚本文件”和“把
-脚本作为可复用个人能力运行”之间的边界。
+复制或外部来源后仍需执行 `shine upgrade`，已安装命令才会变化。
 
 ## 使用 Overlay 覆盖少量文件
 
@@ -377,10 +338,6 @@ shine preset overlay info
 ```bash
 shine preset overlay unlink
 ```
-
-`preset link` 和 `preset overlay link` 的本地路径（包括解析符号链接后的目标）必须是有效的
-UTF-8。路径无法表示或所需的主目录无法按 UTF-8 展开时，命令会失败，不会链接到拼写不同的
-目录；`--create` 也不会绕过此检查。
 
 解除链接只移除当前配置中的 overlay 设置，不删除源文件。移除项目覆盖设置后，可能重新继承
 全局 overlay；可运行 `shine preset overlay info` 查看之后实际生效的 overlay。
@@ -402,9 +359,7 @@ shine preset pull
 shine preset overlay info
 ```
 
-关联命令会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。
-`overlay info` 报告托管目录是否存在。
-此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
+托管副本位于 `~/.shine/overlay/`。每次拉取都会用远端分支的最新内容替换它，本地修改会丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
 
 使用不同的 Git URL 重新链接时，现有镜像会切换到该仓库。未指定 `--branch` 时，每次同步都跟随所配置远端的默认分支。拉取失败会保留之前的 checkout。
 
@@ -412,8 +367,6 @@ shine preset overlay info
 Git 元数据，并保留其内容；遇到意外占用的目录时，请先将其移到别处，再重试。fetch 成功后，同步会
 丢弃托管镜像中的已跟踪修改、未跟踪和被忽略的文件，以及嵌套仓库，即使远端 commit 没有变化。
 需要保留本地定制时，请使用手动关联的 overlay。
-Git overlay 的 checkout 路径必须能表示为 UTF-8。无法表示的路径会在克隆前被拒绝，
-不会改为写入含替换字符的另一个路径。
 
 如果只想定制一个内置类别，可在 overlay 根目录复制该预设，无需导出整套内容。例如，Surge 的本地代理、策略组和规则文件应从内置预设复制后再修改：
 
@@ -432,15 +385,20 @@ shine preset export
 ```
 
 导出内容是内置预设加上当前 overlay 的覆盖和新增文件，不包含仅存在于外部基础目录中的文件；
-进度提示会说明是否包含 overlay。Copy 仍只提取原始内置类别。
+`preset copy` 始终只提取原始内置类别。
 
 激活命令中的 `<PATH>` 应替换为实际目录，并加引号作为一个参数传入。
 
 `preset copy` 和 `preset export` 都会拒绝作为输出的链接、特殊文件及链接子目录，即使指定
-`--force` 也不例外。请选择普通目录树作为输出位置。未指定 `--force` 时，已有普通文件会保留，
-同时运行多个复制命令也不会覆盖其它命令已写入的文件。
+`--force` 也不例外。请选择普通目录树作为输出位置。未指定 `--force` 时，已有普通文件会保留。
 
 配置外部目录后，`install`、`list` 和 `update` 都从该目录读取。命令输出会显示当前激活的预设来源。
+
+也可以通过环境变量为单次命令选择来源：
+
+```bash
+SHINE_PRESETS=~/dotfiles/shine-presets shine preset export
+```
 
 ### 选择外部 Shell 的部署方式
 
@@ -482,10 +440,9 @@ shell/my-tools/
 文件缺一不可；首版还会拒绝任何 `trustedDependencies` 声明。Overlay 只有在自身提供有效脚本时才能
 使用自己的依赖声明；仅在 overlay 中加入 package 文件，不会为继承的内置脚本启用依赖。
 
-内置脚本和没有锁文件对的外部脚本都以 `bun --no-install` 运行。具备锁文件对的外部脚本以
-`bun --install=fallback` 运行，因此第一次真正执行时可能联网下载缺失包；`list` 与 `info` 不会
-下载依赖。Shine 不运行 `bun install`，不复制 `node_modules`，也不拥有 Bun 的全局缓存与 virtual
-store；卸载 Shine 或某个预设都不会清理这些共享缓存。
+缺少所需清单与锁文件的脚本不能自动下载依赖。具备这两个文件的外部脚本首次执行时可能下载
+缺失包；`list` 与 `info` 不会下载。Shine 不复制 `node_modules`，卸载预设或 Shine 本身也不会
+清理 Bun 的共享缓存。
 
 Snapshot Shell 预设的 package 或 lock 变化会显示在 `shine update` 中，并在 `shine upgrade` 后
 生效。Live 模式会在下一次命令调用时读取当前文件，同时状态仍会提示刷新已安装命令。完全离线的
@@ -495,12 +452,6 @@ Snapshot Shell 预设的 package 或 lock 变化会显示在 `shine update` 中�
 若现有外部脚本依赖 Bun 的隐式安装，请在脚本类别根创建 `package.json`，使用仓库规定的 Bun
 版本生成 `bun.lock`，提交两者，并在空 Bun 缓存下测试。没有这对文件时，裸包导入现在会直接失败，
 不会再自动下载。
-
-也可以直接设置环境变量：
-
-```bash
-SHINE_PRESETS=~/dotfiles/shine-presets shine preset export
-```
 
 ## 建立可提交的预设仓库
 
@@ -545,8 +496,13 @@ Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源
 | 创建 Shell 模板 | `shine preset new shell` |
 | 创建 Sys 模板 | `shine preset new sys` |
 
-已有文件时只有加上 `--force` 才会覆盖。未指定时会拒绝已有目录项（包括悬空符号链接），
-并发创建也不会互相覆盖。类别格式属于预设作者接口，修改后先运行
+若从内置类别开始，请在仓库或 overlay 根目录运行 `shine preset copy <kind>/<name>`，命令会创建
+对应的类型与类别路径。
+
+模板不添加空权限表。需要 unrestricted 作者说明时可加 `--unrestricted`，但该选项不会授予信任、
+跳过批准或隔离脚本。详见[能力声明](#声明权限)。
+
+已有文件时只有加上 `--force` 才会覆盖，请先检查现有内容。修改元数据后先运行
 `shine preset validate . --format json`，再执行对应的隔离安装 `--dry-run`。Shell 安装 dry-run
 只预览命令入口，不安装或修改文件。
 
@@ -622,9 +578,11 @@ env = [{ source = "API_URL", sensitivity = "plain" }, { source = "SERVICE_TOKEN"
 `node_modules`；外部类别可以按上文约定启用由 Bun 管理的锁定依赖。`runtime = "bun"` 也不能与
 `needs_source = true` 组合使用。
 
-可选的 `env` 只适用于 Bun 入口。每项声明 `source`、可选 `target`（默认为来源名称）及必填的 `sensitivity = "plain"` 或 `"secret"`；入口启动时会通过 `shine env run --no-workspace --with ...` 注入值，因此优先解密 `SOURCE_SECRET`，不存在时读取明文 `SOURCE`。声明 `env` 后，运行机器的 `PATH` 中还必须有 `shine`。不要在元数据中填写值或密文，只声明键名。
+可选的 `env` 只适用于 Bun 入口，遵循[环境输入格式](#声明运行时环境输入)。每个已声明来源优先读取
+`SOURCE_SECRET`，其次读取明文 `SOURCE`，不会额外加入工作区的默认秘密绑定。声明 `env` 后，
+运行机器的 `PATH` 中还必须有 `shine`。元数据只声明名称与敏感性，不填写值或密文。
 
-后续支持的运行时会在本节逐项记录其支持值、文件类型、前提条件和限制。Python、Node 与 Deno 目前均不可配置为 `runtime`。
+Python、Node 与 Deno 目前均不可配置为 `runtime`。
 
 ## 编写系统 Bootstrap Item
 
@@ -690,7 +648,45 @@ env = [{ source = "PROFILE_PATH", sensitivity = "plain" }, { source = "API_TOKEN
 
 `runtime` 省略时为 `native`，直接执行脚本；`bun` 仅接受 `.ts`、`.js`、`.mts` 或 `.mjs`，并要求
 运行机器已安装 Bun。只有 `env` allowlist 中的 Shine `[env]` 变量会传给 artifact；每项同时声明来源、
-可选目标别名与敏感性，无需在 `[permissions].environment` 重复声明。allowlist 中未配置的可选值会被省略；固定 app 路径变量会
-另外加入。若希望安装或升级实际改动
-文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设须人工确认生命周期 Plan
-或已有匹配 grant。钩子不能递归调用 artifact 生命周期命令；应使用受支持的 artifact 配置和显式操作。
+可选目标别名与敏感性，无需在 `[permissions].environment` 重复声明。allowlist 中未配置的可选值会被省略；固定 App 路径变量见下文。
+外部预设需要人工确认操作计划，或已有匹配的信任授权。
+
+### App 配置改动后运行脚本
+
+在 `shine.toml` 顶层、任何表头之前声明 `post_install` 或 `post_upgrade`，可填写单个 hook 或列表。
+例如：
+
+```toml
+post_upgrade = [{ script = "refresh.ts", runtime = "bun", env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }] }]
+
+[permissions]
+schema_version = 1
+network = [{ scope = "host", host = "api.example.com" }]
+```
+
+每个 hook 必须且只能选择 `command` 或 `script`。命令 hook 运行程序，可带 `args`；脚本 hook
+运行类别内的相对路径脚本，可指定 `runtime = "bun"`。`runtime` 只能与 `script` 一起使用。
+Bun 文件扩展名和依赖规则与 artifact 相同。请声明脚本实际需要的访问；此示例假定请求
+`api.example.com`。
+
+命令 hook 的已声明输入必须有配置值；脚本 hook 会省略缺失的可选输入，脚本应自行处理。
+必需输入缺失时会阻止批准。外部 hook 与其他 App 代码一样需要审阅或信任授权。
+不要从 hook 调用 artifact 生命周期命令，应使用显式 artifact 操作。触发时机和失败处理见
+[生命周期 hook](./app-presets.md#生命周期钩子)。
+
+### App 脚本可用的路径
+
+Generator、脚本 hook、artifact 与 teardown 无需 `env` 声明即可读取以下变量；命令 hook
+不会获得这组 App 专用变量。
+
+| 变量 | 用途 |
+| --- | --- |
+| `SHINE_APP_ID` | 应用类别名称 |
+| `SHINE_APP_DIR`、`SHINE_APP_SOURCE_DIR` | 本次脚本使用的文件目录，也是工作目录 |
+| `SHINE_APP_OVERLAY_DIR` | 本次运行的 overlay 文件目录；没有 overlay 时为空 |
+| `SHINE_CONFIG_DIR` | 当前 Shine 配置与状态根目录 |
+| `SHINE_STATE_DIR` | 当前应用类别的持久输出 |
+| `SHINE_CACHE_DIR` | 当前应用类别的缓存输出 |
+
+脚本来源目录是临时目录，请勿保存其路径或向其中写入持久结果。需要保留的输出使用
+`SHINE_STATE_DIR` 或 `SHINE_CACHE_DIR`，必要时由脚本创建输出目录。
