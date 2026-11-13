@@ -104,17 +104,30 @@ add_path_hint() {
   shell_name="${shell_name##*/}"
   case "$shell_name" in
     bash|zsh)
+      # Single-quote the literal path even in the current-terminal command:
+      # interactive Bash expands history markers inside double quotes.
+      quoted_dir="$(quote_arg "$SHINE_INSTALL_DIR")"
+      path_line="case \":\$PATH:\" in *:$quoted_dir:*) ;; *) export PATH=$quoted_dir\"\${PATH:+:\$PATH}\" ;; esac"
+      quoted_line="$(quote_arg "$path_line")"
+      styled_log 1 "For $shell_name (from SHELL), run this command to configure future shells:"
       if [ "$shell_name" = bash ]; then
-        profile='"$HOME/.bashrc"'
+        # Select at command execution time. Never create a higher-priority profile
+        # over an existing one, or source unrelated interactive configuration.
+        log '  ( shine_profile="$HOME/.bash_profile";' \
+          'for shine_file in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do if [ -e "$shine_file" ] || [ -L "$shine_file" ]; then shine_profile="$shine_file"; break; fi; done;' \
+          'for shine_file in "$HOME/.bashrc" "$shine_profile"; do' \
+          'if [ -e "$shine_file" ] || [ -L "$shine_file" ]; then' \
+          'if [ ! -f "$shine_file" ] || [ ! -r "$shine_file" ] || [ ! -w "$shine_file" ]; then printf "Cannot configure PATH in %s; update it manually.\n" "$shine_file" >&2; exit 1; fi;' \
+          'elif [ ! -w "$HOME" ]; then printf "Cannot create %s; update PATH manually.\n" "$shine_file" >&2; exit 1; fi; done;' \
+          'for shine_file in "$HOME/.bashrc" "$shine_profile"; do' \
+          "grep -Fqx -- $quoted_line \"\$shine_file\" 2>/dev/null || printf '\\n%s\\n' $quoted_line >> \"\$shine_file\" || exit 1; done )"
       else
         # Resolve ZDOTDIR in the user's shell, where it may be set but not exported.
         profile='"${ZDOTDIR:-$HOME}/.zshrc"'
+        log "  grep -Fqx -- $quoted_line $profile 2>/dev/null || printf '\\n%s\\n' $quoted_line >> $profile"
       fi
-      escaped_dir="$(printf '%s' "$SHINE_INSTALL_DIR" | sed 's/[\\"$`]/\\&/g')"
-      path_line="export PATH=\"$escaped_dir:\$PATH\""
-      quoted_line="$(quote_arg "$path_line")"
-      styled_log 1 "For $shell_name (from SHELL), run this command, then open a new shell:"
-      log "  grep -Fqx -- $quoted_line $profile 2>/dev/null || printf '\\n%s\\n' $quoted_line >> $profile"
+      styled_log 1 "Then run this in your current terminal and verify with shine --version:"
+      log "  $path_line"
       ;;
     *)
       log "Automatic PATH configuration commands are only provided for Bash and Zsh (from SHELL)."

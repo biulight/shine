@@ -15,9 +15,11 @@ curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh
 ```
 
 The default destination is `~/.local/bin/shine`. The installer does not modify shell configuration.
-If it reports that the directory is missing from `PATH`, run the command printed for your shell,
-then open a new terminal. If your shell differs from the one shown, or you use Fish or another
-shell, add the directory to its configuration manually. Verify the installation:
+If it reports that the directory is missing from `PATH`, run the printed configuration command,
+then the command for your current terminal.
+If a configuration file cannot be updated, follow the error message and configure it manually.
+If your shell differs from the one shown, or you use Fish or another shell, add the directory to
+its configuration manually. Verify the installation:
 
 ```bash
 shine --version
