@@ -11,8 +11,10 @@ environment identity contract. It has no filesystem/process Host, ambient enviro
 network client or write API. URL parsing is local. `Session` caches source facts while comparing
 each entry's declarations and environment independently. Cache hits preserve cumulative budgets.
 
-The parser uses pinned Tree-sitter 0.25.10, JavaScript grammar 0.23.1, TypeScript grammar 0.23.2,
-and language bindings 0.1.9. The maintainer authorized Rust 1.90 for the latest language binding.
+The parser uses pinned Tree-sitter 0.27.2, JavaScript grammar 0.25.0, TypeScript grammar 0.23.2,
+and language bindings 0.1.9. Tree-sitter and the language binding require Rust 1.90.
+The parser progress callback returns `ControlFlow::Break` on cancellation or budget exhaustion;
+node counts are widened to `usize` before cumulative budget accounting.
 Recovered/missing syntax nodes block with safe positions; raw parser text is never exported.
 Locations are one-based lines and UTF-8 byte columns. Public diagnostics contain category-relative
 paths, behavior classes, codes and optional opaque target hashes; no source excerpt or raw target.

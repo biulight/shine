@@ -19,7 +19,7 @@ use std::sync::{
 };
 
 pub const RULE_VERSION: u32 = 7;
-pub const ANALYZER_VERSION: &str = "tree-sitter-0.25.10/js-0.23.1/ts-0.23.2/language-0.1.9";
+pub const ANALYZER_VERSION: &str = "tree-sitter-0.27.2/js-0.25.0/ts-0.23.2/language-0.1.9";
 pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(
