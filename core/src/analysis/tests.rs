@@ -2882,6 +2882,11 @@ fn parser_and_node_budgets_reject_hostile_inputs() {
         ),
         Err(TerminalFailure::Budget)
     );
+    assert_eq!(
+        session.parser_steps, 1,
+        "stop at the first exhausted callback"
+    );
+    assert_eq!(session.nodes, 0, "do not walk an interrupted parse");
 }
 
 #[test]
