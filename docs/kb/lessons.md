@@ -1,5 +1,23 @@
 # Lessons Learned
 
+## 2026-11-13 — Installer PATH hints must cover login Bash
+
+- **Symptom**: after following the installer hint on a fresh Linux system, SSH login still
+  reported `shine: command not found`, although the binary worked by absolute path.
+- **Cause**: the hint only wrote `.bashrc`; login Bash does not automatically read that file.
+  Tests explicitly sourced the file and missed actual startup behavior.
+- **Fix**: the user-run hint appends an idempotent PATH statement to `.bashrc` and the first
+  existing login profile, creating `.bash_profile` only if all login profiles are absent.
+  Preflight both destinations, reject unusable files instead of shadowing them, preserve existing
+  content, and provide a separate current-terminal command. Do not add a `.bashrc` source command:
+  that would also activate unrelated interactive setup during login. Arbitrary early returns or
+  later PATH overrides in user configuration still require manual adjustment.
+- **Coverage**: start interactive login and non-login Bash with temporary HOME directories;
+  verify profile precedence, existing source chains, repeated setup/loading, literal paths and
+  unusable destinations. Feed pasted hints through interactive Bash stdin with history expansion
+  enabled: `bash -c` misses `!` expansion in double-quoted paths. Single-quote literal paths
+  separately from PATH expansion. Installer fixtures use a local archive and never download releases.
+
 ## 2026-11-07 — Top-level errors need stderr-aware emphasis
 
 - **Symptom**: upgrade failures used the same visual weight as ordinary progress output.

@@ -14,7 +14,8 @@ curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh
 ```
 
 默认安装到 `~/.local/bin/shine`，安装脚本不会修改 Shell 配置。
-如果提示安装目录不在 `PATH` 中，请执行为你的 Shell 显示的命令，再打开新终端。
+如果提示安装目录不在 `PATH` 中，请先执行输出中的配置命令，再执行使当前终端生效的命令。
+如果配置文件无法更新，请根据错误提示手动配置。
 如果使用的 Shell 与提示不同，或使用 Fish 等其他 Shell，请手动将该目录加入相应的配置。
 随后验证：
 
