@@ -1,5 +1,6 @@
 use super::*;
 use std::borrow::Cow;
+use std::ops::ControlFlow;
 use tree_sitter::{Node, ParseOptions, Parser};
 
 pub(super) fn builtin(spec: &str) -> Option<&str> {
@@ -322,7 +323,10 @@ pub(super) fn parse(
     let tree = {
         let mut progress = |_: &tree_sitter::ParseState| {
             session.parser_steps += 1;
-            session.budget().is_err()
+            match session.budget() {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(_) => ControlFlow::Break(()),
+            }
         };
         parser.parse_with_options(
             &mut |offset, _| &bytes[offset..],
@@ -1288,7 +1292,7 @@ fn collect_pattern_inputs<'tree>(
                 }
             }
             ("array_pattern", "array") => {
-                session.nodes += target.child_count() + input.child_count();
+                session.nodes += target.child_count() as usize + input.child_count() as usize;
                 session.budget()?;
                 let slots = |array: Node<'tree>| {
                     let mut index = 0;
@@ -1313,7 +1317,7 @@ fn collect_pattern_inputs<'tree>(
                 }
             }
             ("object_pattern", "object") => {
-                session.nodes += target.child_count() + input.child_count();
+                session.nodes += target.child_count() as usize + input.child_count() as usize;
                 session.budget()?;
                 let mut fields = BTreeMap::new();
                 let mut unknown_numeric_end = 0;
