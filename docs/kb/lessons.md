@@ -8,8 +8,15 @@
   Tests explicitly sourced the file and missed actual startup behavior.
 - **Fix**: the user-run hint appends an idempotent PATH statement to `.bashrc` and the first
   existing login profile, creating `.bash_profile` only if all login profiles are absent.
-  Preflight both destinations, reject unusable files instead of shadowing them, preserve existing
-  content, and provide a separate current-terminal command. Do not add a `.bashrc` source command:
+  Select and preflight both destinations inside the installer without writing configuration;
+  emit a multiline user-run hint that reads the PATH statement once from a quoted heredoc,
+  with literal target paths, append-time deduplication and write failure handling. Reject LF/CR
+  in HOME or the installation path before downloading or writing; `read -r` expects one line.
+  Reject unusable files instead of shadowing them, preserve existing content,
+  and provide a separate current-terminal command. Selection reflects the installation-time
+  configuration; rerun the installer if the login-file layout changes before using its hint.
+  Preflight is not a transaction: later write failures can leave an earlier append in place.
+  Do not add a `.bashrc` source command:
   that would also activate unrelated interactive setup during login. Arbitrary early returns or
   later PATH overrides in user configuration still require manual adjustment.
 - **Coverage**: start interactive login and non-login Bash with temporary HOME directories;

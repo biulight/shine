@@ -108,22 +108,44 @@ add_path_hint() {
       # interactive Bash expands history markers inside double quotes.
       quoted_dir="$(quote_arg "$SHINE_INSTALL_DIR")"
       path_line="case \":\$PATH:\" in *:$quoted_dir:*) ;; *) export PATH=$quoted_dir\"\${PATH:+:\$PATH}\" ;; esac"
-      quoted_line="$(quote_arg "$path_line")"
-      styled_log 1 "For $shell_name (from SHELL), run this command to configure future shells:"
       if [ "$shell_name" = bash ]; then
-        # Select at command execution time. Never create a higher-priority profile
-        # over an existing one, or source unrelated interactive configuration.
-        log '  ( shine_profile="$HOME/.bash_profile";' \
-          'for shine_file in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do if [ -e "$shine_file" ] || [ -L "$shine_file" ]; then shine_profile="$shine_file"; break; fi; done;' \
-          'for shine_file in "$HOME/.bashrc" "$shine_profile"; do' \
-          'if [ -e "$shine_file" ] || [ -L "$shine_file" ]; then' \
-          'if [ ! -f "$shine_file" ] || [ ! -r "$shine_file" ] || [ ! -w "$shine_file" ]; then printf "Cannot configure PATH in %s; update it manually.\n" "$shine_file" >&2; exit 1; fi;' \
-          'elif [ ! -w "$HOME" ]; then printf "Cannot create %s; update PATH manually.\n" "$shine_file" >&2; exit 1; fi; done;' \
-          'for shine_file in "$HOME/.bashrc" "$shine_profile"; do' \
-          "grep -Fqx -- $quoted_line \"\$shine_file\" 2>/dev/null || printf '\\n%s\\n' $quoted_line >> \"\$shine_file\" || exit 1; done )"
+        # Inspect only: configuration is still written by the user-run hint.
+        profile="$HOME/.bash_profile"
+        for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+          if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+            profile="$candidate"
+            break
+          fi
+        done
+        profiles_ready=true
+        for target_profile in "$HOME/.bashrc" "$profile"; do
+          if [ -e "$target_profile" ] || [ -L "$target_profile" ]; then
+            if [ ! -f "$target_profile" ] || [ ! -r "$target_profile" ] || [ ! -w "$target_profile" ]; then
+              styled_log 33 "Cannot configure PATH in $target_profile; update it manually."
+              profiles_ready=false
+            fi
+          elif [ ! -w "$HOME" ] || [ ! -x "$HOME" ]; then
+            styled_log 33 "Cannot create $target_profile; update PATH manually."
+            profiles_ready=false
+          fi
+        done
+        if [ "$profiles_ready" = true ]; then
+          styled_log 1 "For bash (from SHELL), run this command to configure future shells:"
+          log "("
+          log "  IFS= read -r shine_path_line <<'SHINE_PATH'"
+          log "$path_line"
+          log "SHINE_PATH"
+          log "  for shine_file in $(quote_arg "$HOME/.bashrc") $(quote_arg "$profile"); do"
+          log '    grep -Fqx -- "$shine_path_line" "$shine_file" 2>/dev/null ||'
+          log "      printf '\\n%s\\n' \"\$shine_path_line\" >> \"\$shine_file\" || exit 1"
+          log "  done"
+          log ")"
+        fi
       else
         # Resolve ZDOTDIR in the user's shell, where it may be set but not exported.
         profile='"${ZDOTDIR:-$HOME}/.zshrc"'
+        quoted_line="$(quote_arg "$path_line")"
+        styled_log 1 "For $shell_name (from SHELL), run this command to configure future shells:"
         log "  grep -Fqx -- $quoted_line $profile 2>/dev/null || printf '\\n%s\\n' $quoted_line >> $profile"
       fi
       styled_log 1 "Then run this in your current terminal and verify with shine --version:"
@@ -137,6 +159,16 @@ add_path_hint() {
 }
 
 main() {
+  # A PATH statement and its heredoc payload must each fit on one line.
+  newline='
+'
+  carriage_return="$(printf '\r')"
+  case "$HOME" in
+    *"$newline"*|*"$carriage_return"*) fail "HOME paths containing newline characters are not supported" ;;
+  esac
+  case "$SHINE_INSTALL_DIR" in
+    *"$newline"*|*"$carriage_return"*) fail "SHINE_INSTALL_DIR paths containing newline characters are not supported" ;;
+  esac
   need_cmd tar
   target="$(detect_target)"
   if [ "$SHINE_VERSION" = "latest" ]; then
