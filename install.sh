@@ -10,8 +10,21 @@ log() {
   printf '%s\n' "$*"
 }
 
+# Check the destination after redirection, including when fail writes to stderr.
+# Plain log calls keep progress and copyable commands free of styling.
+styled_log() {
+  if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] && [ "${NO_COLOR+x}" != x ]; then
+    printf '\033[%sm' "$1"
+    shift
+    printf '%s\033[0m\n' "$*"
+  else
+    shift
+    log "$*"
+  fi
+}
+
 fail() {
-  printf 'error: %s\n' "$*" >&2
+  styled_log 31 "error: $*" >&2
   exit 1
 }
 
@@ -86,7 +99,7 @@ quote_arg() {
 }
 
 add_path_hint() {
-  log "Warning: $SHINE_INSTALL_DIR is not in PATH"
+  styled_log 33 "Warning: $SHINE_INSTALL_DIR is not in PATH"
   shell_name="${SHELL:-}"
   shell_name="${shell_name##*/}"
   case "$shell_name" in
@@ -100,12 +113,12 @@ add_path_hint() {
       escaped_dir="$(printf '%s' "$SHINE_INSTALL_DIR" | sed 's/[\\"$`]/\\&/g')"
       path_line="export PATH=\"$escaped_dir:\$PATH\""
       quoted_line="$(quote_arg "$path_line")"
-      log "For $shell_name (from SHELL), run this command, then open a new shell:"
+      styled_log 1 "For $shell_name (from SHELL), run this command, then open a new shell:"
       log "  grep -Fqx -- $quoted_line $profile 2>/dev/null || printf '\\n%s\\n' $quoted_line >> $profile"
       ;;
     *)
       log "Automatic PATH configuration commands are only provided for Bash and Zsh (from SHELL)."
-      log "Add the installation directory to PATH in your shell configuration, then open a new shell."
+      styled_log 1 "Add the installation directory to PATH in your shell configuration, then open a new shell."
       ;;
   esac
 }
@@ -140,7 +153,7 @@ main() {
   mv "$tmpdir/shine" "$install_path"
   chmod +x "$install_path"
 
-  log "Installed shine to $install_path"
+  styled_log 32 "Installed shine to $install_path"
   case ":$PATH:" in
     *":$SHINE_INSTALL_DIR:"*) ;;
     *)

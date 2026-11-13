@@ -1,12 +1,16 @@
 """Run with python3 scripts/test-install-path-hints.py; no downloads or real profiles."""
 
 import io
+import errno
 import os
 from pathlib import Path
+import pty
+import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import unittest
 
 
@@ -133,6 +137,100 @@ class PathHints(unittest.TestCase):
         self.env["PATH"] += ":" + str(directory)
         output = self.install("/bin/bash", directory)
         self.assertNotIn("Warning:", output)
+
+    def color_output(self, terminal_stream=None, **overrides):
+        env = {**self.env, "TERM": "xterm-256color", "SHELL": "/bin/bash"}
+        env.pop("NO_COLOR", None)
+        env.update(overrides)
+        master, slave = pty.openpty()
+        chunks = []
+        read_errors = []
+
+        def drain():
+            while True:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError as error:
+                    if error.errno != errno.EIO:
+                        read_errors.append(error)
+                    return
+                if not chunk:
+                    return
+                chunks.append(chunk)
+
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+        try:
+            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+                try:
+                    result = subprocess.run(
+                        ["/bin/sh"],
+                        input=INSTALLER.read_bytes(),
+                        env=env,
+                        stdout=slave if terminal_stream == "stdout" else stdout,
+                        stderr=slave if terminal_stream == "stderr" else stderr,
+                        timeout=10,
+                    )
+                finally:
+                    os.close(slave)
+                    reader.join(timeout=5)
+                self.assertFalse(reader.is_alive(), "PTY reader did not finish")
+                self.assertEqual(read_errors, [])
+                terminal = b"".join(chunks)
+                stdout.seek(0)
+                stderr.seek(0)
+                return result.returncode, tuple(
+                    (terminal if terminal_stream == stream else file.read())
+                    .decode()
+                    .replace("\r\n", "\n")
+                    for stream, file in (("stdout", stdout), ("stderr", stderr))
+                )
+        finally:
+            os.close(master)
+
+    def test_colors_follow_stdout_without_coloring_copy_commands(self):
+        code, (plain, errors) = self.color_output()
+        self.assertEqual(code, 0)
+        self.assertEqual(errors, "")
+        self.assertNotIn("\x1b", plain)
+        code, (colored, errors) = self.color_output("stdout")
+        self.assertEqual(code, 0)
+        self.assertEqual(errors, "")
+        for prefix in ("\x1b[32mInstalled", "\x1b[33mWarning:", "\x1b[1mFor "):
+            self.assertIn(prefix, colored)
+        self.assertEqual(re.sub(r"\x1b\[[0-9;]*m", "", colored), plain)
+        self.assertEqual(
+            [line for line in colored.splitlines() if line.startswith("  ")],
+            [line for line in plain.splitlines() if line.startswith("  ")],
+        )
+        for overrides in (
+            {"NO_COLOR": "1"},
+            {"NO_COLOR": ""},
+            {"TERM": "dumb"},
+            {"TERM": ""},
+        ):
+            with self.subTest(overrides=overrides):
+                self.assertEqual(
+                    self.color_output("stdout", **overrides), (0, (plain, ""))
+                )
+        self.assertEqual(self.color_output("stderr"), (0, (plain, "")))
+
+    def test_error_color_follows_stderr_and_preserves_exit_status(self):
+        uname = self.bin / "uname"
+        uname.write_text("#!/bin/sh\nprintf 'UnsupportedOS\\n'\n")
+        uname.chmod(0o755)
+        plain = "error: unsupported operating system: UnsupportedOS\n"
+        self.assertEqual(self.color_output(), (1, ("", plain)))
+        self.assertEqual(self.color_output("stdout"), (1, ("", plain)))
+        self.assertEqual(
+            self.color_output("stderr"),
+            (1, ("", "\x1b[31m" + plain.rstrip("\n") + "\x1b[0m\n")),
+        )
+        for overrides in ({"NO_COLOR": "1"}, {"NO_COLOR": ""}, {"TERM": "dumb"}):
+            with self.subTest(overrides=overrides):
+                self.assertEqual(
+                    self.color_output("stderr", **overrides), (1, ("", plain))
+                )
 
     def test_fish_uses_manual_hint_without_writing_profile(self):
         directory = self.home / "fish bin"
