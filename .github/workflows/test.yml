@@ -15,6 +15,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+      - name: Verify Linux ABI checker
+        run: python3 scripts/test-linux-glibc.py
       - name: Verify release installers offline
         run: python3 scripts/test-release-installers.py
       - name: Verify Unix shell syntax and PATH hints

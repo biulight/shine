@@ -12,10 +12,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Keep the userspace baseline independent of the hosted runner image.
           - runner: ubuntu-latest
+            container: ubuntu:22.04
             target: x86_64-unknown-linux-gnu
             asset_target: linux-x86_64
           - runner: ubuntu-latest
+            container: ubuntu:22.04
             target: aarch64-unknown-linux-gnu
             asset_target: linux-aarch64
           - runner: macos-15
@@ -33,7 +36,14 @@ jobs:
             asset_target: windows-aarch64
             binary_name: shine.exe
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || '' }}
     steps:
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates \
+            curl git python3 xz-utils zstd pkg-config cmake
       - uses: actions/checkout@v7
       - name: Install Rust with mise
         uses: jdx/mise-action@v5
@@ -45,9 +55,12 @@ jobs:
       - name: Install Linux cross toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          apt-get update
+          apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Do not restore objects compiled against the former runner's newer libc.
+          key: ${{ matrix.target }}-${{ matrix.container || matrix.runner }}
       - name: Build release binary
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
@@ -58,7 +71,7 @@ jobs:
             export SHINE_VERSION_METADATA="preview"
             export SHINE_GIT_SHA="$GITHUB_SHA"
           fi
-          cargo build --release -p shine-cli --target ${{ matrix.target }}
+          cargo build --locked --release -p shine-cli --target ${{ matrix.target }}
       - name: Package archive
         env:
           ASSET_TARGET: ${{ matrix.asset_target }}
@@ -76,6 +89,27 @@ jobs:
             ARCHIVE="shine-preview-${ASSET_TARGET}.tar.gz"
           fi
           tar -czf "dist/${ARCHIVE}" -C dist "${BINARY_NAME}"
+      - name: Verify Linux archive on Ubuntu 22.04
+        if: runner.os == 'Linux'
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.35'
+          check_root=$(mktemp -d)
+          trap 'rm -rf "$check_root"' EXIT
+          tar -xzf dist/*.tar.gz -C "$check_root"
+          python3 scripts/check-linux-glibc.py "$check_root/shine"
+          command=("$check_root/shine")
+          if [ "$TARGET" = aarch64-unknown-linux-gnu ]; then
+            command=(qemu-aarch64 -L /usr/aarch64-linux-gnu "$check_root/shine")
+          fi
+          export SHINE_CONFIG_DIR="$check_root/config"
+          timeout 60 "${command[@]}" --version
+          timeout 60 "${command[@]}" --help > /dev/null
+          timeout 60 "${command[@]}" preset schema --format json > "$check_root/schema.json"
+          python3 -m json.tool "$check_root/schema.json" > /dev/null
       - name: Upload packaged artifact
         uses: actions/upload-artifact@v7
         with:

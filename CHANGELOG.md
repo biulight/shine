@@ -16,6 +16,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Restore Ubuntu 22.04 compatibility for Linux release binaries by building against glibc 2.35
+  and checking both Linux architectures before uploading release assets.
+
 - Make new Bash login files created by the installer instructions load `.bashrc` in interactive
   sessions, so aliases and shell integrations work over SSH. Preserve existing startup logic.
 
