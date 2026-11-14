@@ -67,12 +67,22 @@ download_file() {
   dest="$2"
 
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$dest"
+    if [ -t 2 ] && [ "${TERM:-}" != dumb ]; then
+      curl -fSL --progress-bar "$url" -o "$dest"
+    else
+      curl -fsSL "$url" -o "$dest"
+    fi
     return
   fi
 
   if command -v wget >/dev/null 2>&1; then
-    wget -qO "$dest" "$url"
+    # Let GNU/BusyBox wget show native progress when supported by the build.
+    # Avoid GNU-only --show-progress / --progress options.
+    if [ -t 2 ] && [ "${TERM:-}" != dumb ]; then
+      wget -O "$dest" "$url"
+    else
+      wget -qO "$dest" "$url"
+    fi
     return
   fi
 

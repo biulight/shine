@@ -1,12 +1,15 @@
 """Offline end-to-end installer checks; run with python3 on Unix or Windows."""
 
+import errno
 import io
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,10 @@ class ReleaseInstallers(unittest.TestCase):
         custom=False,
         existing=True,
         preview_asset=False,
+        downloader="curl",
+        terminal=False,
+        term="xterm",
+        no_color=False,
     ):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -51,6 +58,9 @@ class ReleaseInstallers(unittest.TestCase):
             for key in ("SHINE_VERSION", "SHINE_INSTALL_DIR", "SHINE_REPO"):
                 env.pop(key, None)
             env.update(
+                TEST_PROGRESS="yes"
+                if terminal == "stderr" and term != "dumb"
+                else "no",
                 TMPDIR=str(scratch),
                 TMP=str(scratch),
                 TEMP=str(scratch),
@@ -61,6 +71,12 @@ class ReleaseInstallers(unittest.TestCase):
                 TEST_FAILURE=failure,
                 TEST_INSTALLER=str(ROOT / ("install.ps1" if WINDOWS else "install.sh")),
             )
+            env.pop("TERM", None)
+            env.pop("NO_COLOR", None)
+            if term is not None:
+                env["TERM"] = term
+            if no_color:
+                env["NO_COLOR"] = "1"
             if preview_asset:
                 installer = root / ("install.ps1" if WINDOWS else "install.sh")
                 subprocess.run(
@@ -112,12 +128,42 @@ if ($env:SHINE_VERSION -cne $previousVersion) { throw 'installer changed SHINE_V
                 mocks.mkdir()
                 scripts = {
                     "curl": """#!/bin/sh
+if [ "$1" = -fSL ]; then
+  [ "$TEST_PROGRESS" = yes ] && [ "$2" = --progress-bar ] || exit 90
+  shift
+else
+  [ "$1" = -fsSL ] || exit 91
+  case "$2" in */releases/latest) ;; *) [ "$TEST_PROGRESS" = no ] || exit 92 ;; esac
+fi
 printf '%s\n' "$2" >> "$TEST_REQUESTS"
 case "$2" in
-  */releases/latest) printf '{"tag_name": "v2.8.0"}\n' ;;
-  *) [ "$TEST_FAILURE" != download ] || exit 22
+  */releases/latest) [ "$1" = -fsSL ] && [ "$#" = 2 ] || exit 94
+     printf '{"tag_name": "v2.8.0"}\n' ;;
+  *) [ "$#" = 4 ] && [ "$3" = -o ] || exit 93
+     if [ "$TEST_FAILURE" = download ]; then
+       printf partial > "$4"
+       printf 'simulated download failure\n' >&2
+       exit 22
+     fi
      cp "$TEST_ARCHIVE" "$4" ;;
 esac
+""",
+                    "wget": """#!/bin/sh
+case "$1" in
+  -qO-) printf '%s\n' "$2" >> "$TEST_REQUESTS"
+        printf '{"tag_name": "v2.8.0"}\n'; exit ;;
+  -O) [ "$TEST_PROGRESS" = yes ] || exit 90 ;;
+  -qO) [ "$TEST_PROGRESS" = no ] || exit 91 ;;
+  *) exit 92 ;;
+esac
+[ "$#" = 3 ] || exit 93
+printf '%s\n' "$3" >> "$TEST_REQUESTS"
+if [ "$TEST_FAILURE" = download ]; then
+  printf partial > "$2"
+  printf 'simulated download failure\n' >&2
+  exit 22
+fi
+cp "$TEST_ARCHIVE" "$2"
 """,
                     "uname": '#!/bin/sh\ncase "$1" in -s) echo '
                     + target[0]
@@ -125,25 +171,83 @@ esac
                     + target[1]
                     + ";; esac\n",
                 }
+                if downloader == "wget":
+                    del scripts["curl"]
                 for name, content in scripts.items():
                     path = mocks / name
                     path.write_text(content)
                     path.chmod(0o755)
-                env["PATH"] = str(mocks) + ":/usr/bin:/bin"
+                # Isolate discovery so wget cases cannot find the host's curl.
+                for name in (
+                    "cp",
+                    "tar",
+                    "gzip",
+                    "mktemp",
+                    "rm",
+                    "mkdir",
+                    "mv",
+                    "chmod",
+                    "grep",
+                    "sed",
+                ):
+                    (mocks / name).symlink_to(shutil.which(name))
+                env["PATH"] = str(mocks)
                 argv = ["/bin/sh"]
                 asset_target = (
                     ("darwin" if target[0] == "Darwin" else "linux")
                     + "-"
                     + ("aarch64" if target[1] in ("arm64", "aarch64") else "x86_64")
                 )
-            result = subprocess.run(
-                argv,
-                env=env,
-                input=None if WINDOWS else Path(env["TEST_INSTALLER"]).read_text(),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            installer_input = None
+            if not WINDOWS:
+                installer_input = Path(env["TEST_INSTALLER"]).read_text()
+                if term is None:
+                    # Some /bin/sh implementations initialize absent TERM to dumb.
+                    installer_input = "unset TERM\n" + installer_input
+            master = slave = None
+            chunks = []
+            read_errors = []
+            if terminal:
+                import pty
+
+                master, slave = pty.openpty()
+
+                def drain():
+                    while True:
+                        try:
+                            chunk = os.read(master, 4096)
+                        except OSError as error:
+                            if error.errno != errno.EIO:
+                                read_errors.append(error)
+                            return
+                        if not chunk:
+                            return
+                        chunks.append(chunk)
+
+                reader = threading.Thread(target=drain, daemon=True)
+                reader.start()
+            try:
+                try:
+                    result = subprocess.run(
+                        argv,
+                        env=env,
+                        input=installer_input,
+                        stdout=slave if terminal == "stdout" else subprocess.PIPE,
+                        stderr=slave if terminal == "stderr" else subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                    )
+                finally:
+                    if terminal:
+                        os.close(slave)
+                        reader.join(timeout=5)
+                if terminal:
+                    self.assertFalse(reader.is_alive(), "PTY reader did not finish")
+                    self.assertEqual(read_errors, [])
+                    setattr(result, terminal, b"".join(chunks).decode())
+            finally:
+                if terminal:
+                    os.close(master)
             self.assertEqual(list(scratch.iterdir()), [], result.stdout + result.stderr)
             urls = requests.read_text(encoding="utf-8-sig").splitlines()
             repo = "example/shine" if custom else "biulight/shine"
@@ -162,9 +266,50 @@ esac
             if failure:
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(binary.read_bytes(), b"previous")
+                self.assertNotIn("Installed shine", result.stdout)
+                if not WINDOWS and failure == "download":
+                    self.assertEqual(result.returncode, 22, result.stderr)
+                    self.assertIn("simulated download failure", result.stderr)
             else:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(binary.read_bytes(), b"replacement")
+
+    @unittest.skipIf(WINDOWS, "POSIX downloader and terminal behavior")
+    def test_download_progress(self):
+        for downloader in ("curl", "wget"):
+            for terminal, term in (
+                (False, "xterm"),
+                ("stderr", "xterm"),
+                ("stderr", "dumb"),
+                ("stderr", ""),
+                ("stderr", None),
+                ("stdout", "xterm"),
+            ):
+                for failure in ("", "download"):
+                    with self.subTest(
+                        downloader=downloader,
+                        terminal=terminal,
+                        term=term,
+                        failure=failure,
+                    ):
+                        self.run_installer(
+                            downloader=downloader,
+                            terminal=terminal,
+                            term=term,
+                            failure=failure,
+                        )
+
+    @unittest.skipIf(WINDOWS, "POSIX downloader and terminal behavior")
+    def test_progress_with_no_color_and_custom_destination(self):
+        for downloader in ("curl", "wget"):
+            with self.subTest(downloader=downloader):
+                self.run_installer(
+                    downloader=downloader,
+                    terminal="stderr",
+                    no_color=True,
+                    custom=True,
+                    preview_asset=True,
+                )
 
     def test_versions_and_overrides(self):
         for version in (None, "latest", "2.7.0", "preview"):
