@@ -109,6 +109,7 @@ pub enum SysPackageProvider {
     Homebrew,
     HomebrewCask,
     Apt,
+    Pacman,
     Winget,
 }
 

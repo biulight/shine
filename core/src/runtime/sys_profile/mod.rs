@@ -388,11 +388,11 @@ async fn planned_sys_profile_block_changes(
 ) -> Result<Vec<PlannedSysProfileBlockChange>> {
     let plans = match os_id {
         "macos" => vec![(config.home_dir.join(".zshrc"), None, true)],
-        "ubuntu" if config.shell_type == ShellType::Bash => vec![
+        "ubuntu" | "arch" if config.shell_type == ShellType::Bash => vec![
             (config.home_dir.join(".bashrc"), Some("bash"), true),
             (config.home_dir.join(".zshrc"), None, false),
         ],
-        "ubuntu" if config.shell_type == ShellType::Zsh => vec![
+        "ubuntu" | "arch" if config.shell_type == ShellType::Zsh => vec![
             (config.home_dir.join(".zshrc"), Some("zsh"), true),
             (config.home_dir.join(".bashrc"), None, false),
         ],

@@ -1221,6 +1221,43 @@ mod tests {
     }
 
     #[test]
+    fn pacman_preparation_is_visible_once_in_all_review_layouts_without_mutating_plan() {
+        let mut plan = bootstrap_display_plan();
+        for step in &mut plan.steps[..2] {
+            step.diagnostic_codes
+                .push("sys_pacman_existing_database".into());
+        }
+        let before = plan.fingerprint().unwrap();
+        let mut outputs = vec![
+            render_bootstrap_plan_lines(&plan, "missing", false).unwrap(),
+            render_bootstrap_plan_lines(&plan, "missing", true).unwrap(),
+            render_plan_lines(&plan, "missing").unwrap(),
+        ];
+        assert_eq!(plan.fingerprint().unwrap(), before);
+        plan.permission_scopes.clear();
+        outputs.push(render_bootstrap_plan_lines(&plan, "missing", false).unwrap());
+        for lines in outputs {
+            let output = lines.join("\n");
+            assert_eq!(
+                output
+                    .matches("Arch package installation uses the existing pacman database.")
+                    .count(),
+                1
+            );
+            assert!(output.contains("pacman -Syu"));
+            assert!(output.contains(
+                "Native pacman installation does not refresh databases or upgrade the system"
+            ));
+            assert!(!output.contains("Shine does not refresh"));
+            assert!(output.contains("do not use pacman -Sy alone"));
+        }
+        let other = render_bootstrap_plan_lines(&bootstrap_display_plan(), "missing", false)
+            .unwrap()
+            .join("\n");
+        assert!(!other.contains("pacman -Syu"));
+    }
+
+    #[test]
     fn bootstrap_renderer_groups_real_permissions_and_keeps_full_audit_option() {
         let plan = bootstrap_display_plan();
         let before = plan.fingerprint().unwrap();

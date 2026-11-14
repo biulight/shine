@@ -116,9 +116,12 @@ shine sys info split-dns
 | Ubuntu | `recommended`（默认） | Rust、Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza。 |
 | Ubuntu | `all` | `recommended` 加 ZeroTier、Bun、pnpm、mise、Homebrew。 |
 | Ubuntu | `minimal` | Neovim、fzf、bat、eza、zoxide；适合不需要 shell 历史、prompt 与 JavaScript 工具链的服务器。 |
+| Arch Linux | `minimal`（默认） | 通过 pacman 安装 Neovim、fzf、bat、eza、zoxide，支持 Bash/Zsh 集成。 |
 | Windows | `required` | Rust、Yazi、Starship。 |
 | Windows | `recommended`（默认） | `required` 加 Neovim、zoxide、Atuin、fzf、bat、eza、ZeroTier。 |
 | Windows | `all` | `recommended` 加 Bun、pnpm、mise。 |
+
+Arch 的安装前提与全系统更新要求见 [Arch Linux 准备工作](../guides/system-init.md#arch-linux-preparation)。
 
 ### Ubuntu 安装说明 {#ubuntu-installation-notes}
 
@@ -133,7 +136,7 @@ shine sys info split-dns
 
 ### Private split DNS
 
-三个平台都内置独立的受管 `split-dns` 项目，不属于上述默认 profile。它把一个私有域名后缀定向到可经 ZeroTier 访问的 DNS 服务器；需要管理员权限和以下生效的 env 值：
+macOS、Ubuntu 和 Windows 内置独立的受管 `split-dns` 项目，不属于上述默认 profile。它把一个私有域名后缀定向到可经 ZeroTier 访问的 DNS 服务器；需要管理员权限和以下生效的 env 值：
 
 ```toml
 PRIVATE_DNS_DOMAIN = "home.example.internal"

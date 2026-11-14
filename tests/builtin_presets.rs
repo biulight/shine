@@ -4,6 +4,8 @@
 mod analysis;
 #[path = "builtin_presets/app.rs"]
 mod app;
+#[path = "builtin_presets/arch.rs"]
+mod arch;
 #[path = "builtin_presets/docs.rs"]
 mod docs;
 #[path = "builtin_presets/inventory.rs"]

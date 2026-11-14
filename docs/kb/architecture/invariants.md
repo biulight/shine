@@ -887,8 +887,11 @@ bugs. Check this list before changing the modules named in each entry.
   mutation and binds the exact previous and desired `SysRunEntry`. `shine sys recover [--yes]`
   regenerates its Plan under the operation lock. Before receipt commit it restores only exact
   prior file/DNS/sentinel state; after the desired receipt is durable it preserves desired state
-  and removes exact rollback material. A conflicting receipt or changed resource blocks all
-  recovery mutation. Core transaction entries acquire the privileged-operation lock exactly once;
+  and removes exact rollback material. Only typed profile-block reconciliation may retain the
+  same exact non-managed receipt: its positive journal commit marker, never receipt equality,
+  decides rollback versus cleanup (ADR 0168). Committed profile cleanup permits missing rollback
+  files but still verifies desired owned blocks and any remaining rollback material.
+  A conflicting receipt or changed resource blocks all recovery mutation. Core transaction entries acquire the privileged-operation lock exactly once;
   split-DNS host mutation primitives run beneath that boundary and must not reacquire it. Profile
   active/base/new/merge composition and bootstrap execution do not
   inherit this proof and must remain visibly non-transactional or opaque in their Plan.

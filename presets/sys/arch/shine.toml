@@ -1,0 +1,65 @@
+version = 2
+description = "Bootstrap Arch Linux with native pacman packages for Neovim, fzf, bat, eza, and zoxide. Complete a full system update before installing packages."
+default_profile = "minimal"
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+description = "Install the Neovim editor."
+detect = { kind = "command", command = "nvim", version_args = ["--version"] }
+install = { kind = "package", provider = "pacman", package = "neovim" }
+
+[[items]]
+id = "fzf"
+label = "fzf"
+description = "Install the command-line fuzzy finder."
+detect = { kind = "command", command = "fzf", version_args = ["--version"] }
+install = { kind = "package", provider = "pacman", package = "fzf" }
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "fzf"
+eval = ["fzf", "--{shell}"]
+
+[[items]]
+id = "bat"
+label = "bat"
+description = "Install the bat file viewer."
+detect = { kind = "command", command = "bat", version_args = ["--version"] }
+install = { kind = "package", provider = "pacman", package = "bat" }
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "bat"
+aliases = { cat = "bat" }
+
+[[items]]
+id = "eza"
+label = "eza"
+description = "Install the eza ls replacement."
+detect = { kind = "command", command = "eza", version_args = ["--version"] }
+install = { kind = "package", provider = "pacman", package = "eza" }
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "eza"
+aliases = { ls = "eza --icons", ll = "eza -la --icons", lt = "eza --tree" }
+
+[[items]]
+id = "zoxide"
+label = "zoxide"
+description = "Install smarter directory jumping."
+detect = { kind = "command", command = "zoxide", version_args = ["--version"] }
+install = { kind = "package", provider = "pacman", package = "zoxide" }
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "zoxide"
+eval = ["zoxide", "init", "{shell}"]
+
+[profiles.minimal]
+items = ["neovim", "fzf", "bat", "eza", "zoxide"]

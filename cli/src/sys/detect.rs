@@ -21,11 +21,11 @@ fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
             }
             bail!(
                 "Could not detect Linux distribution. \
-                 Expected ID= in /etc/os-release. Supported: ubuntu"
+                 Expected ID= in /etc/os-release. Supported built-in Linux presets: ubuntu, arch"
             )
         }
         other => bail!(
-            "Unsupported platform '{}'. Supported targets: ubuntu (Linux), macos, windows",
+            "Unsupported platform '{}'. Supported targets: ubuntu/arch (Linux), macos, windows",
             other
         ),
     }
@@ -52,6 +52,18 @@ mod tests {
         let os_release = "PRETTY_NAME=\"Ubuntu 22.04\"\nID=ubuntu\nVERSION_ID=\"22.04\"\n";
         let result = detect_os_id_from("linux", Some(os_release)).unwrap();
         assert_eq!(result, "ubuntu");
+    }
+
+    #[test]
+    fn detects_arch_without_promoting_derivatives() {
+        assert_eq!(
+            detect_os_id_from("linux", Some("ID=arch\n")).unwrap(),
+            "arch"
+        );
+        assert_eq!(
+            detect_os_id_from("linux", Some("ID=manjaro\nID_LIKE=arch\n")).unwrap(),
+            "manjaro"
+        );
     }
 
     #[test]

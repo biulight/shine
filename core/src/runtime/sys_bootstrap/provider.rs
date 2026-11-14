@@ -76,6 +76,22 @@ pub(super) fn package_command(
                 requires_admin: true,
             })
         }
+        SysPackageProvider::Pacman => {
+            if os_id != "arch" {
+                bail!("Pacman sys provider is supported only on Arch presets");
+            }
+            // Bootstrap ensures presence; database refresh and full upgrades belong to the user.
+            Ok(ProviderInvocation {
+                program: "pacman".into(),
+                args: vec![
+                    "-S".into(),
+                    "--needed".into(),
+                    "--noconfirm".into(),
+                    package.into(),
+                ],
+                requires_admin: true,
+            })
+        }
         SysPackageProvider::Winget => {
             if os_id != "windows" {
                 bail!("Winget sys provider is supported only on Windows presets");

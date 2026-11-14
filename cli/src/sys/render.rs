@@ -5,6 +5,32 @@ use crate::sys::run_manifest::SysRunEntry;
 use crate::sys::{LoadedSysPreset, ResolvedSelection, SysDriverKind, SysItem, SysItemMode};
 use anyhow::Result;
 
+pub(crate) const PACMAN_PREPARATION: [&str; 3] = [
+    "Arch package installation uses the existing pacman database.",
+    "First complete a full system update: pacman -Syu (use sudo if needed).",
+    "Native pacman installation does not refresh databases or upgrade the system; do not use pacman -Sy alone.",
+];
+
+fn preview_pacman_preparation(
+    loaded: &LoadedSysPreset,
+    selection: &ResolvedSelection,
+) -> &'static [&'static str] {
+    if loaded.manifest.items.iter().any(|item| {
+        selection.item_ids.contains(&item.id)
+            && matches!(
+                item.install,
+                Some(super::SysInstall::Package {
+                    provider: super::SysPackageProvider::Pacman,
+                    ..
+                })
+            )
+    }) {
+        &PACMAN_PREPARATION
+    } else {
+        &[]
+    }
+}
+
 pub(in crate::sys) fn print_available_item(item: &SysItem, entry: Option<&SysRunEntry>) {
     let kind = item_mode_name(item.mode);
     let status = entry
@@ -76,6 +102,9 @@ pub(in crate::sys) async fn print_dry_run(
             selection.item_ids.join(", ")
         }
     );
+    for line in preview_pacman_preparation(loaded, selection) {
+        println!("  {} {line}", colors::yellow("!"));
+    }
     println!("  Commands:");
     for preview in previews {
         println!("    {}", escape_controls(preview));
@@ -126,4 +155,53 @@ pub(in crate::sys) async fn print_dry_run(
     }
     println!();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pacman_preview_guidance_is_once_and_scoped_to_selected_native_items() {
+        let loaded = LoadedSysPreset {
+            root: "arch".into(),
+            manifest: shine_core::runtime::parse_sys_manifest(
+                r#"version = 2
+[[items]]
+id = 'native'
+label = 'Native'
+detect = { kind = 'command', command = 'fzf' }
+install = { kind = 'package', provider = 'pacman', package = 'fzf' }
+[[items]]
+id = 'script'
+label = 'Script'
+detect = { kind = 'command', command = 'tool' }
+install = { kind = 'script', path = 'tool.sh' }
+"#,
+            )
+            .unwrap(),
+        };
+        for items in [
+            vec![],
+            vec!["script"],
+            vec!["native"],
+            vec!["native", "script"],
+        ] {
+            let selection = ResolvedSelection {
+                item_ids: items.iter().map(|s| s.to_string()).collect(),
+                source: shine_core::runtime::SelectionSource::Items,
+            };
+            let lines = preview_pacman_preparation(&loaded, &selection);
+            assert_eq!(lines.len(), if items.contains(&"native") { 3 } else { 0 });
+            if !lines.is_empty() {
+                assert!(lines.join(" ").contains("pacman -Syu"));
+                assert!(!lines.join(" ").contains("database is outdated"));
+                // A selection may include a script that performs its own system maintenance.
+                assert!(lines.join(" ").contains(
+                    "Native pacman installation does not refresh databases or upgrade the system"
+                ));
+                assert!(!lines.join(" ").contains("Shine does not refresh"));
+            }
+        }
+    }
 }

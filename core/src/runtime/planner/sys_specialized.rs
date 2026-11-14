@@ -377,6 +377,17 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 PlanActionV1::Execute
             };
             let mut step = PlanStepV1::new(format!("sys/{}", item.id), Some("bootstrap"), action);
+            if !present
+                && matches!(
+                    install,
+                    SysInstall::Package {
+                        provider: SysPackageProvider::Pacman,
+                        ..
+                    }
+                )
+            {
+                step = step.with_diagnostic_code("sys_pacman_existing_database");
+            }
             if missing_env {
                 step = step.with_diagnostic_code("sys_bootstrap_required_env_missing");
             }
@@ -405,6 +416,17 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 &mut profile_permissions,
             )
             .await?;
+            if request.force_profile {
+                // Force replacement creates uniquely named backups under this directory.
+                // Random backup names must not enter the review fingerprint.
+                add_shine_write_permission(
+                    self.context(),
+                    &mut profile_permissions,
+                    &self.context().home_dir.join(".shine/profile"),
+                    FilesystemPurposeV1::Recovery,
+                    "sys/profile",
+                );
+            }
             let mut profile = PlanStepV1::new(
                 "sys/profile",
                 Some(request.sys_shell.clone()),

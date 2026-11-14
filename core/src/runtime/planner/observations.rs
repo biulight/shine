@@ -15,6 +15,7 @@ pub(super) fn add_sys_bootstrap_install_permissions<H>(
             let program = match provider {
                 SysPackageProvider::Homebrew | SysPackageProvider::HomebrewCask => "brew",
                 SysPackageProvider::Apt => "apt-get",
+                SysPackageProvider::Pacman => "pacman",
                 SysPackageProvider::Winget => "winget",
             };
             permissions.implicit(PermissionV1::Command {

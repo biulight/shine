@@ -172,7 +172,7 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     }
     let admin_access = match item.install.as_ref() {
         Some(SysInstall::Package {
-            provider: SysPackageProvider::Apt,
+            provider: SysPackageProvider::Apt | SysPackageProvider::Pacman,
             ..
         }) => "required",
         Some(SysInstall::Package {
@@ -277,6 +277,7 @@ fn package_provider_name(provider: SysPackageProvider) -> &'static str {
         SysPackageProvider::Homebrew => "homebrew",
         SysPackageProvider::HomebrewCask => "homebrew-cask",
         SysPackageProvider::Apt => "apt",
+        SysPackageProvider::Pacman => "pacman",
         SysPackageProvider::Winget => "winget",
     }
 }

@@ -52,7 +52,7 @@ Your own presets can turn repeated tasks such as batch renaming, spreadsheet cle
 printing into reusable commands. Each command still needs its application or runtime on the machine.
 Start with the [custom preset guide](https://biulight.github.io/shine/guides/custom-presets).
 
-Shine can also prepare selected parts of macOS, Ubuntu, or Windows, but it does not take over
+Shine can also prepare selected parts of macOS, Ubuntu, Arch Linux, or Windows, but it does not take over
 third-party tool versions. See [system initialization](https://biulight.github.io/shine/guides/system-init)
 for that boundary.
 

@@ -10,6 +10,17 @@ announcing support.
 The assessment is based on repository code and workflows. It does not establish end-to-end
 bootstrap, package-provider, DNS, terminal, service-manager or remote-SSH smoke coverage.
 
+## Arch Linux bootstrap addition (2026-11-14)
+
+Official x86_64 Arch Linux now has a separate `sys/arch` preset with the default and only
+`minimal` selection: Neovim, fzf, bat, eza, and zoxide. Native pacman installation reuses the
+approved bootstrap executor. Bash/Zsh loaders, profile enable/disable, and self-uninstall use
+Arch-specific paths and sentinels. The older three-platform matrix below is not an Arch capability
+promise: Arch derivatives, ARM, AUR, Rust tooling, and managed split DNS are outside this addition.
+Users complete full-system updates themselves; bootstrap never runs `-Sy` or `-Syu`.
+Native package-manager installation still requires separate Arch acceptance; local fixture tests
+exercise the execution and profile paths without installing system software.
+
 ## Executive summary
 
 Shine has a genuine cross-platform core rather than a Unix implementation that merely compiles on

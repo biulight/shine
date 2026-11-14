@@ -5,7 +5,7 @@ sidebar_position: 7
 
 # Synchronize the terminal theme
 
-In managed shell profiles on macOS and Ubuntu, Shine can detect whether the terminal background is
+In managed shell profiles on macOS, Ubuntu, and Arch Linux, Shine can detect whether the terminal background is
 light or dark and export `SHINE_TERMINAL_THEME=light|dark`. If `BAT_THEME` is not already set, it
 also selects `GitHub` for a light background or `OneHalfDark` for a dark background.
 
@@ -25,7 +25,7 @@ non-essential messages but still reports configuration errors.
 
 ## Synchronize in a managed profile
 
-After `shine sys bootstrap`, managed macOS and Ubuntu profiles invoke synchronization automatically.
+After `shine sys bootstrap`, managed macOS, Ubuntu, and Arch Linux profiles invoke synchronization automatically.
 Disable it through either mechanism:
 
 ```toml title="~/.shine/config.toml"

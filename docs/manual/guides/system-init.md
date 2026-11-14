@@ -5,8 +5,8 @@ sidebar_position: 3
 
 # Initialize and manage a system
 
-Use system presets to install selected development tools on macOS, Ubuntu, or Windows and enable
-their shell integration. Shine can also manage system settings such as private DNS separately.
+Use system presets to install selected development tools on macOS, Ubuntu, Arch Linux, or Windows
+and enable their shell integration. Shine can also manage system settings such as private DNS separately.
 It does not upgrade third-party software.
 
 ## Inspect before installing {#inspect-before-applying}
@@ -15,7 +15,7 @@ List the items available for your system and inspect any prerequisites:
 
 ```bash
 shine sys list
-shine sys info rust
+shine sys info neovim
 ```
 
 Use `shine sys list --all` to browse other platforms. Available items and named selections
@@ -24,7 +24,7 @@ Use `shine sys list --all` to browse other platforms. Available items and named 
 Preview the items you want to install:
 
 ```bash
-shine sys bootstrap rust mise --dry-run
+shine sys bootstrap neovim fzf --dry-run
 ```
 
 The preview shows the installation steps and shell changes without applying them. Check any
@@ -37,10 +37,10 @@ Choose one method:
 | Goal | Command |
 | --- | --- |
 | Choose items interactively | `shine sys bootstrap` |
-| Install only mise | `shine sys bootstrap mise` |
-| Install Rust, then mise | `shine sys bootstrap rust mise` |
-| Use the recommended selection | `shine sys bootstrap --preset recommended` |
-| Use Ubuntu's minimal server selection | `shine sys bootstrap --preset minimal` |
+| Install only fzf | `shine sys bootstrap fzf` |
+| Install Neovim, then fzf | `shine sys bootstrap neovim fzf` |
+| Use the recommended selection (macOS, Ubuntu, Windows) | `shine sys bootstrap --preset recommended` |
+| Use the minimal selection (Ubuntu, Arch Linux) | `shine sys bootstrap --preset minimal` |
 
 Before changing the system, Shine shows a plan and asks for confirmation; the default is No.
 Review the changes, permissions, and recovery limits. Add `--verbose` if you need more detail.
@@ -53,6 +53,41 @@ result to confirm success, rather than a success message within an installer's l
 
 For scripts, see [system command options](../reference/commands.md#system-presets), including
 `--yes` and the authorization required for external code.
+
+## Arch Linux preparation {#arch-linux-preparation}
+
+Arch Linux currently provides only `minimal` (the default): Neovim, fzf, bat, eza, and zoxide.
+It does not provide `recommended`, `all`, or `split-dns`. The initial support scope is official
+Arch Linux on x86_64; Arch derivatives and Arch Linux ARM are not covered.
+
+Before installing missing packages, review Arch's update instructions and complete a full system
+update with `sudo pacman -Syu` (omit `sudo` as root). Then preview and install:
+
+```bash
+shine sys bootstrap --preset minimal --dry-run
+shine sys bootstrap --preset minimal
+```
+
+The preview and installation plan remind you that native pacman installation uses the existing
+package database. This reminder does not check whether the database is current.
+Native pacman installation uses `pacman -S --needed --noconfirm` after plan approval. It does not refresh package
+databases, upgrade the whole system, or use AUR helpers. Arch does not support partial upgrades:
+do not run `pacman -Sy` alone before bootstrap. Omitting database refresh in Shine cannot repair
+an existing partial upgrade. These limits apply to the native pacman provider; review any custom
+installer scripts separately.
+
+If pacman fails, Shine keeps the original error output. When it recognizes a package download
+error reporting HTTP 404 followed by a transaction failure due to file retrieval, it states that
+downloads returned 404 and adds recovery guidance. An earlier mirror 404 does not trigger this
+advice if the transaction later fails for another reason, such as a signature or file conflict.
+This does not prove that the local database is outdated: a mirror may also be out of sync.
+Review and complete `sudo pacman -Syu` (omit `sudo` as root), then retry bootstrap.
+If 404 continues after a successful update, check the configured mirrors. For signature or
+database-lock errors or unrecognized output, follow pacman's original diagnostics; Shine does not
+add 404 advice merely because a log contains that number. Successful mirror fallback remains a
+success. Shine does not retry with an index refresh or system upgrade, remove locks, or disable
+signature checks.
+See [Arch system maintenance](https://wiki.archlinux.org/title/System_maintenance).
 
 ## Open a new terminal and check the result
 
@@ -74,8 +109,8 @@ Software-specific steps, including Atuin history import, are in
 Add `--proxy` to use Shine's HTTP proxy settings. Preview first, then install:
 
 ```bash
-shine sys bootstrap mise --proxy --dry-run
-shine sys bootstrap mise --proxy
+shine sys bootstrap fzf --proxy --dry-run
+shine sys bootstrap fzf --proxy
 ```
 
 Configure `PROXY_HOST`, `HTTP_PROXY_PORT`, and `PROXY_NO_PROXY` in Shine's
@@ -96,9 +131,9 @@ enabled integrations active, even when you choose a different profile.
 
 | Goal | Command |
 | --- | --- |
-| Preview disabling mise integration | `shine sys profile disable mise --dry-run` |
-| Disable it | `shine sys profile disable mise` |
-| Enable it again | `shine sys profile enable mise` |
+| Preview disabling fzf integration | `shine sys profile disable fzf --dry-run` |
+| Disable it | `shine sys profile disable fzf` |
+| Enable it again | `shine sys profile enable fzf` |
 
 These commands change only Shine-managed shell configuration. Disabling does not uninstall the
 software; enabling requires it to be installed first. `shine upgrade` does not enable or disable
@@ -110,7 +145,7 @@ the requested integration is active.
 
 ## Upgrade installed software {#upgrade-bootstrap-software-with-its-owner}
 
-Use the package manager or upstream tool that installed the software, such as Homebrew, apt,
+Use the package manager or upstream tool that installed the software, such as Homebrew, apt, pacman,
 winget, mise, or rustup. Rerunning `shine sys bootstrap` skips software it detects as already
 installed; it does not upgrade it. `shine update` and `shine upgrade` manage Shine configuration,
 not third-party software versions.
@@ -151,8 +186,8 @@ approval. Use `shine sys info split-dns` for details and `shine sys status` for 
 
 ## Supported shells {#platform-notes}
 
-Shell integration supports zsh on macOS, bash and zsh on Ubuntu, and PowerShell on Windows.
-For automatic terminal appearance settings on Ubuntu and macOS, see
+Shell integration supports zsh on macOS, bash and zsh on Ubuntu and Arch Linux, and PowerShell on Windows.
+For automatic terminal appearance settings on Ubuntu, Arch Linux, and macOS, see
 [terminal theme synchronization](./terminal-theme-sync.md).
 
 ## Retire an older local HTTP service {#retire-legacy-http-service}

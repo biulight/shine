@@ -1576,3 +1576,183 @@ target = '$HOME/.config/managed.txt'
         assert!(runtime.host().read(&journal).await.is_err());
     }
 }
+
+#[tokio::test]
+async fn same_second_profile_switch_keeps_receipt_and_recovers_at_commit_boundary() {
+    for os in ["arch", "ubuntu"] {
+        for failure in [
+            "none",
+            "receipt",
+            "commit-marker",
+            "cleanup",
+            "receipt-conflict",
+            "owned-conflict",
+            "committed-owned-conflict",
+            "lost-rollback",
+            "invalid-journal",
+        ] {
+            let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+                .file(
+                    format!("sys/{os}/shine.toml"),
+                    br#"version = 2
+[[items]]
+id = 'tool'
+label = 'Tool'
+detect = { kind = 'path', path = '$HOME/.tool-present' }
+install = { kind = 'package', provider = 'homebrew', package = 'tool' }
+[[items.shell]]
+shells = ['bash', 'zsh']
+phase = 'post'
+path = '$HOME/.tool/bin'
+"#
+                    .to_vec(),
+                )
+                .build();
+            let mut runtime = runtime(snapshot);
+            runtime.context_mut_for_test().shell = crate::runtime::ShellType::Bash;
+            runtime.host().put_file(
+                runtime.context().home_dir.join(".tool-present"),
+                b"present".to_vec(),
+            );
+            let request = SysProfilePlanRequest {
+                os_id: os.into(),
+                item_id: "tool".into(),
+                enabled: true,
+            };
+            let first = runtime.plan_sys_profile(request.clone()).await.unwrap();
+            runtime
+                .set_sys_profile_approved(
+                    request.clone(),
+                    &PlanApprovalV1::for_reviewed_plan(&first).unwrap(),
+                )
+                .await
+                .unwrap();
+            let receipt = SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap();
+            let bashrc = runtime.context().home_dir.join(".bashrc");
+            let zshrc = runtime.context().home_dir.join(".zshrc");
+            runtime
+                .host()
+                .put_file(&zshrc, b"# personal zsh\n".to_vec());
+            runtime.context_mut_for_test().shell = crate::runtime::ShellType::Zsh;
+            let plan = runtime.plan_sys_profile(request.clone()).await.unwrap();
+            let journal = runtime
+                .context()
+                .shine_dir
+                .join(crate::runtime::SYS_OPERATION_JOURNAL_FILE);
+            match failure {
+                "receipt" | "receipt-conflict" | "owned-conflict" | "lost-rollback"
+                | "invalid-journal" => runtime
+                    .host()
+                    .fail_write_after(runtime.context().shine_dir.join("sys-manifest.toml"), 0),
+                "commit-marker" => runtime.host().fail_write_after(&journal, 2),
+                "cleanup" | "committed-owned-conflict" => {
+                    runtime.host().fail_remove_after(&journal, 0)
+                }
+                _ => {}
+            }
+            let result = runtime
+                .set_sys_profile_approved(
+                    request,
+                    &PlanApprovalV1::for_reviewed_plan(&plan).unwrap(),
+                )
+                .await;
+            if failure == "none" {
+                result.unwrap();
+            } else {
+                assert!(result.is_err(), "{os}/{failure}: expected injected failure");
+                assert!(
+                    runtime.host().read(&journal).await.is_ok(),
+                    "{os}/{failure}: no recoverable journal"
+                );
+                let content =
+                    String::from_utf8(runtime.host().read(&zshrc).await.unwrap()).unwrap();
+                runtime.host().put_file(
+                    &zshrc,
+                    format!("{content}\n# later user edit\n").into_bytes(),
+                );
+
+                match failure {
+                    "receipt-conflict" => {
+                        let mut changed = receipt.clone();
+                        changed.entries[0].profile_enabled = false;
+                        changed
+                            .save(runtime.host(), &runtime.context().shine_dir)
+                            .await
+                            .unwrap();
+                    }
+                    "owned-conflict" | "committed-owned-conflict" => {
+                        runtime
+                            .host()
+                            .put_file(&zshrc, content.replace("source ", "exec ").into_bytes());
+                    }
+                    "lost-rollback" => {
+                        runtime
+                            .host()
+                            .remove_file(&crate::action::managed_file_rollback_path(&bashrc))
+                            .await
+                            .unwrap();
+                    }
+                    "invalid-journal" => {
+                        let bytes = runtime.host().read(&journal).await.unwrap();
+                        let text = String::from_utf8(bytes).unwrap();
+                        assert_eq!(text.matches("managed = false").count(), 2);
+                        runtime.host().put_file(
+                            &journal,
+                            text.replace("managed = false", "managed = true")
+                                .into_bytes(),
+                        );
+                        assert!(runtime.plan_sys_operation_recovery().await.is_err());
+                        continue;
+                    }
+                    _ => {}
+                }
+                let recovery = runtime.plan_sys_operation_recovery().await.unwrap();
+                if matches!(
+                    failure,
+                    "receipt-conflict"
+                        | "owned-conflict"
+                        | "committed-owned-conflict"
+                        | "lost-rollback"
+                ) {
+                    assert!(!recovery.is_ready(), "{os}/{failure} must fail closed");
+                    assert!(PlanApprovalV1::for_reviewed_plan(&recovery).is_err());
+                    continue;
+                }
+                assert!(recovery.is_ready(), "{os}/{failure}: {recovery:#?}");
+                runtime
+                    .recover_sys_operation_approved(
+                        &PlanApprovalV1::for_reviewed_plan(&recovery).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert!(runtime.host().read(&journal).await.is_err());
+            assert_eq!(
+                SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+                    .await
+                    .unwrap(),
+                receipt
+            );
+            let bash =
+                String::from_utf8(runtime.host().read(&bashrc).await.unwrap_or_default()).unwrap();
+            let zsh = String::from_utf8(runtime.host().read(&zshrc).await.unwrap()).unwrap();
+            let committed = matches!(failure, "none" | "cleanup");
+            assert_eq!(
+                zsh.contains(&format!("shine {os} sys pre")),
+                committed,
+                "{os}/{failure}"
+            );
+            assert_eq!(
+                bash.contains(&format!("shine {os} sys pre")),
+                !committed,
+                "{os}/{failure}"
+            );
+            assert!(zsh.contains("# personal zsh"));
+            if failure != "none" {
+                assert!(zsh.contains("# later user edit"));
+            }
+        }
+    }
+}

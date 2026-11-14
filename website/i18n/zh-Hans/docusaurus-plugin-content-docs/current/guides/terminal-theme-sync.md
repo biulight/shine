@@ -5,7 +5,7 @@ sidebar_position: 7
 
 # 同步终端主题
 
-在 macOS 或 Ubuntu 的受管 shell profile 中，Shine 可以自动判断终端背景是浅色还是深色，并导出 `SHINE_TERMINAL_THEME=light|dark`。同时会为未自行设置的 `BAT_THEME` 选择 `GitHub`（浅色）或 `OneHalfDark`（深色）。
+在 macOS、Ubuntu 或 Arch Linux 的受管 shell profile 中，Shine 可以自动判断终端背景是浅色还是深色，并导出 `SHINE_TERMINAL_THEME=light|dark`。同时会为未自行设置的 `BAT_THEME` 选择 `GitHub`（浅色）或 `OneHalfDark`（深色）。
 
 ## 手动检查
 
@@ -21,7 +21,7 @@ Shine 优先使用已有的 `SHINE_TERMINAL_THEME` 或 `COLORFGBG`，再尝试�
 
 ## 在受管 profile 中自动同步
 
-运行 `shine sys bootstrap` 后，macOS 和 Ubuntu 的受管 profile 会自动调用同步。可通过任一种方式关闭：
+运行 `shine sys bootstrap` 后，macOS、Ubuntu 和 Arch Linux 的受管 profile 会自动调用同步。可通过任一种方式关闭：
 
 ```toml title="~/.shine/config.toml"
 sync_terminal_theme = false

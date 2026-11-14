@@ -20,7 +20,12 @@ If it reports that the directory is missing from `PATH`, run the printed configu
 then the command for your current terminal.
 If a configuration file cannot be updated, follow the error message and configure it manually.
 If your shell differs from the one shown, or you use Fish or another shell, add the directory to
-its configuration manually. Verify the installation:
+its configuration manually.
+
+For Bash, a login file created by the printed command loads `~/.bashrc` in interactive sessions,
+so aliases and shell integrations also work over SSH. Existing login files keep their startup logic.
+
+Open a new terminal or reconnect over SSH, then verify the installation:
 
 ```bash
 shine --version

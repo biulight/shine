@@ -126,7 +126,7 @@ impl<H> CoreRuntime<H> {
         let bytes = self
             .presets()
             .get(&manifest_path)
-            .with_context(|| format!("reading {manifest_path}"))?;
+            .with_context(|| format!("No system preset found for `{os_id}` in the selected preset source (missing {manifest_path})"))?;
         let content = std::str::from_utf8(bytes).context("sys manifest must be UTF-8")?;
         let manifest =
             parse_sys_manifest(content).with_context(|| format!("parsing {manifest_path}"))?;
@@ -515,6 +515,66 @@ mod tests {
             config_string(&config, "source").unwrap(),
             "  config/中文.txt  "
         );
+    }
+
+    #[tokio::test]
+    async fn missing_sys_preset_is_distinct_from_invalid_manifest() {
+        for source in [
+            PresetSourceKind::Embedded,
+            PresetSourceKind::External,
+            PresetSourceKind::Overlay,
+        ] {
+            let context = RuntimeContext::isolated(
+                "/home".into(),
+                "/state".into(),
+                "/presets".into(),
+                "/bin".into(),
+                RuntimePlatform::Linux,
+            );
+            let runtime = CoreRuntime::new(
+                InMemoryHost::new(),
+                context.clone(),
+                PresetSnapshot::builder(source).build(),
+            );
+            assert!(
+                runtime
+                    .load_sys_preset("arch")
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("No system preset found for `arch`")
+            );
+            let invalid = CoreRuntime::new(
+                InMemoryHost::new(),
+                context,
+                PresetSnapshot::builder(source)
+                    .file("sys/arch/shine.toml", b"invalid toml".to_vec())
+                    .build(),
+            );
+            assert!(
+                invalid
+                    .load_sys_preset("arch")
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("parsing sys/arch/shine.toml")
+            );
+        }
+    }
+
+    #[test]
+    fn pacman_package_identifiers_cannot_supply_flags_or_multiple_packages() {
+        for package in ["--refresh", "fzf bat", "extra/fzf", "fzf;id"] {
+            let content = format!(
+                "version = 2\n[[items]]\nid = 'tool'\nlabel = 'Tool'\ndetect = {{ kind = 'command', command = 'fzf' }}\ninstall = {{ kind = 'package', provider = 'pacman', package = '{package}' }}"
+            );
+            assert!(
+                parse_sys_manifest(&content)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("invalid package identifier")
+            );
+        }
     }
 
     #[test]
