@@ -10,6 +10,9 @@ current platform from GitHub Releases.
 
 ## macOS and Linux
 
+Official Linux binaries support Ubuntu 22.04 and newer, with glibc 2.35 as the minimum
+supported version. For systems with older glibc, build from source in a compatible environment.
+
 ```bash
 curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
 ```

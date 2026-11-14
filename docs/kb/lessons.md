@@ -4017,3 +4017,41 @@ When cutting a release, always diff against the latest stable `v*` tag
   this unreleased behavior. Installation itself still only prints configuration instructions.
 - **Regression**: real Bash in temporary homes verifies login aliases, non-interactive isolation,
   repeated commands and Ubuntu's existing `.profile` chain without double loading.
+
+
+## 2026-11-14 — Linux release builds need an explicit glibc baseline
+
+- **Symptom**: a successfully installed preview failed before CLI startup on Ubuntu 22.04
+  (glibc 2.35), requiring GLIBC_2.38 and GLIBC_2.39.
+- **Cause**: GNU release binaries linked against the moving `ubuntu-latest` userspace. Rust's
+  target support does not constrain native dependency headers or the final linker's libc.
+- **Rule**: build both GNU Linux targets in Ubuntu 22.04 userspace, reject newer version
+  requirements (including weak references), and execute the extracted archive against that
+  baseline before upload. Keep cache keys separate from the former newer-libc builds.
+- **Coverage**: `scripts/test-linux-glibc.py` checks ABI admission boundaries; the shared
+  packaging workflow checks real ELF requirements and runs version/help/schema probes, using
+  QEMU and the matching cross sysroot for aarch64.
+
+
+## 2026-11-14 — Source-only validation builds need complete version provenance
+
+- **Symptom**: a working validation binary printed only `shine 2.10.0-preview`.
+- **Cause**: the source copy omitted `.git` and provided `SHINE_GIT_SHA` without
+  `SHINE_GIT_DATE`; the existing formatter omits the whole suffix when either is missing.
+- **Rule**: capture SHA and commit date from the source checkout, pass both to copied-source
+  builds, and check the actual executable's output against them. After amending the source
+  commit, rebuild with the new SHA before delivering validation packages.
+- **Coverage**: `scripts/test-release-version.py` rejects missing or incorrect provenance;
+  the shared packaging workflow checks version output before uploading runnable artifacts.
+
+
+## 2026-11-14 — Container checkout trust must cover later workflow steps
+
+- **Symptom**: both Linux package jobs failed at `git rev-parse HEAD` with dubious ownership,
+  before Cargo ran. Non-container macOS/Windows packages succeeded.
+- **Cause**: checkout configured `safe.directory` in its temporary global config, which was
+  removed after checkout. The container user differed from the mounted workspace owner.
+- **Rule**: explicitly trust only the checked-out workspace in the Linux job's Git config;
+  never use `safe.directory=*`. Source-only builds cannot validate this runner boundary.
+- **Regression**: `scripts/test-release-version.py` simulates a different owner, executes the
+  actual workflow trust command, verifies commit/date access, and keeps other repositories denied.

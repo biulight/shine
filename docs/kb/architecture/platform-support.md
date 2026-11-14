@@ -51,7 +51,7 @@ the repository at the assessment date, not every possible external preset.
 
 | Capability | macOS | Ubuntu | Windows | Notes |
 | --- | --- | --- | --- | --- |
-| Official binary and install script | Full | Full | Full | Release assets cover x86_64 and aarch64 for Darwin, Linux, and Windows |
+| Official binary and install script | Full | Full | Full | Release assets cover x86_64 and aarch64; GNU Linux binaries target Ubuntu 22.04 / glibc 2.35 |
 | Self install and upgrade | Full | Full | Full | Unix can use `sudo`; Windows requires an already elevated terminal for protected destinations |
 | Config, env, workspace, and task lifecycle | Full | Full | Full | Secret backend availability still depends on installed external tools |
 | Shell preset lifecycle | Full | Full | Full | Unix uses symlinks or managed launchers; Windows uses marked `.ps1` and `.cmd` shims |
