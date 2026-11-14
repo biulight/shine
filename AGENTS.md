@@ -14,6 +14,12 @@ installation and uninstall. The root package is `shine-cli` (sources in `cli/`);
   ownership, trust, and snapshot-bound approval checks. If an instruction blocks work, cite its
   file and exact requirement and explain what remains blocked.
 - Preserve unrelated working-tree changes; do not overwrite or clean files you do not own.
+- Before editing or reviewing product documentation, including follow-up within a code or release
+  task, identify what the reader needs to do, choose, understand, or troubleshoot differently.
+  Read the existing instructions and decide whether an edit is needed before drafting. Review
+  the final page for reader value; omit implementation details and repeated runtime prompts unless
+  needed for the user's task. Report the content decision separately from technical checks:
+  accuracy, locale alignment, and a successful build alone do not justify adding prose.
 - Before a non-trivial change, read the relevant sections of
   [invariants](docs/kb/architecture/invariants.md) and search [lessons](docs/kb/lessons.md) for the
   affected behavior. Check [ADRs](docs/kb/decisions/) before proposing a design; consult
@@ -37,9 +43,11 @@ installation and uninstall. The root package is `shine-cli` (sources in `cli/`);
   [versioning conventions](docs/kb/conventions.md#versioning).
 - Internal fixes caused by new code in the same release use the git-cliff-skipped scopes in
   [commit conventions](docs/kb/conventions.md#commits). Real user-facing fixes use their feature area.
-- User-visible behavior changes must update both public manual locales in the same release change:
+- Assess user-visible behavior changes for documentation impact before editing.
+  When a manual update is needed, update both public locales in the same release change:
   `docs/manual/` and `website/i18n/zh-Hans/docusaurus-plugin-content-docs/current/`. Keep doc IDs,
-  page sets, commands, identifiers, examples, and warnings semantically aligned.
+  page sets, commands, identifiers, examples, and warnings semantically aligned. When existing
+  instructions remain correct and sufficient, leave public prose unchanged and report why.
 - Never publish `docs/kb/`, PRDs, release runbooks, private paths, or internal procedures through
   the public site. Root READMEs are summaries, not a second command/configuration reference.
 
