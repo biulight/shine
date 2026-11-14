@@ -15,6 +15,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+      - name: Verify release compatibility checkers
+        run: |
+          python3 scripts/test-linux-glibc.py
+          python3 scripts/test-release-version.py
       - name: Verify release installers offline
         run: python3 scripts/test-release-installers.py
       - name: Verify Unix shell syntax and PATH hints

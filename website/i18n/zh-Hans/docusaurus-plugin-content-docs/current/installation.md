@@ -9,6 +9,9 @@ Shine 支持 macOS、Linux 和 Windows。官方安装脚本从 GitHub Releases �
 
 ## macOS 与 Linux
 
+官方 Linux 二进制文件支持 Ubuntu 22.04 及更新版本，最低支持 glibc 2.35。
+使用更旧 glibc 的系统需要在兼容环境中从源码编译。
+
 ```bash
 curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
 ```

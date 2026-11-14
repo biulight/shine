@@ -18,6 +18,20 @@ Notes:
 - `test.yml` runs offline release-installer tests on Linux, macOS, and Windows. These execute
   the real scripts with local archives and mocked downloads, including preview selection and
   failure preservation. Unix runners also check the existing shell PATH hints.
+- Linux release builds run in `ubuntu:22.04` containers, independently of `ubuntu-latest`.
+  The Linux job explicitly trusts only `GITHUB_WORKSPACE` in its own global Git config after
+  checkout; checkout's temporary safe-directory config does not cover later steps.
+  Both GNU targets use Ubuntu 22.04 headers/libraries and a baseline-specific Rust cache key.
+  Before upload, the extracted archive must pass `scripts/check-linux-glibc.py` (all glibc
+  version requirements at most 2.35, including weak references) and version/help/schema smoke
+  checks. x86_64 runs natively; aarch64 runs under QEMU with the Ubuntu 22.04 cross sysroot.
+  This gates both stable and preview publication; it is not full native ARM lifecycle coverage.
+  `test.yml` also runs the ABI checker's offline regression tests.
+- Every release build explicitly receives the checked-out commit SHA and commit date. Before
+  upload, both Linux targets and the native macOS/Windows targets must print a complete
+  `shine <version> (<short SHA> <commit date>)` matching those inputs. The version checker has
+  offline regressions for missing, partial and incorrect provenance. Non-native macOS/Windows
+  targets receive the same build metadata but are not executed by this gate.
 - Both stable and preview releases include `install.sh` and `install.ps1` alongside platform
   tarballs. The preview workflow generates both installer assets with preview as the default,
   allowing `curl … | sh` and `irm … | iex` without setting `SHINE_VERSION`. Explicit
