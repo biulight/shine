@@ -53,34 +53,23 @@ shine sys bootstrap neovim fzf --dry-run
 
 ## Arch Linux 准备工作 {#arch-linux-preparation}
 
-Arch Linux 目前只提供默认的 `minimal`：Neovim、fzf、bat、eza 和 zoxide，
-不提供 `recommended`、`all` 或 `split-dns`。首期支持范围为官方 x86_64 Arch Linux，
-不涵盖 Arch 衍生发行版和 Arch Linux ARM。
+仅支持官方 x86_64 Arch Linux，目前只提供默认的 `minimal` 预设，
+包含 Neovim、fzf、bat、eza 和 zoxide。
 
-安装缺失的软件前，请先查阅 Arch 的更新说明，运行 `sudo pacman -Syu` 完成全系统更新
-（root 用户省略 `sudo`），然后预览并安装：
+安装前，请先查阅 Arch 的更新说明并完成全系统更新（root 用户省略 `sudo`）。
+确认更新成功后，再预览并安装：
 
 ```bash
+sudo pacman -Syu
+
 shine sys bootstrap --preset minimal --dry-run
 shine sys bootstrap --preset minimal
 ```
 
-预览和安装计划会提醒你：原生 pacman 安装使用已有的软件包数据库。这项提醒不会检查数据库
-是否最新。计划获批后，原生 pacman 安装使用 `pacman -S --needed --noconfirm`，不刷新软件包数据库、不升级
-整个系统，也不使用 AUR 助手。Arch 不支持部分升级：不要在 bootstrap 前单独运行
-`pacman -Sy`。Shine 不刷新数据库，并不意味着它能修复已有的部分升级状态。上述限制仅适用于
-原生 pacman 安装；自定义安装脚本需要单独审阅。
+Shine 不会自动升级系统。Arch 不支持部分升级，请勿单独运行 `pacman -Sy` 后安装软件。
 
-pacman 失败时，Shine 会保留原始错误输出。识别到软件包下载返回 HTTP 404，且后续事务
-明确因文件获取失败而终止时，会直接说明下载返回了 404，并附上恢复建议。如果后续事务因
-签名或文件冲突等其他原因失败，不会因为前面某个镜像返回过 404 就给出这项建议。
-这不能证明本地数据库已过期，也可能是镜像尚未同步。
-请先审阅并完成 `sudo pacman -Syu`
-（root 用户省略 `sudo`），再重试 bootstrap；成功更新后仍出现 404 时，应检查所配置的镜像。
-遇到签名、数据库锁错误或无法识别的输出时，请按 pacman 的原始诊断排查；Shine 不会仅因
-日志里出现数字 404 就附上下载建议。镜像回退后成功安装仍按成功处理。Shine 不会通过刷新索引或系统升级
-自动重试，也不会删除锁文件或关闭签名检查。
-参阅 [Arch 系统维护说明](https://wiki.archlinux.org/title/System_maintenance)。
+下载失败并出现 HTTP 404 时，请确认系统更新已成功完成；仍有问题时检查所配置的镜像。
+其他错误请根据 pacman 输出排查。参阅 [Arch 系统维护说明](https://wiki.archlinux.org/title/System_maintenance)。
 
 ## 打开新终端并查看结果
 
