@@ -209,6 +209,86 @@ class PathHints(unittest.TestCase):
                         else:
                             self.assertFalse(path.exists(), name)
 
+    def test_new_bash_login_file_loads_later_integrations_once(self):
+        output = self.install("/bin/bash", self.home / ".local/bin")
+        login = self.home / ".bash_profile"
+        self.assertFalse(login.exists())  # Installation only prints the command.
+        command = self.configuration_command(output)
+        for _ in range(2):
+            subprocess.run(["bash", "-c", command], env=self.env, check=True)
+        with (self.home / ".bashrc").open("a") as stream:
+            stream.write(
+                "\nrc_count=$(( ${rc_count:-0} + 1 ))\nalias cat='bat'\nalias ls='eza --icons'\n"
+            )
+        for flags in ("-ic", "-lic"):
+            result = subprocess.run(
+                ["bash", flags, 'alias cat; alias ls; test "$rc_count" = 1'],
+                env={**self.env, "HISTFILE": "/dev/null"},
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("cat='bat'", result.stdout)
+            self.assertIn("ls='eza --icons'", result.stdout)
+        result = subprocess.run(
+            ["bash", "-lc", 'test -z "${rc_count:-}" && shine'],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "installed-binary")
+
+    def test_existing_empty_or_path_only_login_file_keeps_startup_logic(self):
+        directory = self.home / ".local/bin"
+        output = self.install("/bin/bash", directory)
+        path_line = next(
+            line for line in output.splitlines() if line.startswith('case ":$PATH:"')
+        )
+        login = self.home / ".bash_profile"
+        for original in ("", path_line + "\n"):
+            with self.subTest(original=original):
+                login.write_text(original)
+                command = self.configuration_command(
+                    self.install("/bin/bash", directory)
+                )
+                subprocess.run(["bash", "-c", command], env=self.env, check=True)
+                self.assertNotIn('. "$HOME/.bashrc"', login.read_text())
+                self.assertEqual(login.read_text().count("export PATH="), 1)
+        self.env["PATH"] += ":" + str(directory)
+        self.assertNotIn(
+            "configure future shells", self.install("/bin/bash", directory)
+        )
+
+    def test_bash_hint_preserves_ubuntu_existing_rc_chain_without_double_loading(self):
+        directory = self.home / ".local/bin"
+        profile = self.home / ".profile"
+        profile.write_text(
+            '# existing Ubuntu login setup\nif [ -n "${BASH_VERSION:-}" ]; then\n  . "$HOME/.bashrc"\nfi\n'
+        )
+        (self.home / ".bashrc").write_text(
+            "rc_count=$(( ${rc_count:-0} + 1 ))\nalias cat='bat'\n"
+        )
+        original = profile.read_text()
+        output = self.install("/bin/bash", directory)
+        for _ in range(2):
+            subprocess.run(
+                ["bash", "-c", self.configuration_command(output)],
+                env=self.env,
+                check=True,
+            )
+        self.assertTrue(profile.read_text().startswith(original))
+        self.assertEqual(profile.read_text().count('. "$HOME/.bashrc"'), 1)
+        self.assertFalse((self.home / ".bash_profile").exists())
+        result = subprocess.run(
+            ["bash", "-lic", 'alias cat; test "$rc_count" = 1'],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("cat='bat'", result.stdout)
+
     def test_existing_path_has_no_hint(self):
         directory = self.home / ".local/bin"
         self.env["PATH"] += ":" + str(directory)
@@ -356,7 +436,7 @@ class PathHints(unittest.TestCase):
             output.split("Then run this", 1)[1].splitlines()[1].strip(),
         ]
         self.assertIn("<<'SHINE_PATH'\n", commands[0])
-        self.assertEqual(commands[0].count("case "), 1)
+        self.assertEqual(commands[0].count('case ":$PATH:"'), 1)
         # Read commands from stdin: bash -c does not exercise history expansion.
         result = subprocess.run(
             ["bash", "--noprofile", "--norc", "--noediting", "-i"],

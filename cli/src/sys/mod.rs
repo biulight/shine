@@ -7,6 +7,7 @@ mod model;
 mod profile_commands;
 mod recovery;
 mod render;
+pub(crate) use render::PACMAN_PREPARATION;
 mod run_manifest;
 mod selection;
 

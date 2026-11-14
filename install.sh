@@ -135,10 +135,17 @@ add_path_hint() {
           log "  IFS= read -r shine_path_line <<'SHINE_PATH'"
           log "$path_line"
           log "SHINE_PATH"
+          log "  shine_new_login=false"
+          log "  if [ ! -e $(quote_arg "$profile") ] && [ ! -L $(quote_arg "$profile") ]; then shine_new_login=true; fi"
           log "  for shine_file in $(quote_arg "$HOME/.bashrc") $(quote_arg "$profile"); do"
           log '    grep -Fqx -- "$shine_path_line" "$shine_file" 2>/dev/null ||'
           log "      printf '\\n%s\\n' \"\$shine_path_line\" >> \"\$shine_file\" || exit 1"
           log "  done"
+          # Only a login file created by this command receives a new .bashrc link.
+          log '  if [ "$shine_new_login" = true ]; then'
+          login_line='case $- in *i*) [ ! -r "$HOME/.bashrc" ] || . "$HOME/.bashrc" ;; esac'
+          log "    printf '\\n%s\\n' $(quote_arg "$login_line") >> $(quote_arg "$profile") || exit 1"
+          log '  fi'
           log ")"
         fi
       else

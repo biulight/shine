@@ -53,11 +53,25 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 observer,
             )
             .await;
-        execution_result(
+        let pacman_download_404 = provider == SysPackageProvider::Pacman
+            && output.as_ref().is_ok_and(|output| {
+                output.exit_code.is_some_and(|code| code != 0)
+                    && pacman_download_404_failure(&String::from_utf8_lossy(&output.stderr))
+            });
+        let mut result = execution_result(
             output,
             format!("{provider:?} install failed"),
             provider == SysPackageProvider::Winget,
-        )
+        )?;
+        if pacman_download_404 {
+            // Log recognition selects advice only; exit status still determines success.
+            // Successful fallback, signals, spawn errors and typed timeouts retain their semantics.
+            result.failure_detail.push_str(concat!(
+                "; Package downloads returned HTTP 404. The package database may be outdated or a mirror out of sync. ",
+                "Review and complete pacman -Syu (use sudo if needed), then retry bootstrap; do not use pacman -Sy alone."
+            ));
+        }
+        Ok(result)
     }
 
     pub(super) async fn run_sys_script(
@@ -202,6 +216,66 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         stderr.finish("stderr", &mut emit);
         result
     }
+}
+
+// A failed mirror can be recovered before an unrelated transaction error. Only offer
+// download advice when the later transaction summary confirms retrieval failure.
+fn pacman_download_404_failure(stderr: &str) -> bool {
+    let mut saw_package_404 = false;
+    let mut download_failure = false;
+    for line in stderr.lines() {
+        let line = line.trim();
+        // These are pacman's plain and native colored error prefixes. Do not strip
+        // arbitrary terminal controls or modify the raw logs used for display/storage.
+        let Some(message) = line
+            .strip_prefix("error: ")
+            .or_else(|| line.strip_prefix("\x1b[1;31merror: \x1b[0m"))
+        else {
+            continue;
+        };
+        if is_pacman_package_download_404(message) {
+            saw_package_404 = true;
+            download_failure = false;
+        } else if let Some(cause) = message.strip_prefix("failed to commit transaction (") {
+            download_failure = saw_package_404 && cause == "failed to retrieve some files)";
+        }
+    }
+    download_failure
+}
+
+// Match a complete libalpm package-download diagnostic and exact libcurl status.
+// Do not infer HTTP errors from package names, URLs, other lines/streams or hook output.
+// Unknown/localized formats retain the original failure without speculative repair advice.
+fn is_pacman_package_download_404(line: &str) -> bool {
+    let Some(download) = line.strip_prefix("failed retrieving file '") else {
+        return false;
+    };
+    let Some((file, remainder)) = download.split_once("' from ") else {
+        return false;
+    };
+    let package_archive = file.ends_with(".pkg.tar")
+        || file
+            .rsplit_once(".pkg.tar.")
+            .is_some_and(|(_, compression)| {
+                !compression.is_empty()
+                    && compression.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            });
+    if !package_archive
+        || file.ends_with(".sig")
+        || file.contains(['/', '\\', '\''])
+        || file.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+    let Some((host, error)) = remainder.split_once(" : ") else {
+        return false;
+    };
+    !host.is_empty()
+        && !host.chars().any(char::is_whitespace)
+        && matches!(
+            error,
+            "The requested URL returned error: 404" | "The requested URL returned an error: 404"
+        )
 }
 
 /// Preserve line endings while bounding incomplete UTF-8 fragments.

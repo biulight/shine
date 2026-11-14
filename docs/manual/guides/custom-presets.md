@@ -700,7 +700,7 @@ version_args = ["--version"]
 
 [items.install]
 kind = "package"
-provider = "homebrew" # homebrew-cask, apt, or winget are also supported
+provider = "homebrew" # homebrew-cask, apt, pacman, or winget are also supported
 package = "mise"
 
 [[items.shell]]
@@ -712,6 +712,10 @@ eval = ["mise", "activate", "{shell}"]
 [profiles.recommended]
 items = ["mise"]
 ```
+
+Use `provider = "pacman"` only in `sys/arch/`, with one package name per item. It uses the
+existing pacman databases; complete a full system update before bootstrap as described in
+[Arch Linux preparation](system-init.md#arch-linux-preparation).
 
 Detection supports `command`, `path`, and `any` command/path probes. Package installation ensures the software is present; it does not upgrade an existing installation. A complex item may use
 `[items.install] kind = "script", path = "install/<item>.sh"`; the script handles only that item,

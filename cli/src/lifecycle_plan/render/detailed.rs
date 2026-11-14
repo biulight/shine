@@ -37,6 +37,7 @@ pub(in crate::lifecycle_plan) fn render_plan_lines_with_steps(
         "Security Plan · {}",
         plan.operation.as_str()
     ))];
+    lines.extend(super::bootstrap::pacman_preparation_lines(plan));
     lines.push(format!(
         "  Preset snapshot  {}",
         plan.inputs.preset.as_hex()

@@ -129,9 +129,13 @@ use mise itself for tool configuration and version management.
 | Ubuntu | `recommended` (default) | Rust, Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza. |
 | Ubuntu | `all` | `recommended` plus ZeroTier, Bun, pnpm, mise, Homebrew. |
 | Ubuntu | `minimal` | Neovim, fzf, bat, eza, zoxide; for servers without history sync, prompt, or JavaScript tooling. |
+| Arch Linux | `minimal` (default) | Neovim, fzf, bat, eza, zoxide via pacman; Bash/Zsh integration. |
 | Windows | `required` | Rust, Yazi, Starship. |
 | Windows | `recommended` (default) | `required` plus Neovim, zoxide, Atuin, fzf, bat, eza, ZeroTier. |
 | Windows | `all` | `recommended` plus Bun, pnpm, mise. |
+
+For Arch prerequisites and the full-system-update requirement, see
+[Arch Linux preparation](../guides/system-init.md#arch-linux-preparation).
 
 ### Ubuntu installation notes {#ubuntu-installation-notes}
 
@@ -148,7 +152,7 @@ use mise itself for tool configuration and version management.
 
 ### Private split DNS
 
-All three platforms include an independent managed `split-dns` item outside default profiles. It
+macOS, Ubuntu, and Windows include an independent managed `split-dns` item outside default profiles. It
 routes a private suffix to a DNS server reachable over ZeroTier and requires administrator access and
 these effective values:
 

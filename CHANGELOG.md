@@ -5,6 +5,30 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [Unreleased]
+
+### Features
+
+- Add Arch Linux system bootstrap with a default `minimal` selection: Neovim, fzf, bat, eza,
+  and zoxide. Install missing packages through pacman and manage their Bash/Zsh integrations.
+  Complete a full Arch system update before bootstrap; Shine does not refresh package databases
+  or upgrade the system.
+
+### Bug Fixes
+
+- Make new Bash login files created by the installer instructions load `.bashrc` in interactive
+  sessions, so aliases and shell integrations work over SSH. Preserve existing startup logic.
+
+- Explain Arch package database prerequisites before native pacman installation and add targeted
+  HTTP-404 recovery guidance for recognized package download failures, preserving original errors
+  and install-only behavior.
+
+- Invalidate system-bootstrap approval when either affected shell startup file or generated
+  profile input changes. Preserve unrelated startup files when switching Bash/Zsh integrations.
+- Allow Bash/Zsh integration repair within the same second and resume committed profile cleanup
+  after interruption without discarding user edits. Review pending-file cleanup and forced-profile
+  backup permissions before execution.
+
 ## [2.10.0] — 2026-11-07
 
 ### Features

@@ -18,7 +18,10 @@ curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh
 如果提示安装目录不在 `PATH` 中，请先执行输出中的配置命令，再执行使当前终端生效的命令。
 如果配置文件无法更新，请根据错误提示手动配置。
 如果使用的 Shell 与提示不同，或使用 Fish 等其他 Shell，请手动将该目录加入相应的配置。
-随后验证：
+对于 Bash，输出的命令新建登录文件时，会让交互式登录加载 `~/.bashrc`，使别名和 Shell
+集成在 SSH 登录后也能生效。已有登录文件的启动逻辑保持不变。
+
+打开新终端或重新连接 SSH，然后验证：
 
 ```bash
 shine --version

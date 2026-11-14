@@ -6,6 +6,21 @@ use crate::output::escape_controls;
 use anyhow::Result;
 use shine_core::plan::{NetworkScopeV1, PermissionV1, PlanV1};
 
+pub(super) fn pacman_preparation_lines(plan: &PlanV1) -> Vec<String> {
+    if plan.steps.iter().any(|step| {
+        step.diagnostic_codes
+            .iter()
+            .any(|code| code == "sys_pacman_existing_database")
+    }) {
+        crate::sys::PACMAN_PREPARATION
+            .iter()
+            .map(|message| format!("  {} {message}", crate::colors::yellow("!")))
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
 pub(in crate::lifecycle_plan) fn render_bootstrap_plan_lines(
     plan: &PlanV1,
     config_digest: &str,
@@ -49,6 +64,7 @@ pub(in crate::lifecycle_plan) fn render_bootstrap_plan_lines(
             if profiles == 1 { "" } else { "s" }
         ),
     ];
+    lines.extend(pacman_preparation_lines(plan));
     let mut attention = Vec::new();
     if plan
         .permissions
@@ -124,6 +140,10 @@ pub(in crate::lifecycle_plan) fn render_bootstrap_plan_lines(
             return render_plan_lines(plan, config_digest);
         }
         for code in &step.diagnostic_codes {
+            // This provider prerequisite is shown once above the item list.
+            if code == "sys_pacman_existing_database" && !verbose {
+                continue;
+            }
             let message = match code.as_str() {
                 "sys_bootstrap_profile_recovery_unsupported" => {
                     "Recovery is unsupported for this profile step"

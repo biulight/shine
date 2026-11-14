@@ -43,7 +43,7 @@ Shine 不限定你怎样分享它。
 你可以把批量重命名、表格整理或文档打印等重复操作封装成自己的可复用命令。每个命令需要的应用或
 运行环境仍要安装在对应机器上。可以从[自定义预设指南](https://biulight.github.io/shine/zh-Hans/guides/custom-presets)开始。
 
-Shine 也能初始化 macOS、Ubuntu 或 Windows 的选定部分，但不会接管第三方工具版本；具体边界见
+Shine 也能初始化 macOS、Ubuntu、Arch Linux 或 Windows 的选定部分，但不会接管第三方工具版本；具体边界见
 [系统初始化](https://biulight.github.io/shine/zh-Hans/guides/system-init)。
 
 ## 安装

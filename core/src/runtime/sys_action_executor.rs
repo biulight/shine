@@ -130,7 +130,17 @@ impl SysOperationJournalV1 {
             bail!("a Sys operation journal requires a receipt transition");
         }
         if self.receipt.previous == self.receipt.desired {
-            bail!("a Sys operation journal requires distinct receipt states");
+            // Repairing/switching loaders may leave an existing bootstrap receipt unchanged.
+            // Only this typed action may use the exact unchanged receipt and commit marker.
+            let unchanged_profile = matches!(&action.kind,
+                ActionKindV1::ReconcileSysProfileBlocks { os_id, .. }
+                    if action.target == "sys/profile" && self.receipt.previous.as_deref()
+                        .is_some_and(|entry| !entry.managed && entry.os_id == *os_id));
+            if !unchanged_profile {
+                bail!(
+                    "a Sys operation journal requires distinct receipt states outside profile reconciliation"
+                );
+            }
         }
         let matches_target = matches!(action.kind, ActionKindV1::ReconcileSysProfileBlocks { .. })
             && action.target == "sys/profile"
@@ -206,7 +216,13 @@ where
         let manifest = load_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let receipt_state = receipt_boundary(&manifest, &journal.receipt);
         let action = &journal.action_ir.actions[0];
-        let assessment = assess_sys_action(self.host(), &action.kind).await?;
+        let assessment = if journal.state == SysJournalStateV1::ReceiptCommitted
+            && matches!(action.kind, ActionKindV1::ReconcileSysProfileBlocks { .. })
+        {
+            profile::assess_committed_sys_profile_blocks(self.host(), &action.kind).await?
+        } else {
+            assess_sys_action(self.host(), &action.kind).await?
+        };
         let blocked = receipt_state == ReceiptBoundary::Conflict
             || assessment == SysRecoveryAssessment::Blocked;
 
@@ -391,9 +407,11 @@ where
             bail!("an interrupted Sys operation must be recovered before starting another one");
         }
         let manifest = load_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        if receipt_boundary(&manifest, &receipt) != ReceiptBoundary::Previous
-            || assess_sys_profile_blocks(self.host(), &action.kind).await?
-                != SysRecoveryAssessment::Unchanged
+        if !matches!(
+            receipt_boundary(&manifest, &receipt),
+            ReceiptBoundary::Previous | ReceiptBoundary::Unchanged
+        ) || assess_sys_profile_blocks(self.host(), &action.kind).await?
+            != SysRecoveryAssessment::Unchanged
         {
             bail!("Sys profile state changed after Plan approval");
         }
@@ -434,7 +452,10 @@ where
             bail!("Sys operation journal is not at its applied commit boundary");
         }
         let manifest = load_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        if receipt_boundary(&manifest, &journal.receipt) != ReceiptBoundary::Desired {
+        if !matches!(
+            receipt_boundary(&manifest, &journal.receipt),
+            ReceiptBoundary::Desired | ReceiptBoundary::Unchanged
+        ) {
             bail!("Sys operation cannot commit before its desired receipt boundary is durable");
         }
         journal.state = SysJournalStateV1::ReceiptCommitted;
@@ -465,7 +486,10 @@ where
         }
         let mut rolled_back_actions = Vec::new();
         if journal.state == SysJournalStateV1::ReceiptCommitted {
-            if boundary != ReceiptBoundary::Desired {
+            if !matches!(
+                boundary,
+                ReceiptBoundary::Desired | ReceiptBoundary::Unchanged
+            ) {
                 bail!("committed Sys recovery requires its desired receipt boundary");
             }
             cleanup_sys_action(self.host(), &action.kind).await?;
@@ -515,6 +539,9 @@ pub(crate) fn apply_receipt_transition(
 enum ReceiptBoundary {
     Previous,
     Desired,
+    // Exact, nonempty receipt shared by both sides of a profile-only operation.
+    // The durable ReceiptCommitted marker decides cleanup versus rollback.
+    Unchanged,
     Conflict,
 }
 
@@ -532,7 +559,12 @@ fn receipt_boundary(
             .iter()
             .find(|entry| entry.os_id == identity.os_id && entry.item_id == identity.item_id)
     });
-    if current == transition.previous.as_deref() {
+    if current.is_some()
+        && current == transition.previous.as_deref()
+        && current == transition.desired.as_deref()
+    {
+        ReceiptBoundary::Unchanged
+    } else if current == transition.previous.as_deref() {
         ReceiptBoundary::Previous
     } else if current == transition.desired.as_deref() {
         ReceiptBoundary::Desired
