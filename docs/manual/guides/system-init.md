@@ -56,37 +56,24 @@ For scripts, see [system command options](../reference/commands.md#system-preset
 
 ## Arch Linux preparation {#arch-linux-preparation}
 
-Arch Linux currently provides only `minimal` (the default): Neovim, fzf, bat, eza, and zoxide.
-It does not provide `recommended`, `all`, or `split-dns`. The initial support scope is official
-Arch Linux on x86_64; Arch derivatives and Arch Linux ARM are not covered.
+Only official x86_64 Arch Linux is supported. The only preset is `minimal` (the default),
+which includes Neovim, fzf, bat, eza, and zoxide.
 
-Before installing missing packages, review Arch's update instructions and complete a full system
-update with `sudo pacman -Syu` (omit `sudo` as root). Then preview and install:
+Before installation, review Arch's update instructions and complete a full system update
+(omit `sudo` as root). Once the update succeeds, preview and install:
 
 ```bash
+sudo pacman -Syu
+
 shine sys bootstrap --preset minimal --dry-run
 shine sys bootstrap --preset minimal
 ```
 
-The preview and installation plan remind you that native pacman installation uses the existing
-package database. This reminder does not check whether the database is current.
-Native pacman installation uses `pacman -S --needed --noconfirm` after plan approval. It does not refresh package
-databases, upgrade the whole system, or use AUR helpers. Arch does not support partial upgrades:
-do not run `pacman -Sy` alone before bootstrap. Omitting database refresh in Shine cannot repair
-an existing partial upgrade. These limits apply to the native pacman provider; review any custom
-installer scripts separately.
+Shine does not upgrade the system automatically. Arch does not support partial upgrades;
+do not run `pacman -Sy` alone before installing packages.
 
-If pacman fails, Shine keeps the original error output. When it recognizes a package download
-error reporting HTTP 404 followed by a transaction failure due to file retrieval, it states that
-downloads returned 404 and adds recovery guidance. An earlier mirror 404 does not trigger this
-advice if the transaction later fails for another reason, such as a signature or file conflict.
-This does not prove that the local database is outdated: a mirror may also be out of sync.
-Review and complete `sudo pacman -Syu` (omit `sudo` as root), then retry bootstrap.
-If 404 continues after a successful update, check the configured mirrors. For signature or
-database-lock errors or unrecognized output, follow pacman's original diagnostics; Shine does not
-add 404 advice merely because a log contains that number. Successful mirror fallback remains a
-success. Shine does not retry with an index refresh or system upgrade, remove locks, or disable
-signature checks.
+If a download fails with HTTP 404, confirm that the system update completed successfully;
+if the problem persists, check the configured mirrors. For other errors, follow pacman's output.
 See [Arch system maintenance](https://wiki.archlinux.org/title/System_maintenance).
 
 ## Open a new terminal and check the result
