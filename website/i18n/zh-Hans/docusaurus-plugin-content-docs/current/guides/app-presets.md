@@ -226,10 +226,9 @@ shine env set SURGE_PROFILE "/absolute/path/to/Profile.conf"
 shine app artifact apply surge
 ```
 
-Apply 和 remove 需要 Bun，以及正在运行且 CLI 支持模块管理的 Surge Mac。Apply 会先检查安装的
-模块与本次审核过的预设内容是否一致；不一致时，请核对修改并先安装或升级预设。Install 和 upgrade
-只部署文件并 reload Surge，不发送模块启用命令。新模块默认关闭，但 Surge 会记住以前的启用状态，
-删除后重新安装也可能直接生效。
+Apply 和 remove 需要 Bun，以及正在运行且 CLI 支持模块管理的 Surge Mac。若 apply 提示安装的
+模块与预设不一致，请核对修改并先安装或升级预设。首次安装的模块需要通过 `artifact apply`
+启用；已启用的模块在安装或升级后重新加载 Surge 时生效，删除后重新安装不会重置其启用状态。
 
 模块只改变生效配置，不改写原 Profile 的 `[General]`。启用状态属于当前设备，不局限于
 `SURGE_PROFILE` 指定的文件。后续可在同一行追加值、新增属性行，或用 `key = value` 覆盖标量设置。
@@ -248,12 +247,14 @@ Remove 此时可能已停用模块。请先修复配置文件中的异常标记�
 shine app artifact remove surge
 ```
 
-`artifact remove` 只运行预设声明的 `teardown` 脚本。卸载带有 teardown 的 app 时，Shine 也会尽力执行清理；清理失败只会警告，仍会继续安全卸载受管文件。
-Surge 的 teardown 会先停用 `shine-general` 并 reload，再撤销 include；`artifact remove` 保留
-已安装文件，uninstall 随后才删除受管文件。不要先删除模块文件：删除后效果可能持续到下次 reload，
-且不会清除记住的启用状态。若已删除，请恢复模块文件并再次运行 remove，以清除该状态。CLI 操作
-失败会使 artifact 命令失败。中断的 apply 可能已经更新 include，中断的 remove 可能已经停用模块；
-修复提示的问题后，重复原命令即可继续完成。其他模块不会被修改。
+`artifact remove` 只运行预设声明的 `teardown` 脚本。卸载带有 teardown 的 app 时，Shine 也会尝试执行清理。
+即使应用清理失败，受管文件仍可能被移除；重试或手动完成清理前，请检查警告和最终结果。
+对于 Surge，`artifact remove` 会停用 `shine-general`、重新加载 Surge 并撤销 Profile 改动，
+同时保留已安装文件；卸载还会移除受管文件。不要先删除模块文件：删除后效果可能持续到下次重新加载，
+且不会重置启用状态。若已删除，请恢复文件并再次运行 remove。
+
+Apply 或 remove 失败、中断时，部分应用设置可能已经改变。请修复提示的问题，再重复原命令完成操作。
+其他 Surge 模块不会被修改。
 
 ### Clash Verge Rev
 
@@ -359,10 +360,9 @@ unix_mode = "0400"
 Unix 默认使用安装用户的所有权和 `0600`。可选的数字 `unix_uid`、`unix_gid`，以及
 `unix_mode`（`0400` 或 `0600`）用于设置服务账号的读取权限。
 请使用有权创建目标并设置该所有权的账号执行安装。如果指定另一个非 root 所有者，请预先创建所有父目录，
-通过 Unix 权限位为该 UID、选定的 GID 或其他用户提供目录遍历（`x`）权限。Shine 会在解密前检查适用的
-所有者、组或其他用户权限位；附加组和仅由 ACL 授予的权限不能满足此项检查。已有目录的权限不会自动修改。
-Windows 使用当前用户私有 ACL，拒绝 Unix 权限字段。
-安装前应检查权限预览。
+通过 Unix 权限位为该 UID、选定的 GID 或其他用户提供目录遍历（`x`）权限。仅通过附加组或 ACL
+获得访问还不够，请自行设置适用的目录权限；Shine 不会修改已有目录权限。Windows 上秘密文件
+仅供当前用户使用，不要填写 Unix 字段。安装前应检查权限预览。
 
 已有非受管目标只有在内容与解密结果完全相同时才会被接管。内容不同即冲突，
 `--replace-managed` 也不会覆盖这种文件；不会生成明文 `.shine.bak`。

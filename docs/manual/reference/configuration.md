@@ -99,7 +99,7 @@ not provide ongoing code review or replace the plan shown before each operation.
 
 The `preset` target covers currently active targets, not future additions. Old grants may require
 renewed review even if they remain listed and can be revoked. Retired `allow_app_hooks` and
-`allow_sys_code` fields do not grant trust and are removed on the next configuration save.
+`allow_sys_code` fields no longer grant trust; use the trust commands above.
 
 ## Environment entry formats and descriptions
 
@@ -132,7 +132,7 @@ from the directory containing the file that declares them.
 
 `[[env_proxy]]` follows the same layering. A project rule replaces a global rule with the same
 `command`; unrelated global rules remain. Prefer `shine env proxy install`, `enable`, and `disable` so
-configuration remains consistent with the shim under `~/.shine/bin/`.
+configuration remains consistent with the installed command under `~/.shine/bin/`.
 
 For old `config.toml`, `.env.toml`, or global `env.toml` files, follow
 [legacy configuration recovery](../troubleshooting.md#shine-reports-an-old-configuration-file-after-upgrading-to-040).
@@ -167,6 +167,8 @@ External Shell presets default to `snapshot` mode: source edits take effect only
 `shine update` and `shine upgrade`. Use `external_shell_mode = "live"` only for development;
 source edits then take effect on the next invocation and require development trust. Changes to
 `target`, `runtime`, `transforms`, or `env` still need `shine upgrade` to refresh installed commands.
+Switching snapshot/live mode also requires upgrading installed commands; follow
+[external Shell deployment](../guides/custom-presets.md#choose-how-external-shell-presets-are-deployed).
 
 After upgrading Shine, refresh existing Live Bun commands with `shine upgrade`. Commands that use
 transforms keep the configuration directory chosen at installation, while project overrides follow

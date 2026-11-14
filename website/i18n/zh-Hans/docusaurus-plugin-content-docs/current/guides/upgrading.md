@@ -18,8 +18,8 @@ slug: /upgrading
 ## 升级到 2.10 时检查外部 App 预设 {#upgrade-to-shine-210}
 
 如果你维护含 Bun 脚本的 App 预设，请先用 Shine 2.10 运行 `shine preset lint ./my-presets`，
-再将预设用于自动化。2.10 能识别一些 2.9 会漏报的未声明访问，例如通过先前保存的
-`Bun.file` 句柄读取文件。遇到阻塞执行的诊断时，请修正脚本或声明所需权限，再运行一次 lint。
+再将预设用于自动化。此前 2.9 接受的脚本可能因访问未声明而被阻止。遇到这类诊断时，请修正脚本
+或声明所需权限，再运行一次 lint。
 详见[执行前检查 App 代码](./custom-presets.md#执行前检查-app-代码)。
 
 ## 从 2.7.x 或更早版本升级：SSH 与降级准备 {#upgrade-to-shine-28}
@@ -55,7 +55,7 @@ checkout 中迁移，再重新 pull。迁移会备份元数据，但不会执行
 ## 从 2.5.x 或更早版本升级：卸载脚本 {#upgrade-to-shine-26}
 
 Shine 2.6 从 `uninstall`、`app uninstall` 和 `shell uninstall` 中移除了 `--purge`。
-请从脚本中删除该选项；仍含此选项的命令会在加载配置前失败。
+请从脚本中删除该选项；仍含此选项的命令会失败。
 
 ## 从 2.3.x 或更早版本升级：替换 HTTP 服务依赖 {#清理旧版本的本地-http-服务}
 

@@ -5,8 +5,9 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.10.0. Run `shine <COMMAND> --help` for every option supported by the
-installed version. The task guides explain complete workflows; this page is a compact command index.
+This page describes the current development version (Next). Run `shine <COMMAND> --help` for
+the options supported by your installed version. The task guides explain complete workflows;
+this page is a compact command index.
 
 Command failures are written to stderr. Set `NO_COLOR=1` to disable colored output.
 
@@ -308,9 +309,9 @@ shine env secret identity list
 
 Scope options are mutually exclusive; the default is the active project, otherwise global.
 `--env-file` selects that scope's `shine.env.toml`; `--overlay` requires a manual directory.
-Implicit writes reject shadowed keys. Explicit targets may maintain shadowed entries and report
-both the saved file and current effective source. The old `--force` for `set`, `delete`, and
-`secret encrypt` is rejected without writing; use explicit scope and file options instead.
+If a higher-priority source overrides a key, choose the intended write target explicitly and
+check the effective source afterward. The old `--force` for `set`, `delete`, and `secret encrypt`
+is no longer supported; use scope and file options instead.
 
 `env explain --reveal`, `env list --reveal`, `env get`, `env secret decrypt`, exports with `--include-secrets`, and child
 commands started by `env run` can expose plaintext. Run them only in a trusted terminal and never

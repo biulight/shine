@@ -257,8 +257,8 @@ shine ssh --remote-shell windows --with API_URL windows-host Get-ChildItem Env:A
 Shine 优先使用 PowerShell 7，否则使用 Windows PowerShell 5.1。交互会话会加载正常的
 PowerShell profile，显式远端命令不会。如果命令依赖 profile 中的设置，远端执行时需考虑这一差异。
 
-该模式不会建立传输隧道，因此不能在远端运行 `shine local download`、`upload` 或
-`status`。如需与 Windows 远端传文件，请直接使用系统 `scp`、`sftp` 或其它传输工具。
+Windows 远端模式不支持 `shine local download`、`upload` 或 `status`。需要传文件时，
+请使用系统 `scp`、`sftp` 或其他传输工具。
 
 ## 从远端下载到本机
 
@@ -275,7 +275,7 @@ PowerShell profile，显式远端命令不会。如果命令依赖 profile 中�
 
 `download` 的来源路径由远端解析，目标路径由本机解析。未指定目标时，Shine 会把文件或目录放到本机启动 `shine ssh` 时所在目录，并沿用来源名称。
 
-Shine 会在本机端重新发起系统 `rsync` 或 `scp` 传输；优先使用 `rsync`，不可用时回退到 `scp`。两端都需要可用的 `ssh`，目录传输还需要两端具有同一种可用工具（优先 `rsync`，否则 `scp`）。Rsync 默认跳过已有文件，指定 `--force` 才会覆盖；目录已存在时加 `--force` 表示合并写入。
+传输优先使用 `rsync`，不可用时回退到 `scp`。两端都需要可用的 `ssh`，传输目录还需要两端具有同一种传输工具。Rsync 默认跳过已有文件，指定 `--force` 才会覆盖；目录已存在时加 `--force` 表示合并写入。
 需要跳过 `rsync` 探测并强制使用 `scp` 时，添加 `--scp`。
 SSH 目标直接使用 IPv6 地址时，为兼容系统 rsync，传输会使用 SCP。SCP 即使未指定 `--force`
 也可能覆盖已有文件，Shine 会显示警告；其 `--dry-run` 只显示解析后的路径，不复制文件。

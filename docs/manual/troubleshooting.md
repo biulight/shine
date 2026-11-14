@@ -179,10 +179,10 @@ even without `--force`. Preview paths and back up any destination files you need
 
 ## Maintenance reminders are missing
 
-For manual-maintenance reminders, run `shine state check`. Native service checks normally finish
-in the background and appear on a later interactive invocation; redirected or automated commands
-skip automatic maintenance checks. If an inspection cannot complete, check access to the current
-user's service manager and retry. To remove an old HTTP service, run `shine clear serve`.
+Run `shine state check` to check immediately. Automatic reminders may appear on a later
+interactive command; redirected or automated commands skip them. If a check cannot complete,
+confirm that the current user can access the service manager, then retry. To remove an old HTTP
+service, run `shine clear serve`.
 
 ## Automatic update checks fail
 

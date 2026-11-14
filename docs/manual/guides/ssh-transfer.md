@@ -287,8 +287,8 @@ Shine uses PowerShell 7 when available, otherwise Windows PowerShell 5.1. Intera
 your normal PowerShell profile; explicit remote commands do not. If a command depends on your
 profile settings, account for that when running it remotely.
 
-Windows mode creates no transfer tunnel, so `shine local download`, `upload`, and `status` are
-unavailable. Use system `scp`, `sftp`, or another transfer tool.
+Windows remote mode does not support `shine local download`, `upload`, or `status`. Use system
+`scp`, `sftp`, or another transfer tool.
 
 ## Download from remote to local
 
@@ -306,8 +306,8 @@ allowing replacement; SCP may overwrite existing files even without `--force`.
 The remote side resolves the source; the local side resolves the destination. Without a destination,
 the item is placed in the local directory from which `shine ssh` started, using the source name.
 
-The local side starts system `rsync` or `scp`, preferring rsync and falling back to scp. Both ends need
-SSH, and directory transfer requires a common tool. Rsync skips existing files unless `--force`
+Transfers prefer `rsync` and fall back to `scp`. Both ends need SSH and a common transfer tool
+for directories. Rsync skips existing files unless `--force`
 is supplied; for an existing directory, `--force` merges into it. Use `--scp` to skip rsync probing.
 IPv6 literal SSH destinations use SCP for compatibility with system rsync. SCP may overwrite existing
 files even without `--force`, and Shine prints a warning. Its `--dry-run` shows resolved paths without
