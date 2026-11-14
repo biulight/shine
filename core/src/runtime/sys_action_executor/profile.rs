@@ -5,6 +5,21 @@ pub(super) async fn assess_sys_profile_blocks(
     host: &impl FileSystemObservationHost,
     kind: &ActionKindV1,
 ) -> Result<SysRecoveryAssessment> {
+    assess_profile_blocks(host, kind, false).await
+}
+
+pub(super) async fn assess_committed_sys_profile_blocks(
+    host: &impl FileSystemObservationHost,
+    kind: &ActionKindV1,
+) -> Result<SysRecoveryAssessment> {
+    assess_profile_blocks(host, kind, true).await
+}
+
+async fn assess_profile_blocks(
+    host: &impl FileSystemObservationHost,
+    kind: &ActionKindV1,
+    committed: bool,
+) -> Result<SysRecoveryAssessment> {
     let ActionKindV1::ReconcileSysProfileBlocks { os_id, files } = kind else {
         bail!("expected Sys profile block action");
     };
@@ -20,10 +35,12 @@ pub(super) async fn assess_sys_profile_blocks(
             }
             _ => false,
         };
-        if pristine_destination && matches!(rollback, ObservedFile::Missing) {
+        if !committed && pristine_destination && matches!(rollback, ObservedFile::Missing) {
             continue;
         }
         let rollback_matches = match (&file.previous, &rollback) {
+            // Cleanup may have removed some/all exact rollback files after the commit marker.
+            (_, ObservedFile::Missing) if committed => true,
             (None, ObservedFile::Missing) => true,
             (Some(identity), ObservedFile::Regular(bytes, mode)) => {
                 hash_content(bytes) == identity.content_hash

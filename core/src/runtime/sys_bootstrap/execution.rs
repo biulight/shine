@@ -53,11 +53,25 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 observer,
             )
             .await;
-        execution_result(
+        let pacman_failed = provider == SysPackageProvider::Pacman
+            && output
+                .as_ref()
+                .is_ok_and(|output| output.exit_code.is_some_and(|code| code != 0));
+        let mut result = execution_result(
             output,
             format!("{provider:?} install failed"),
             provider == SysPackageProvider::Winget,
-        )
+        )?;
+        if pacman_failed {
+            // Conditional advice, not classification of localized package-manager output.
+            // Successful fallback, signals, spawn errors and typed timeouts retain their semantics.
+            result.failure_detail.push_str(concat!(
+                "; If downloads return HTTP 404, the package database may be outdated or a mirror out of sync: ",
+                "review and complete pacman -Syu (use sudo if needed), then retry bootstrap; do not use pacman -Sy alone. ",
+                "For lock or signature errors, follow pacman's specific diagnostics."
+            ));
+        }
+        Ok(result)
     }
 
     pub(super) async fn run_sys_script(

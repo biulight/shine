@@ -258,21 +258,42 @@ pub(super) async fn capture_sys_profile_state<H: FileSystemObservationHost>(
 ) -> Result<()> {
     let ext = if os_id == "windows" { "ps1" } else { "sh" };
     for phase in ["pre", "post"] {
-        let path = runtime
-            .context()
-            .home_dir
-            .join(".shine/profile")
-            .join(format!("{os_id}.{phase}.{ext}"));
-        capture_path_state(runtime.host(), state, format!("profile:{phase}"), &path).await?;
-        add_shine_write_permission(
-            runtime.context(),
-            permissions,
-            &path,
-            FilesystemPurposeV1::Installation,
-            "sys/profile",
-        );
+        for suffix in ["", ".base", ".new", ".merge"] {
+            let path = runtime
+                .context()
+                .home_dir
+                .join(".shine/profile")
+                .join(format!("{os_id}-sys.{phase}{suffix}.{ext}"));
+            capture_path_state(
+                runtime.host(),
+                state,
+                format!("profile:{phase}{suffix}"),
+                &path,
+            )
+            .await?;
+            add_shine_write_permission(
+                runtime.context(),
+                permissions,
+                &path,
+                FilesystemPurposeV1::Installation,
+                "sys/profile",
+            );
+            if matches!(suffix, ".new" | ".merge") {
+                permissions.implicit_for(
+                    PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Remove,
+                        path: review_path(runtime.context(), &path),
+                    },
+                    FilesystemPurposeV1::Installation,
+                    "sys/profile",
+                );
+            }
+        }
     }
-    for (index, path) in runtime.context().shell_config_paths.iter().enumerate() {
+    for (index, path) in sys_profile_block_paths(runtime.context(), os_id)
+        .iter()
+        .enumerate()
+    {
         capture_path_state(
             runtime.host(),
             state,
@@ -300,7 +321,7 @@ pub fn sys_profile_block_paths(
 ) -> Vec<PathBuf> {
     match os_id {
         "macos" => vec![context.home_dir.join(".zshrc")],
-        "ubuntu" => vec![
+        "ubuntu" | "arch" => vec![
             context.home_dir.join(".bashrc"),
             context.home_dir.join(".zshrc"),
         ],

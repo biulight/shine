@@ -3956,3 +3956,41 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Coverage**: execute the embedded script with offline command fixtures for repeat runs,
   restrictive umask, download/key/source/update/install failures and temporary-key cleanup.
 - **Source**: [Yazi installation](https://yazi-rs.github.io/docs/installation/#debian-and-ubuntu).
+
+## 2026-11-14 — Bootstrap approval must observe the actual profile destinations
+
+- **Symptom**: the Arch regression could change the other shell's startup file after review and
+  still reach administrator authorization.
+- **Cause**: bootstrap captured only `context.shell_config_paths`, although Bash/Zsh switching
+  also removes the old loader from the other startup file. Composed profile observations used
+  `<os>.pre/post.sh` instead of the actual `<os>-sys.pre/post.sh` names and omitted merge inputs.
+- **Fix**: observe the same OS-specific startup-file set used by profile mutation and detach,
+  plus the actual active/base/new/merge paths for both phases. Preserve existing Ubuntu loader bytes.
+- **Regression**: changing either startup file or a generated profile input invalidates the
+  reviewed Arch request before commands or writes; existing platform profile tests remain in place.
+  A startup file without an owned loader must remain byte-identical on removal: trimming its
+  whitespace creates a spurious profile action with no distinct owned-block identities.
+
+## 2026-11-14 — Frozen-clock profile switching exposes real recovery boundaries
+
+- **Symptom**: re-enabling an existing integration after a Bash/Zsh switch failed when receipt
+  timestamps matched. Advancing the fixture clock made the original Arch test pass incorrectly.
+- **Fix**: retain an exact unchanged receipt only for typed profile reconciliation and rely on the
+  positive journal commit marker. Receipt/marker-write failures roll back; cleanup interruption
+  after commit preserves desired blocks and tolerates already-removed rollback files (ADR 0168).
+- **Regression**: frozen-clock Arch/Ubuntu execution, interruption at each boundary, preserved
+  user edits and fail-closed receipt/owned-block/rollback conflicts. Plan tests separately assert
+  removal of pending profile artifacts and force-only backup write permission.
+
+## 2026-11-14 — Explain pacman prerequisites before package download failures
+
+- **Symptom**: Arch bootstrap failed downloading an old dependency with HTTP 404 from many mirrors;
+  the local sync database still referenced a version replaced in the repositories.
+- **Rule**: show the existing-database/full-update prerequisite during native pacman review and
+  preview, retain original error output, and describe 404 causes conditionally. Database age and
+  localized error text cannot prove a safe system state or authorize repairs.
+- **Boundary**: continue using fixed install-only argv, existing approval, typed timeout and
+  fail-stop behavior. Do not refresh databases, upgrade the system or retry automatically.
+- **Review**: scope the no-upgrade promise to native pacman when scripts can be selected alongside
+  it. Add download advice only for nonzero process exit codes, not signal termination; retain the
+  original failure and logs even if a 404 appeared before interruption.

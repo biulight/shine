@@ -612,7 +612,7 @@ version_args = ["--version"]
 
 [items.install]
 kind = "package"
-provider = "homebrew" # 也支持 homebrew-cask、apt 或 winget
+provider = "homebrew" # 也支持 homebrew-cask、apt、pacman 或 winget
 package = "mise"
 
 [[items.shell]]
@@ -624,6 +624,9 @@ eval = ["mise", "activate", "{shell}"]
 [profiles.recommended]
 items = ["mise"]
 ```
+
+`provider = "pacman"` 仅适用于 `sys/arch/`，每个 item 只声明一个包名。它使用已有的
+pacman 数据库；bootstrap 前应先完成全系统更新，见 [Arch Linux 准备工作](system-init.md#arch-linux-preparation)。
 
 Detection 支持 `command`、`path`，以及由 command/path probes 组成的 `any`。包安装只确保软件存在，不升级已有安装。
 复杂 item 可使用 `[items.install] kind = "script", path = "install/<item>.sh"`；脚本只处理该

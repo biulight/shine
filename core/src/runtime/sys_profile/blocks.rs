@@ -16,7 +16,7 @@ pub(super) async fn update_sys_shell_profiles(
 ) -> Result<SysShellProfileUpdate> {
     match os_id {
         "macos" => update_macos_shell_profile(host, config, os_id).await,
-        "ubuntu" => update_ubuntu_shell_profile(host, config, os_id, sys_shell).await,
+        "ubuntu" | "arch" => update_linux_shell_profile(host, config, os_id, sys_shell).await,
         "windows" => update_windows_shell_profile(host, config, os_id).await,
         _ => Ok(SysShellProfileUpdate {
             updated: false,
@@ -40,7 +40,7 @@ async fn update_macos_shell_profile(
     })
 }
 
-async fn update_ubuntu_shell_profile(
+async fn update_linux_shell_profile(
     host: &impl FileSystemHost,
     config: &SysProfileRuntimeConfig,
     os_id: &str,
@@ -144,6 +144,10 @@ pub(crate) fn desired_sys_profile_content(
     shell_name: Option<&str>,
     install: bool,
 ) -> String {
+    // A shell with no owned loader must remain byte-for-byte untouched when switching shells.
+    if !install && sys_owned_blocks_hash(content, os_id).is_none() {
+        return content.to_string();
+    }
     let had_utf8_bom = content.contains('\u{feff}');
     let bom_was_at_start = content.starts_with('\u{feff}');
     let content_without_bom = content.replace('\u{feff}', "");
@@ -248,6 +252,7 @@ fn legacy_sys_sentinel(os_id: &str) -> (&'static str, &'static str) {
     match os_id {
         "macos" => ("# >>> shine macos sys >>>", "# <<< shine macos sys <<<"),
         "windows" => ("# >>> shine windows sys >>>", "# <<< shine windows sys <<<"),
+        "arch" => ("# >>> shine arch sys >>>", "# <<< shine arch sys <<<"),
         _ => ("# >>> shine ubuntu sys >>>", "# <<< shine ubuntu sys <<<"),
     }
 }
@@ -269,6 +274,14 @@ fn sys_sentinel(os_id: &str, phase: SysProfilePhase) -> (&'static str, &'static 
         ("windows", SysProfilePhase::Post) => (
             "# >>> shine windows sys post >>>",
             "# <<< shine windows sys post <<<",
+        ),
+        ("arch", SysProfilePhase::Pre) => (
+            "# >>> shine arch sys pre >>>",
+            "# <<< shine arch sys pre <<<",
+        ),
+        ("arch", SysProfilePhase::Post) => (
+            "# >>> shine arch sys post >>>",
+            "# <<< shine arch sys post <<<",
         ),
         (_, SysProfilePhase::Pre) => (
             "# >>> shine ubuntu sys pre >>>",
@@ -355,6 +368,16 @@ if (Test-Path -LiteralPath $shineWindowsSysProfile) {{
 shine_macos_sys_profile="$HOME/.shine/profile/macos-sys.{phase}.sh"
 if [[ -f "$shine_macos_sys_profile" ]]; then
   source "$shine_macos_sys_profile"
+fi
+{end}
+"#,
+            phase = phase.as_str()
+        ),
+        "arch" => format!(
+            r#"{start}
+shine_arch_sys_profile="$HOME/.shine/profile/arch-sys.{phase}.sh"
+if [[ -f "$shine_arch_sys_profile" ]]; then
+  source "$shine_arch_sys_profile"
 fi
 {end}
 "#,
@@ -586,6 +609,37 @@ mod tests {
                 crate::runtime::PresetSourceKind::Embedded,
             )
             .build(),
+        }
+    }
+
+    #[test]
+    fn arch_loader_detach_preserves_existing_ubuntu_loader() {
+        let ubuntu =
+            desired_sys_profile_content("# personal settings\n", "ubuntu", Some("bash"), true);
+        let combined = desired_sys_profile_content(&ubuntu, "arch", Some("bash"), true);
+        let detached = detach_sys_loader(&combined, "arch", Some("bash"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(detached.trim(), ubuntu.trim());
+        assert_eq!(
+            desired_sys_profile_content(&ubuntu, "arch", None, false),
+            ubuntu
+        );
+    }
+
+    #[test]
+    fn removing_absent_sys_loader_preserves_foreign_shell_bytes() {
+        for os in ["ubuntu", "arch"] {
+            for content in [
+                "# personal settings\n",
+                "\n\nexport EXAMPLE=1\n\n",
+                "\u{feff}# personal\r\n",
+            ] {
+                assert_eq!(
+                    desired_sys_profile_content(content, os, None, false),
+                    content
+                );
+            }
         }
     }
 

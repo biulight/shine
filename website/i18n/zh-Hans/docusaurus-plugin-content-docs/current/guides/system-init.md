@@ -5,7 +5,7 @@ sidebar_position: 3
 
 # 初始化与管理系统
 
-使用系统预设，可以在 macOS、Ubuntu 或 Windows 上安装选定的开发工具，并启用相应的 Shell
+使用系统预设，可以在 macOS、Ubuntu、Arch Linux 或 Windows 上安装选定的开发工具，并启用相应的 Shell
 集成。Shine 也能单独管理私有 DNS 等系统设置，但不负责升级第三方软件。
 
 ## 先查看，再预览 {#先查看再执行}
@@ -14,7 +14,7 @@ sidebar_position: 3
 
 ```bash
 shine sys list
-shine sys info rust
+shine sys info neovim
 ```
 
 使用 `shine sys list --all` 可浏览其他平台的项目。各平台的项目与配置组合（profile）见
@@ -23,7 +23,7 @@ shine sys info rust
 预览想要安装的项目：
 
 ```bash
-shine sys bootstrap rust mise --dry-run
+shine sys bootstrap neovim fzf --dry-run
 ```
 
 预览会显示安装步骤和 Shell 配置改动，不会实际执行。继续之前，请确认所需的管理员权限、
@@ -36,10 +36,10 @@ shine sys bootstrap rust mise --dry-run
 | 需求 | 命令 |
 | --- | --- |
 | 交互选择项目 | `shine sys bootstrap` |
-| 只安装 mise | `shine sys bootstrap mise` |
-| 依次安装 Rust 和 mise | `shine sys bootstrap rust mise` |
-| 使用推荐配置组合 | `shine sys bootstrap --preset recommended` |
-| 使用 Ubuntu 的最小服务器配置组合 | `shine sys bootstrap --preset minimal` |
+| 只安装 fzf | `shine sys bootstrap fzf` |
+| 依次安装 Neovim 和 fzf | `shine sys bootstrap neovim fzf` |
+| 使用推荐配置组合（macOS、Ubuntu、Windows） | `shine sys bootstrap --preset recommended` |
+| 使用 Ubuntu 或 Arch Linux 的最小配置组合 | `shine sys bootstrap --preset minimal` |
 
 实际修改系统前，Shine 会显示操作计划并请求确认，默认为否。请检查改动、所需权限和恢复限制；
 需要更多详情时添加 `--verbose`。自定义脚本会以你的权限运行，没有沙箱隔离；请先审阅外部代码，
@@ -50,6 +50,33 @@ shine sys bootstrap rust mise --dry-run
 
 在脚本中使用时，请参阅[系统命令选项](../reference/commands.md#系统预设)，了解 `--yes`
 及外部代码的授权要求。
+
+## Arch Linux 准备工作 {#arch-linux-preparation}
+
+Arch Linux 目前只提供默认的 `minimal`：Neovim、fzf、bat、eza 和 zoxide，
+不提供 `recommended`、`all` 或 `split-dns`。首期支持范围为官方 x86_64 Arch Linux，
+不涵盖 Arch 衍生发行版和 Arch Linux ARM。
+
+安装缺失的软件前，请先查阅 Arch 的更新说明，运行 `sudo pacman -Syu` 完成全系统更新
+（root 用户省略 `sudo`），然后预览并安装：
+
+```bash
+shine sys bootstrap --preset minimal --dry-run
+shine sys bootstrap --preset minimal
+```
+
+预览和安装计划会提醒你：原生 pacman 安装使用已有的软件包数据库。这项提醒不会检查数据库
+是否最新。计划获批后，原生 pacman 安装使用 `pacman -S --needed --noconfirm`，不刷新软件包数据库、不升级
+整个系统，也不使用 AUR 助手。Arch 不支持部分升级：不要在 bootstrap 前单独运行
+`pacman -Sy`。Shine 不刷新数据库，并不意味着它能修复已有的部分升级状态。上述限制仅适用于
+原生 pacman 安装；自定义安装脚本需要单独审阅。
+
+pacman 返回非零退出码时，Shine 会保留原始错误输出并附上恢复建议。下载软件包时出现 HTTP 404，
+可能是本地数据库过期，也可能是镜像尚未同步。请先审阅并完成 `sudo pacman -Syu`
+（root 用户省略 `sudo`），再重试 bootstrap；成功更新后仍出现 404 时，应检查所配置的镜像。
+遇到签名或数据库锁错误时，请按 pacman 的具体诊断排查。Shine 不会通过刷新索引或系统升级
+自动重试，也不会删除锁文件或关闭签名检查。
+参阅 [Arch 系统维护说明](https://wiki.archlinux.org/title/System_maintenance)。
 
 ## 打开新终端并查看结果
 
@@ -69,8 +96,8 @@ Atuin 历史导入等软件专属步骤见[Ubuntu 安装说明](../reference/bui
 添加 `--proxy` 可使用 Shine 的 HTTP 代理设置。先预览，再安装：
 
 ```bash
-shine sys bootstrap mise --proxy --dry-run
-shine sys bootstrap mise --proxy
+shine sys bootstrap fzf --proxy --dry-run
+shine sys bootstrap fzf --proxy
 ```
 
 在 Shine 的[环境设置](./environment.md)中配置 `PROXY_HOST`、`HTTP_PROXY_PORT` 和
@@ -89,9 +116,9 @@ Shell 集成用于让终端找到工具，或启用提示符、历史搜索等�
 
 | 需求 | 命令 |
 | --- | --- |
-| 预览禁用 mise 集成 | `shine sys profile disable mise --dry-run` |
-| 禁用集成 | `shine sys profile disable mise` |
-| 重新启用 | `shine sys profile enable mise` |
+| 预览禁用 fzf 集成 | `shine sys profile disable fzf --dry-run` |
+| 禁用集成 | `shine sys profile disable fzf` |
+| 重新启用 | `shine sys profile enable fzf` |
 
 这些命令只修改 Shine 管理的 Shell 配置。禁用不会卸载软件；启用前需要先安装软件。
 `shine upgrade` 不会启用或禁用这些集成。修改后请打开新的 Shell。
@@ -101,7 +128,7 @@ Shell 集成用于让终端找到工具，或启用提示符、历史搜索等�
 
 ## 升级已安装的软件 {#用软件自己的工具升级}
 
-请使用安装该软件的包管理器或上游工具，例如 Homebrew、apt、winget、mise 或 rustup。
+请使用安装该软件的包管理器或上游工具，例如 Homebrew、apt、pacman、winget、mise 或 rustup。
 重新运行 `shine sys bootstrap` 会跳过已检测到的软件，不会升级它。`shine update` 和
 `shine upgrade` 处理的是 Shine 管理的配置，不负责第三方软件版本。
 
@@ -137,8 +164,8 @@ Shell 集成用于让终端找到工具，或启用提示符、历史搜索等�
 
 ## 支持的 Shell {#平台说明}
 
-macOS 支持 zsh，Ubuntu 支持 bash 和 zsh，Windows 使用 PowerShell。
-Ubuntu 和 macOS 的终端外观自动设置见[终端主题同步](./terminal-theme-sync.md)。
+macOS 支持 zsh，Ubuntu 和 Arch Linux 支持 bash 和 zsh，Windows 使用 PowerShell。
+Ubuntu、Arch Linux 和 macOS 的终端外观自动设置见[终端主题同步](./terminal-theme-sync.md)。
 
 ## 清理旧版本的本地 HTTP 服务 {#retire-legacy-http-service}
 

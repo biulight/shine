@@ -218,3 +218,194 @@ async fn provider_invocation_keeps_sudo_proxy_order_limits_and_platform_rejectio
     );
     assert!(!winget.requires_admin);
 }
+
+#[tokio::test]
+async fn pacman_uses_fixed_install_only_argv_with_root_and_sudo_proxy_paths() {
+    for admin in [false, true] {
+        let mut runtime = runtime(false);
+        runtime.context_mut_for_test().running_as_admin = admin;
+        runtime.context_mut_for_test().proxy_env =
+            BTreeMap::from([("HTTPS_PROXY".into(), "http://proxy.test".into())]);
+        runtime
+            .host()
+            .queue_process_output(Ok(crate::runtime::ProcessOutput {
+                exit_code: Some(1),
+                stderr: b"database is locked".to_vec(),
+                ..Default::default()
+            }));
+        let result = runtime
+            .run_package(
+                "arch",
+                SysPackageProvider::Pacman,
+                "neovim",
+                true,
+                "neovim",
+                &mut NullObserver,
+            )
+            .await
+            .unwrap();
+        assert!(!result.success);
+        let requests = runtime.host().process_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "never retry with refresh, upgrade or lock removal"
+        );
+        let request = &requests[0];
+        let mut expected = vec![];
+        if !admin {
+            expected.extend(["-n", "env", "HTTPS_PROXY=http://proxy.test", "pacman"]);
+        }
+        expected.extend(["-S", "--needed", "--noconfirm", "neovim"]);
+        assert_eq!(request.program, if admin { "pacman" } else { "sudo" });
+        assert_eq!(request.args, expected);
+        assert_eq!(request.env["HTTPS_PROXY"], "http://proxy.test");
+        assert_eq!(request.timeout, Some(BOOTSTRAP_TIMEOUT));
+        assert_eq!(request.io, crate::runtime::ProcessIo::CapturedTail);
+    }
+    assert_eq!(
+        package_preview("arch", SysPackageProvider::Pacman, "fzf").unwrap(),
+        "sudo pacman -S --needed --noconfirm fzf"
+    );
+    for os in ["ubuntu", "macos", "windows", "manjaro"] {
+        assert!(package_preview(os, SysPackageProvider::Pacman, "fzf").is_err());
+    }
+}
+
+#[tokio::test]
+async fn pacman_failure_guidance_preserves_status_logs_and_never_retries() {
+    for (provider, os) in [
+        (SysPackageProvider::Pacman, "arch"),
+        (SysPackageProvider::Apt, "ubuntu"),
+    ] {
+        for (exit_code, stderr) in [
+            (1, "error: HTTP 404"),
+            (1, "error: database is locked"),
+            (1, "错误：签名无效"),
+            (0, "mirror returned 404; next mirror succeeded"),
+        ] {
+            let runtime = runtime(false);
+            runtime
+                .host()
+                .queue_process_output(Ok(crate::runtime::ProcessOutput {
+                    exit_code: Some(exit_code),
+                    stderr: stderr.as_bytes().to_vec(),
+                    ..Default::default()
+                }));
+            let result = runtime
+                .run_package(os, provider, "neovim", false, "neovim", &mut NullObserver)
+                .await
+                .unwrap();
+            assert_eq!(result.success, exit_code == 0);
+            assert_eq!(result.logs, [stderr]);
+            if provider == SysPackageProvider::Pacman && exit_code != 0 {
+                assert!(
+                    result
+                        .failure_detail
+                        .starts_with("Pacman install failed (exit 1)")
+                );
+                assert!(
+                    result
+                        .failure_detail
+                        .contains("If downloads return HTTP 404")
+                );
+                assert!(
+                    result
+                        .failure_detail
+                        .contains("may be outdated or a mirror out of sync")
+                );
+                assert!(result.failure_detail.contains("pacman -Syu"));
+                assert!(
+                    result
+                        .failure_detail
+                        .contains("do not use pacman -Sy alone")
+                );
+            } else {
+                assert_eq!(
+                    result.failure_detail,
+                    if exit_code == 0 {
+                        ""
+                    } else {
+                        "Apt install failed (exit 1)"
+                    }
+                );
+            }
+            let calls = runtime.host().process_requests();
+            assert_eq!(calls.len(), 1);
+            if provider == SysPackageProvider::Pacman {
+                assert_eq!(calls[0].args, ["-S", "--needed", "--noconfirm", "neovim"]);
+            } else {
+                assert_eq!(calls[0].program, "apt-get");
+                assert_eq!(calls[0].args, ["install", "-y", "neovim"]);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn pacman_signal_termination_keeps_original_failure_without_download_advice() {
+    // SIGINT/SIGTERM set interrupted; other signals also have no exit code.
+    for interrupted in [false, true] {
+        let runtime = runtime(false);
+        let stderr = "mirror returned HTTP 404 before process termination";
+        runtime
+            .host()
+            .queue_process_output(Ok(crate::runtime::ProcessOutput {
+                exit_code: None,
+                interrupted,
+                stderr: stderr.as_bytes().to_vec(),
+                ..Default::default()
+            }));
+        let result = runtime
+            .run_package(
+                "arch",
+                SysPackageProvider::Pacman,
+                "fzf",
+                false,
+                "fzf",
+                &mut NullObserver,
+            )
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert_eq!(result.failure_detail, "Pacman install failed (exit signal)");
+        assert_eq!(result.logs, [stderr]);
+        assert_eq!(runtime.host().process_requests().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn pacman_diagnostics_do_not_reclassify_timeouts_or_spawn_errors() {
+    for kind in [
+        std::io::ErrorKind::TimedOut,
+        std::io::ErrorKind::PermissionDenied,
+    ] {
+        let runtime = runtime(false);
+        runtime
+            .host()
+            .queue_process_output(Err(std::io::Error::new(kind, "HTTP 404").into()));
+        let result = runtime
+            .run_package(
+                "arch",
+                SysPackageProvider::Pacman,
+                "fzf",
+                false,
+                "fzf",
+                &mut NullObserver,
+            )
+            .await;
+        if kind == std::io::ErrorKind::TimedOut {
+            let result = result.unwrap();
+            assert!(!result.success);
+            assert_eq!(
+                result.failure_detail,
+                "Pacman install failed: timed out after 30 minutes"
+            );
+        } else {
+            let error = result.err().expect("spawn error must propagate");
+            assert!(format!("{error:#}").contains("HTTP 404"));
+            assert!(!format!("{error:#}").contains("pacman -Syu"));
+        }
+        assert_eq!(runtime.host().process_requests().len(), 1);
+    }
+}

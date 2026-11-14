@@ -1215,7 +1215,11 @@ manifest, resource, and rollback observations in a fresh `sys-recovery` Plan, re
 under the operation lock, and restores only fingerprint-matching previous state before receipt
 commit. After commit it keeps the desired resource and cleans exact rollback. Explicit
 `sys profile enable/disable` also journals its shell rc changes, but owns only per-phase Shine
-sentinel blocks; recovery preserves unrelated current file content.
+sentinel blocks; recovery preserves unrelated current file content. Profile repair/shell switching
+can retain the exact previous receipt, including within the same captured second. Only that typed
+operation admits an unchanged non-managed receipt; the durable commit marker still distinguishes
+rollback from cleanup. Committed cleanup permits already-removed rollback files, while changed
+owned blocks, remaining rollback material, or receipts block recovery (ADR 0168).
 
 Profile active/base/new/merge file reconciliation retains the established three-way merge and is
 marked non-transactional in its Plan. Bootstrap profile composition, package/provider calls, and
@@ -1274,7 +1278,7 @@ probe/installer or administrator prompt; execution stops after the first failed 
 items retain their existing additive profile and receipt handling (ADR 0128).
 
 Every executable sys manifest declares `version = 2`. Each init item has both `[items.detect]` and
-`[items.install]`; Rust performs the read-only detection, invokes a fixed Homebrew/APT/Winget
+`[items.install]`; Rust performs the read-only detection, invokes a fixed Homebrew/APT/pacman/Winget
 provider argv or one per-item script, limits runtime and retained logs, detects again, and produces the
 canonical `sys/<item>` outcome. Installers drain both streams to bounded 64 KiB tails, report
 truncation, and preserve their exit status even when logs overflow; detection retains strict output
@@ -1302,6 +1306,11 @@ Neither external-source paths nor `Path::is_file` can reopen ambient preset stat
 Bounded Unix processes have cancellation guards for their process groups; inherited foreground
 terminal input is handed to the child and restored after it finishes or is cancelled (ADR 0100).
 
+Arch's pacman provider uses `-S --needed --noconfirm` with one validated package identifier.
+It never refreshes sync databases or upgrades the system. Root execution bypasses sudo; other
+users retain the same administrator approval and proxy forwarding as APT. Users must complete
+normal Arch full-system maintenance before installing missing packages (ADR 0167).
+
 Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`.
 `core/src/runtime/sys_profile/compose.rs` combines base pre/post content with all enabled item
 integrations in stable manifest order. Core reconciles the two generated files before its profile
@@ -1321,7 +1330,7 @@ ambient-Host test wrappers does not remove BOM/CRLF, legacy blocks or merge reco
 (ADR 0140).
 `sys profile enable/disable` changes only this activation state and generated profile content.
 
-Shine does not run update checks for bootstrap software. Homebrew, APT, Winget, mise, rustup, or
+Shine does not run update checks for bootstrap software. Homebrew, APT, pacman, Winget, mise, rustup, or
 the applicable upstream tool owns package versions and upgrades. Global `shine update` / `shine
 upgrade` remain limited to Shine configuration and managed sys resources.
 

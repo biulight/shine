@@ -335,7 +335,7 @@ items = ["neovim"]
 - Every init item declares both `detect` and `install`. Unknown versions and v1 manifests fail
   before execution.
 - Detection kinds are `command`, `path`, or `any`.
-- Package providers are fixed ensure-present Homebrew, Homebrew Cask, APT, or Winget actions; they
+- Package providers are fixed ensure-present Homebrew, Homebrew Cask, APT, pacman (Arch only), or Winget actions; they
   do not implement package upgrades. Complex installation uses one item-local script with normal
   exit status.
 - Put OS-wide shell setup in `profile/base.pre.*` and `profile/base.post.*`.
