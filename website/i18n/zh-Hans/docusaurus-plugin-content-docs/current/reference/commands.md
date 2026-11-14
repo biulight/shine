@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.10.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
+本页对应当前开发版（Next）。使用 `shine <COMMAND> --help` 查看已安装版本支持的选项。完整操作流程
 请阅读对应指南；本页只提供便于查找的命令索引。
 
 命令失败信息写入 stderr。设置 `NO_COLOR=1` 可禁用彩色输出。
@@ -286,9 +286,8 @@ shine env secret identity list
 ```
 
 范围参数互斥；省略时选择当前项目，否则全局。`--env-file` 选择该范围的 `shine.env.toml`；
-`--overlay` 只允许手动目录。默认写入会拒绝被高层遮蔽的键；显式目标允许维护被遮蔽项，
-输出会分别报告保存位置和当前有效来源。`set`、`delete` 与 `secret encrypt` 的旧 `--force`
-已移除，仍使用时会拒绝执行；请改用明确的范围与文件参数。
+`--overlay` 只允许手动目录。变量被更高优先级来源覆盖时，请明确选择要修改的位置，并在完成后
+核对生效来源。`set`、`delete` 与 `secret encrypt` 不再支持旧的 `--force`，请改用范围与文件参数。
 
 `env explain --reveal`、`env list --reveal`、`env get`、`env secret decrypt`、带 `--include-secrets` 的导出，以及 `env run`
 启动的子进程都可能接触明文。只在可信终端运行，也不要把密钥直接写入命令参数或文档。

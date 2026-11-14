@@ -19,10 +19,9 @@ This page covers advance preparation and manual migration. For new features and 
 ## Review external App presets when moving to 2.10 {#upgrade-to-shine-210}
 
 If you maintain App presets with Bun scripts, use Shine 2.10 to run
-`shine preset lint ./my-presets` before using them in automation. Shine can now recognize
-undeclared access that 2.9 missed, such as a read through a saved `Bun.file` handle.
-For each blocking finding, correct the script or declare the access it needs, then run lint
-again. See [App code checks](./custom-presets.md#check-app-code-before-execution).
+`shine preset lint ./my-presets` before using them in automation. Scripts accepted by 2.9 may now
+be blocked for undeclared access. For each blocking finding, correct the script or declare the
+access it needs, then run lint again. See [App code checks](./custom-presets.md#check-app-code-before-execution).
 
 ## From 2.7.x or earlier: SSH and downgrade planning {#upgrade-to-shine-28}
 
@@ -62,7 +61,7 @@ See [runtime environment inputs](./custom-presets.md#declare-runtime-environment
 ## From 2.5.x or earlier: uninstall scripts {#upgrade-to-shine-26}
 
 Shine 2.6 removes `--purge` from `uninstall`, `app uninstall`, and `shell uninstall`.
-Remove that option from scripts; commands that still contain it fail before loading configuration.
+Remove that option from scripts; commands that still contain it fail.
 
 ## From 2.3.x or earlier: replace HTTP service dependencies {#retire-an-older-local-http-service}
 

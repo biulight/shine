@@ -69,10 +69,47 @@ shine sys info split-dns
 
 `ccenv` 的 Codex provider 通过本机 CLIProxyAPI 使用 `CLIPROXYAPI_AUTH_TOKEN`；DeepSeek 和 Qwen 分别使用对应的 `*_API_KEY`。凭据按 `_SECRET`、旧版 `_GPG_SECRET`、明文值的顺序解析；一旦选中的密文解密失败就会停止，不会回退。CLIProxyAPI 应只绑定回环地址，并配置与客户端相同的 token。
 
-图片命令接受多个文件或目录第一层扫描，默认生成新文件而不修改输入，并支持 `--output-dir` 与各命令
-自己的临时覆盖参数。完整说明见[图片工作流](../guides/custom-presets.md#从来源文件夹到已安装能力)。
-
 更多安装、重装与卸载说明见[管理 Shell 预设](../guides/shell-presets.md)，环境变量格式见[管理环境变量](../guides/environment.md)。
+
+### 图片工作流 {#image-workflow}
+
+这些命令压缩、缩放和转换 JPEG、PNG、WebP。运行命令的每台机器都必须在 `PATH` 中安装
+Bun 1.3.14 或更高版本；Shine 不内置 Bun，无需另外安装图片处理库。
+
+下面的流程会使用三个命令，因此先安装整个类别：
+
+```bash
+shine info shell/image-tools
+shine install shell/image-tools
+```
+
+安装后，按 [Shell 预设](../guides/shell-presets.md) 的说明打开新终端或重新加载 shell 配置，再运行：
+
+```bash
+img-compress photo.jpg screenshots/
+img-resize --width 1280 --output-dir ./resized photos/
+img-convert --format webp --quality 75 --output-dir ./webp hero.png gallery/
+shine info shell/image-tools --diff
+shine upgrade shell/image-tools
+shine shell uninstall image-tools/img-compress --dry-run
+```
+
+最后一条命令只预览移除 `img-compress`。如果一开始就只需要这个命令，可以安装
+`shell/image-tools/img-compress`，无需安装整个类别。
+
+每个命令都接受多个文件或目录输入。目录只扫描第一层的 JPEG、PNG、WebP，不会递归。未指定
+`--output-dir` 时，结果保存在来源旁边，名称形如 `photo.compressed.jpg`、
+`photo.resized.jpg` 或所选转换格式的扩展名。指定输出目录后，所有结果平铺到该目录；重复目标名会
+明确失败。已有目标也会失败，只有 `--force` 才允许替换；来源图片永远不会被原地修改。
+`--force` 也不允许替换输入图片。
+
+批处理遇到单项失败后会继续，并在存在任意失败时返回非零状态。前 20 条失败会显示在终端；超过
+20 条时，完整列表还会写入 `--output-dir` 下唯一命名的 `image-tools-errors-*.log`，未指定输出目录
+时则写入当前目录。
+
+`IMAGE_QUALITY`、`IMAGE_MAX_WIDTH`、`IMAGE_MAX_HEIGHT` 默认分别为 `80`、`1920`、`1080`。
+命令参数只覆盖当次运行，本地 Shine 配置则会保留这台机器的长期偏好。默认 snapshot 模式下，修改
+复制或外部来源后仍需执行 `shine upgrade`，已安装命令才会变化。
 
 ## App 预设
 

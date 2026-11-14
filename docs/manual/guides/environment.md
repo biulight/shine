@@ -72,10 +72,14 @@ Write targets depend on options and cwd, independently of the effective source:
 | `--env-file` | Selected or default scope's `shine.env.toml` |
 | `--overlay` | Active manual overlay's `shine.env.toml` |
 
-Scope options are mutually exclusive. `--overlay --env-file` selects the same overlay file. Scripts
-should specify both scope and file options to avoid cwd dependence. With no target options, a key
-defined in a higher layer is protected, even if values match. Explicit targets allow maintenance of
-shadowed entries and report the saved file, current effective source, and whether the value changed.
+Choose one scope: `--global`, `--project`, or `--overlay`. Add `--env-file` when you want that
+scope's environment file; for `--overlay` it is optional because both forms use the same file.
+In scripts, select the destination explicitly instead of depending on the working directory.
+
+If a higher-priority file overrides the key, a write without target options is refused. Use
+`shine env explain KEY` to locate the effective value, then choose the intended write target.
+Writing to a lower-priority file does not override the higher-priority value; check the reported
+effective source afterward.
 
 Choose the operation and storage location you need:
 
@@ -93,8 +97,8 @@ The encryption command above preserves the plaintext `MY_TOKEN` in its original 
 Deletion removes only an existing entry in the selected file; an absent local entry is an error.
 It restores inheritance, never disables a variable, removes other layers, or also deletes
 `KEY_SECRET`. Empty strings remain valid values. Managed Git overlay mirrors reject writes: edit
-upstream, use a manual maintenance directory, or choose local overrides. These three write entries
-reject the retired `--force` without writing and suggest the correct replacement options.
+upstream, use a manually linked overlay, or choose local overrides. Old scripts using `--force`
+for these writes must switch to the explicit scope options above.
 
 Avoid editing configuration while an env write is in progress. If Shine reports a concurrent
 change, inspect the file and retry. A message saying the file was saved but its effective state
@@ -159,16 +163,21 @@ and [`cargo yank`](https://doc.rust-lang.org/stable/cargo/commands/cargo-yank.ht
 ### Install a transparent wrapper for fixed credential variables
 
 Use a transparent wrapper when a CLI repeatedly needs the same fixed credential variable. Some
-CLIs, such as GitHub CLI, read a variable like `GH_TOKEN` instead of accepting it as an argument:
+CLIs, such as GitHub CLI, read a variable like `GH_TOKEN` instead of accepting it as an argument.
+
+Proxy only a command you trust, using a bare name containing ASCII letters, numbers, `-`, `_`, or
+`.`. Put `~/.shine/bin/` early in `PATH`. The target must be an executable outside Shine's command
+directory and cannot be another Shine wrapper or Shine itself.
 
 ```bash
 shine env proxy install gh --with GH_TOKEN
 gh pr list
 ```
 
-Shine creates a same-name shim in `~/.shine/bin/` and records the real command found in `PATH`. The
-shim resolves `GH_TOKEN_SECRET` only for its child and falls back to plaintext `GH_TOKEN`. It never
-exports the value back to the parent. `--with` is repeatable and accepts `KEY=ALIAS`.
+After installation, keep invoking `gh` normally. The proxy provides `GH_TOKEN` to the command,
+preferring encrypted `GH_TOKEN_SECRET` and using plaintext `GH_TOKEN` only when no encrypted value
+exists. Your terminal's environment stays unchanged. Repeat `--with` for more variables or use
+`KEY=ALIAS` to rename one for the command.
 
 The wrapper keeps using the Shine configuration directory chosen at installation, even if you
 later change `SHINE_CONFIG_DIR`. Re-run `env proxy install` to use another configuration directory.
@@ -188,12 +197,8 @@ shine env proxy disable cargo
 ```
 
 While enabled, every Cargo subcommand and any descendant process may inherit the token. Disabling
-the rule retains the shim and forwards directly to the real Cargo without decrypting or injecting
-values. For an occasional yank, prefer the one-time `env run` form above.
-
-Proxy only a command you trust, using a bare name containing ASCII letters, numbers, `-`, `_`, or
-`.`. Put `~/.shine/bin/` early in `PATH`. The target must be an executable outside Shine's command
-directory and cannot be another Shine wrapper or Shine itself.
+the rule lets Cargo run without decrypting or injecting values. For an occasional yank, prefer the
+one-time `env run` form above.
 
 On Windows, use `gh`, not `gh.exe`: `.exe`, `.com`, `.bat`, `.cmd`, and `.ps1` suffixes are rejected.
 Previously installed suffixed names can still be removed with `shine env proxy uninstall <COMMAND>`.
@@ -204,8 +209,8 @@ it again; do not assume recovery completed.
 
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
 `--project` to scope the rule; a project rule for the same command overrides the global one.
-Outside that project, the shim uses the global rule if present; otherwise it forwards to the real
-command without injecting values:
+Outside that project, the global rule applies if present; otherwise the command runs without
+injected values:
 
 ```bash
 shine env proxy install gh --with GH_TOKEN --project
@@ -224,11 +229,13 @@ Without `--project`, enable/disable changes the global rule even inside a projec
 can still override it. If Shine reports that the rule was saved but its effective state could not
 be verified, inspect the configuration and run `shine env proxy list` again.
 
-Remove the managed shim and user-level rule when no longer needed:
+Uninstall the command proxy and its global rule when no longer needed:
 
 ```bash
 shine env proxy uninstall gh
 ```
+
+Project rules are kept; review them before reinstalling the proxy.
 
 If the real executable moves or is replaced, rerun the install command to record its new path.
 
@@ -440,8 +447,8 @@ shine env secret identity init --phone --label "Work laptop" --transport auto
 ```
 
 `auto` tries Wi-Fi discovery first. Without a responding phone it selects Developer USB/ADB on
-Windows or QR on macOS. For this experimental workflow, keep the Wi-Fi listener ready or select
-Android ADB explicitly; QR with tagged recipients is outside the documented Beta validation scope.
+Windows or QR on macOS. This guide covers Wi-Fi and Android ADB only. Keep the Wi-Fi listener
+ready or select ADB explicitly; do not use the QR fallback with tagged recipients in this workflow.
 For USB, run the desktop command first, wait for it to request the phone connection, then choose
 **Pair · USB** on the phone:
 
@@ -565,30 +572,35 @@ file formats and precedence.
 
 ## Initialize a workspace from dotenv
 
-At a project root with Vite-style `.env` files, generate a Shine workspace and TOML sources:
+At a project root with Vite-style `.env` files, generate a Shine workspace and TOML sources.
+Before importing, identify every sensitive key and pass it with repeatable `--secret` options.
+Unmarked values go into `[plain]`; marked values go into `[secret]` but remain plaintext until sealed.
+
+The following example marks `DATABASE_URL` as sensitive. Replace it with your keys, or omit
+`--secret` only when all imported values are non-secret:
 
 | Operation | Command |
 | --- | --- |
-| Preview importing dotenv files | `shine env workspace init --from-dotenv --dry-run` |
-| Apply the reviewed import | `shine env workspace init --from-dotenv` |
+| Preview importing dotenv files | `shine env workspace init --from-dotenv --secret DATABASE_URL --dry-run` |
+| Apply the reviewed import | `shine env workspace init --from-dotenv --secret DATABASE_URL` |
 
 The command reads `.env`, `.env.local`, `.env.<mode>`, and `.env.<mode>.local`, discovers modes, and
-preserves that precedence. Source dotenv files are unchanged. Existing targets are preserved unless you add `--force`. Import selected modes with repeatable `--mode`:
+preserves that precedence. To import only selected modes, add repeatable `--mode` options to both
+the preview and import commands, for example `--mode development --mode production`.
+`--dry-run` creates or replaces no files. Existing targets are preserved unless you deliberately
+add `--force` to replace them.
+
+After importing, inspect the generated sources for any secrets left in `[plain]`. Configure the
+backend and recipients in `shine.workspace.toml` as described under
+[layered project environments](#use-layered-project-environments), then seal:
 
 ```bash
-shine env workspace init --from-dotenv --mode development --mode production
-```
-
-`--dry-run` previews the import without creating or replacing files.
-
-Mark known sensitive keys for `[secret]`, then configure recipients and seal. Unmarked values are
-imported as plaintext; never accidentally commit credentials as ordinary configuration.
-Imported secrets also remain plaintext until sealing. On Unix, generated workspace and source files are accessible only to their owner.
-
-```bash
-shine env workspace init --from-dotenv --secret DATABASE_URL
 shine env secret seal
 ```
+
+On Unix, generated workspace and source files are accessible only to their owner. Do not commit
+unsealed secrets. Original dotenv files stay unchanged, including any plaintext credentials;
+keep those files private even after sealing the Shine sources.
 
 To preserve dotenv semantics, values containing `$` (including `$BASE_URL` and `${BASE_URL}`) or
 escaped double-quoted content are rejected, even inside quotes. Resolve interpolation before

@@ -44,7 +44,7 @@ API_URL = { value = "https://api.example.com", description = "API 地址" }
 [[env_proxy]]
 command = "gh"
 with = ["GH_TOKEN"]
-# 省略时为 true；设为 false 时 shim 不解密也不注入值
+# 省略时为 true；设为 false 时照常运行命令，不解密也不注入值
 enabled = false
 ```
 
@@ -94,7 +94,7 @@ enabled = false
 它不代表持续代码审阅，也不能替代每次操作前的计划确认。
 
 `preset` 覆盖当前生效的目标，不包括将来新增的目标。旧授权即使仍可查看和撤销，也可能需要
-重新审阅。已停用的 `allow_app_hooks` 和 `allow_sys_code` 不再授予信任，并会在下次保存配置时移除。
+重新审阅。已停用的 `allow_app_hooks` 和 `allow_sys_code` 不再授予信任，请使用上面的信任命令。
 
 ## Env 条目格式与说明
 
@@ -122,7 +122,9 @@ DETAILED_VALUE = { value = "example", description = "供构建任务使用的示
 Shine 从当前目录向上查找最近的 `shine.config.toml`。项目配置覆盖全局配置，未声明的字段继续
 使用全局值；相对路径以声明它的配置文件所在目录为基准。
 
-`[[env_proxy]]` 也遵循项目覆盖规则：项目内同名 `command` 的规则会取代全局规则，其它全局代理规则继续生效。优先用 `shine env proxy install`、`enable` 和 `disable` 管理这些条目，避免手改后忘记对应的 `~/.shine/bin/` shim。
+`[[env_proxy]]` 也遵循项目覆盖规则：项目内同名 `command` 的规则会取代全局规则，其它全局代理规则继续生效。
+优先用 `shine env proxy install`、`enable` 和 `disable` 管理这些条目，保持配置与
+`~/.shine/bin/` 中已安装的命令入口一致。
 
 如果仍在使用旧的 `config.toml`、`.env.toml` 或全局 `env.toml`，请按
 [旧配置恢复步骤](../troubleshooting.md#升级到-040-后提示旧配置文件)处理。
@@ -153,7 +155,8 @@ Shine 从当前目录向上查找最近的 `shine.config.toml`。项目配置覆
 外部 Shell 预设默认使用 `snapshot` 模式：修改来源后，需运行 `shine update` 和
 `shine upgrade` 才能应用。仅在开发时使用 `external_shell_mode = "live"`；该模式下来源修改
 会在下次调用时生效，必须授予 development trust。`target`、`runtime`、`transforms` 或 `env`
-变化后仍需运行 `shine upgrade` 更新已安装命令。
+变化后仍需运行 `shine upgrade` 更新已安装命令。切换 snapshot/live 模式也需要更新已安装命令，
+步骤见[外部 Shell 部署方式](../guides/custom-presets.md#选择外部-shell-的部署方式)。
 
 升级 Shine 后，请用 `shine upgrade` 更新已有 Live Bun 命令。使用 transforms 的命令沿用
 安装时选择的配置目录，项目覆盖仍取决于调用时的工作目录。

@@ -69,9 +69,12 @@ API_URL = { value = "https://api.example.com", description = "API 地址" }
 | `--env-file` | 所选或默认范围的 `shine.env.toml` |
 | `--overlay` | 当前手动 overlay 的 `shine.env.toml` |
 
-范围参数互斥。`--overlay --env-file` 使用同一目标。脚本应同时指定范围和文件选项，
-避免依赖执行目录。未传任何目标参数时，同键被更高层定义就拒绝写入，即使值相同；显式选择
-目标允许维护被遮蔽项，只修改指定文件并分别报告保存位置、当前有效来源和值是否改变。
+在 `--global`、`--project` 和 `--overlay` 中选择一个范围。需要写入该范围的环境文件时，
+添加 `--env-file`；对 `--overlay`，加与不加都指向同一个文件。脚本中应明确指定写入位置，
+避免依赖执行时的目录。
+
+同名变量被更高优先级的文件覆盖时，不指定目标的写入会被拒绝。先用 `shine env explain KEY`
+查找生效来源，再选择要修改的位置。写入低优先级文件不会覆盖高优先级的值，完成后请检查输出中的生效来源。
 
 按需选择操作和写入位置：
 
@@ -88,8 +91,8 @@ API_URL = { value = "https://api.example.com", description = "API 地址" }
 
 `delete` 只删除目标文件实际存在的项，不删除其他层或同时删除 `KEY_SECRET`；不存在则报错。
 删除恢复继承，不表示禁用变量，空字符串仍是合法值。Git 托管 overlay 镜像禁止直接写入；
-应修改上游、使用手动维护目录，或选择本地覆盖层。上述三个写入入口的旧 `--force` 已停用，
-请求会失败且零写入，并提示准确的替代参数。
+应修改上游、使用手动关联的 overlay，或选择本地覆盖层。旧脚本若用 `--force` 执行这些写入，
+请改用上面的明确范围参数。
 
 环境变量写入期间请勿同时编辑配置。若提示文件发生变化，请检查后重试。
 若提示“文件已保存，但有效状态核对失败”，说明写入已发生；再次修改前，请重新查询该值。
@@ -150,17 +153,20 @@ Shine 注入。详见 [Cargo registry authentication](https://doc.rust-lang.org/
 ### 为固定凭据变量安装透明代理
 
 如果一个 CLI 每次调用都需要同一个固定凭据变量，可以安装透明代理。有些 CLI（例如 GitHub
-CLI）不会接受从命令行传入的 token，而是读取 `GH_TOKEN` 这类环境变量：
+CLI）不会接受从命令行传入的 token，而是读取 `GH_TOKEN` 这类环境变量。
+
+只代理你信任的命令，名称只能包含 ASCII 字母、数字、`-`、`_` 或 `.`。
+请将 `~/.shine/bin/` 放在 `PATH` 的靠前位置。目标必须是 Shine 命令目录之外的可执行程序，
+不能是另一个 Shine 代理或 Shine 自身。
 
 ```bash
 shine env proxy install gh --with GH_TOKEN
 gh pr list
 ```
 
-Shine 会在 `~/.shine/bin/` 创建同名 shim，并记录当前 `PATH` 中找到的真实命令。运行 `gh`
-时，shim 只在它的子进程中解析 `GH_TOKEN_SECRET`；若不存在密文，才读取明文 `GH_TOKEN`。
-该值不会写回或导出到父 Shell。`--with` 可重复使用，也可写成 `KEY=ALIAS`，以不同的变量名
-传给目标命令。
+安装后照常调用 `gh`。代理会为命令提供 `GH_TOKEN`，优先解密 `GH_TOKEN_SECRET`，没有密文时
+才使用明文 `GH_TOKEN`，不会改变当前终端的环境。需要多个变量时重复使用 `--with`，
+或用 `KEY=ALIAS` 为传给命令的变量改名。
 
 代理始终使用安装时选定的 Shine 配置目录，之后修改 `SHINE_CONFIG_DIR` 也不会切换。
 需要改用另一个配置目录时，重新运行 `env proxy install`。项目规则仍按运行命令时所在的目录选择。
@@ -178,12 +184,8 @@ cargo yank my-crate@1.2.3
 shine env proxy disable cargo
 ```
 
-启用期间，每个 Cargo 子命令及其后代进程都可能继承 token。`disable` 会保留 shim，只停止
-解密和注入，并直接转发到真实 Cargo。偶尔执行 yank 时，应优先采用上面的单次 `env run`。
-
-只代理你信任的命令，名称只能包含 ASCII 字母、数字、`-`、`_` 或 `.`。
-请将 `~/.shine/bin/` 放在 `PATH` 的靠前位置。目标必须是 Shine 命令目录之外的可执行程序，
-不能是另一个 Shine 代理或 Shine 自身。
+启用期间，每个 Cargo 子命令及其后代进程都可能继承 token。`disable` 后仍可使用 Cargo，
+但不再解密或注入变量。偶尔执行 yank 时，应优先采用上面的单次 `env run`。
 
 Windows 上请使用 `gh`，不要使用 `gh.exe`：安装会拒绝 `.exe`、`.com`、`.bat`、`.cmd` 和
 `.ps1` 后缀。此前安装的带后缀名称仍可用 `shine env proxy uninstall <COMMAND>` 移除。
@@ -193,7 +195,7 @@ Windows 上请使用 `gh`，不要使用 `gh.exe`：安装会拒绝 `.exe`、`.c
 
 默认规则保存在全局 `~/.shine/config.toml`。在含有 `shine.config.toml` 的项目内加入
 `--project`，可将该命令的规则限定到项目；同一命令的项目规则会覆盖全局规则。
-离开项目后，shim 会使用已有的全局规则；若没有适用规则，则直接执行原命令，不注入变量：
+离开项目后使用已有的全局规则；若没有适用规则，命令仍可运行，但不注入变量：
 
 ```bash
 shine env proxy install gh --with GH_TOKEN --project
@@ -211,11 +213,13 @@ shine env proxy list
 不加 `--project` 时，启用/禁用只修改全局规则，项目规则仍可覆盖它。
 如果提示规则已保存但无法确认生效状态，请检查配置并再次运行 `shine env proxy list`。
 
-不再需要代理时，移除 Shine 管理的 shim 及其用户级规则：
+不再需要时，卸载命令代理及其全局规则：
 
 ```bash
 shine env proxy uninstall gh
 ```
+
+项目规则会保留，重新安装代理前请检查这些规则。
 
 如果真实命令被升级、移动或删除，重新执行安装命令以记录新的目标路径。
 
@@ -415,8 +419,8 @@ shine env secret identity init --phone --label "Work laptop" --transport auto
 ```
 
 `auto` 先查找 Wi-Fi 手机；没有响应时，Windows 会选择 Developer USB/ADB，macOS 会选择 QR。
-本实验流程请保持手机 Wi-Fi 监听就绪，或显式选择 Android ADB；tagged recipient 的 QR 流程
-不在已记录的 Beta 验证范围内。USB 配对的顺序相反：先启动桌面命令，等它提示连接手机，
+本指南只覆盖 Wi-Fi 和 Android ADB。请保持手机 Wi-Fi 监听就绪，或显式选择 ADB；
+此流程中不要使用 tagged recipient 的 QR 回退方式。USB 配对的顺序相反：先启动桌面命令，等它提示连接手机，
 再在手机选择 **Pair · USB**：
 
 ```sh
@@ -532,28 +536,31 @@ shine env run --mode production -- bun run build
 
 ## 从 dotenv 初始化工作区
 
-已有 Vite 风格的 `.env` 文件时，可在项目根目录生成 Shine workspace 和对应的 TOML 环境源：
+已有 Vite 风格的 `.env` 文件时，可在项目根目录生成 Shine workspace 和对应的 TOML 环境源。
+导入前先列出全部敏感键，并为每个键添加 `--secret`。未标记的值会进入 `[plain]`；
+标记的值会进入 `[secret]`，但在封存前仍是明文。
+
+下面以 `DATABASE_URL` 为敏感键。请替换为实际键名；只有全部导入值都不敏感时，才省略 `--secret`：
 
 | 操作 | 命令 |
 | --- | --- |
-| 预览导入 dotenv 文件 | `shine env workspace init --from-dotenv --dry-run` |
-| 执行已审阅的导入 | `shine env workspace init --from-dotenv` |
+| 预览导入 dotenv 文件 | `shine env workspace init --from-dotenv --secret DATABASE_URL --dry-run` |
+| 执行已审阅的导入 | `shine env workspace init --from-dotenv --secret DATABASE_URL` |
 
-它读取 `.env`、`.env.local`、`.env.<mode>` 与 `.env.<mode>.local`，自动发现 mode，并保持该覆盖顺序。原 dotenv 文件不会被修改；已有目标默认保留，只有确认要替换时才添加 `--force`。只导入指定 mode 时可重复使用 `--mode`：
+它读取 `.env`、`.env.local`、`.env.<mode>` 与 `.env.<mode>.local`，自动发现 mode，并保持该覆盖顺序。
+只导入指定 mode 时，在预览和导入命令中都添加 `--mode`，可重复使用，
+例如 `--mode development --mode production`。`--dry-run` 不创建或替换文件。
+已有目标默认保留，只有确认要替换时才添加 `--force`。
 
-```bash
-shine env workspace init --from-dotenv --mode development --mode production
-```
-
-`--dry-run` 只预览导入，不创建或替换文件。
-
-导入时可将明确知道的敏感键放进 `[secret]`，之后配置 recipient 并封存。未标记的值会作为明文导入；不要把实际凭据误当作普通配置提交。
-导入的 Secret 在封存前也仍是明文。Unix 上，生成的 workspace 与环境源文件仅允许所有者访问。
+导入后，检查生成的环境源是否仍有敏感值落在 `[plain]` 中。
+按[使用分层项目环境](#使用分层项目环境)在 `shine.workspace.toml` 中配置加密后端和 recipient，再封存：
 
 ```bash
-shine env workspace init --from-dotenv --secret DATABASE_URL
 shine env secret seal
 ```
+
+Unix 上，生成的 workspace 与环境源文件仅允许所有者访问。不要提交尚未封存的秘密。
+原 dotenv 文件保持不变，其中的凭据仍是明文；即使 Shine 环境源已经封存，也要继续妥善保管这些原文件。
 
 为避免改变 dotenv 语义，含 `$`（包括 `$BASE_URL` 和 `${BASE_URL}`）或带转义的双引号内容的值会被拒绝，即使它们位于引号内。先解析插值再导入；需要字面量美元符号时，请手动编写 Shine 环境源。单行反引号值会保留其中的 `#`、引号、反斜杠和空白；跨行引号值会被拒绝。未加引号的 `#` 表示注释开始；值本身含 `#` 时请加引号。
 

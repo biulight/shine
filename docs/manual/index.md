@@ -47,12 +47,11 @@ encrypted, then decrypt and provide them when a selected program runs. This redu
 plaintext in working folders or across an entire terminal session. Give sensitive information only
 to programs you trust.
 
-Programs that read files can use temporary decrypted copies. Shine starts the program after all
-selected files are ready and attempts to remove the files it created when the program ends.
-If a destination already exists, Shine stops rather than overwriting it. Files replaced during the
-run are kept, and cleanup failures are reported. Temporary files are plaintext while in use, so
-programs with sufficient permissions can read them. After force-killing Shine or losing power,
-inspect and remove any leftovers.
+Programs that read files can use [temporary decrypted copies](./guides/environment.md#workspace-secret-files).
+Existing files are not overwritten. Shine attempts to remove the temporary files when the command
+ends. They are plaintext while in use and can be read by other processes with sufficient
+permissions. Cleanup is not guaranteed after an interruption;
+check warnings and remove leftovers. Only give access to programs you trust.
 
 ## Let AI help you code, with fewer plaintext secrets in your project
 

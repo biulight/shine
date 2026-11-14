@@ -16,355 +16,17 @@ Choose a starting point:
 | Maintain your own complete collection | [Export presets](#export-the-complete-preset-collection) |
 | Create a new App, Shell, or Sys category | [Create category metadata](#create-category-metadata) |
 | Use an AI assistant to draft a preset | [Create with AI](#create-a-preset-with-ai) |
+| Try a category you have written | [Preview and install](#preview-and-install-your-category) |
 
 The source choices have different fallback rules:
 
 - with the built-in base, an overlay replaces matching paths and every unmatched path still comes
-  from the embedded preset;
+  from the built-in preset;
 - a full external `presets_dir` is authoritative for app and shell categories. Missing content is
-  not silently borrowed from the binary.
+  not filled in from built-in presets.
 
 Check `Preset Source` and `Presets Overlay` in command output to confirm which files Shine is using.
-
-## Create a preset with AI
-
-Shine ships the portable Agent Skill at `skills/shine-preset-author/` in its source and crate
-package. Register that directory with your AI client's native skill installer or skills-directory
-mechanism, then ask in ordinary language for an app configuration, shell command, system bootstrap,
-or customization of a built-in category. Shine does not detect or edit Codex, Claude, Cursor, or
-other client configuration.
-
-The skill generates a preset, validates it, and previews installation in an isolated directory.
-It does not activate the preset or run its scripts. Review the result before installing it.
-
-You can use the same flow without an AI client:
-
-```bash
-mkdir -p my-presets/app/my-editor
-cd my-presets/app/my-editor
-shine preset new app
-```
-
-Add config files and edit `shine.toml`.
-
-## Validate and package a preset
-
-Run these checks from the category directory:
-
-```bash
-shine preset validate . --format json
-shine preset lint . --format json
-shine preset plan . --platform macos --format json
-shine preset test . --format json
-```
-
-`preset validate` also accepts a repository root, one category directory, or its `shine.toml`. Root
-validation scans only direct category directories below `app/`, `shell/`, and `sys/`; an empty root
-is invalid. It evaluates the macOS, Linux, and Windows declarations on any host, verifies referenced
-files and locked Bun dependency policy, and reports compatible metadata-free app/shell categories
-with a `legacy_metadata` warning. It does not load active source/overlay settings, initialize config,
-check for updates, write files, access the network, or execute preset code.
-
-The default output is text. `--format json` is available for tools and CI. Validation errors exit
-with status 1; warnings do not.
-
-Run `shine preset schema --format json` when authoring tools need the exact report and fixture
-formats supported by the installed version. Continue to use `preset validate` as the acceptance
-check for App, Shell, and Sys metadata.
-
-Run `preset lint` after validation to find author-quality and portability issues. Warnings are
-advisory by default; CI can add `--deny-warnings` after reviewing them.
-If lint cannot load the input, run `shine preset validate <PATH>` to inspect the failure.
-Lint checks each platform's applicable resources, including PowerShell commands on Windows;
-App categories or files intentionally unavailable on an OS are skipped for that OS.
-
-Then run `preset plan` for each target platform. It previews a hypothetical first installation and
-shows actions, permissions, and blockers without changing the machine. A blocker commonly means the
-preview lacks a required environment value, trust decision, command, or administrator state; the
-report is authoring feedback, not approval for a real installation.
-
-Add `shine.test.toml` when the category needs repeatable cross-platform expectations. Tests describe
-the starting conditions and expected results without running setup code. Runnable App, Shell, and
-Sys examples are available under `examples/presets`. `preset test` accepts one category, not a
-repository root.
-Use relative file bases and placeholders such as `${HOME}` in fixture receipts for portable tests.
-
-When you need a distributable artifact, pack the reviewed category outside its source tree:
-
-```bash
-shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
-```
-
-`shine.test.toml` is for author testing and is not included in the bundle. The output must be
-outside the category directory, including after resolving symbolic links. Use `--force` only to
-replace an existing output; it does not bypass validation or packaging restrictions.
-
-## Check App code before execution
-
-Before distributing App scripts, run:
-
-```bash
-shine preset lint <PATH>
-```
-
-Shine checks Bun generators, script hooks, artifacts, teardown scripts, and supported local
-JavaScript/TypeScript dependencies. Fix blocking findings at the reported file and line: declare
-the access the script needs, or change the script to match its declarations. Parse failures also
-block execution. Trust, `--yes`, and `opaque_code = "unrestricted"` do not bypass these checks.
-
-Common declarations include:
-
-| Script behavior | Required declaration |
-| --- | --- |
-| Fetch from `https://example.org/data` | Network host `example.org` |
-| Read `in` with `Bun.file('in').text()` | Filesystem `read` on `in` |
-| Copy a file with Node `copyFile` | `read` on the source and `write` on the destination |
-| Rename a file with Node `rename` | `remove` on the source and `write` on the destination |
-| Read a configured environment value | An `env` entry with `source`, optional `target`, and `sensitivity` |
-
-The script reads the `target` name from an environment mapping. Only documented fixed variables
-are exempt from declaration; a `SHINE_` prefix alone is not an exemption. Never put environment
-values or URL credentials in capability declarations.
-
-`lint` checks all App code entries, including generators whose inputs are absent. `preset plan`
-and `preset test` check only entries selected by their hypothetical inputs. These commands do not
-run scripts, download dependencies, or read real environment values.
-
-Coverage gaps—for example, dynamic paths, package dependencies, subprocess effects, or unsupported
-languages—are advisory. A declaration that the checked source does not confirm is also advisory.
-A passing check does not prove that code is safe or fully analyzed; review the code and retain the
-normal trust and approval steps.
-
-Use `--format json` for complete diagnostics and `--deny-warnings` when warnings should fail CI.
-In `info` or `update`, `--verbose` shows more detail without executing generators; explicit
-evaluation still requires `--run-generators` and trust.
-
-## Tool compatibility {#tool-compatibility}
-
-If your editor or CI consumes JSON reports, run `shine preset schema --format json` after upgrading
-Shine and check that the consumer supports the installed version. Use the generated schema for
-report fields and `shine.test.toml` fixtures instead of copying version numbers from older examples.
-
-Treat `complete = false` or a nonempty `unfinished_cases` list as an incomplete check. A fixture can
-expect a blocked installation, but cancellation or exhausted analysis limits still mean the test
-could not finish. Resolve the reported issue before accepting the result.
-
-## Migrate a 1.x source
-
-Preview the active external source and overlay, or name a repository, category, or manifest:
-
-| Operation | Command |
-| --- | --- |
-| Preview active external sources | `shine preset migrate --dry-run` |
-| Preview this source's migration | `shine preset migrate ./my-presets --dry-run` |
-| Apply after reviewing the preview | `shine preset migrate ./my-presets` |
-
-Review the metadata diff before confirming; the default answer is No. Migration changes only
-`shine.toml` and backs it up before writing. It does not change scripts, data files, environment
-values, installed resources, or trust. Resolve entries reported as needing manual migration;
-Sys v1 dispatchers require the [v2 migration guide](./sys-preset-v2-migration.md).
-
-Use `--yes` only after review. For automated inspection, use `--format json --dry-run`; applying
-with JSON output also requires `--yes`. JSON reports do not include file contents or diffs.
-
-A Git-managed overlay is read-only. Migrate and validate its upstream checkout, commit and push
-the changes, then run `shine preset pull` on each consuming device.
-
-If migration reports mixed LF/CRLF line endings, choose one style for that file and retry.
-
-## Describe capabilities and required inputs {#declare-permissions}
-
-Permission schema v1/v2 tables are optional author capability statements. App statements belong to
-the category root, each Shell `[[files]]` command can have `[files.permissions]`, and each Sys
-`[[items]]` target can have `[items.permissions]`. Shine validates any table you provide, but a
-missing or empty table does not hide or confine arbitrary code. Supported App code still needs
-accurate declarations for statically identified behavior. Unsupported versions, unknown
-fields, invalid identities, and duplicates are errors.
-
-```toml
-[permissions]
-schema_version = 1
-administrator = true
-filesystem = [
-  { access = ["read", "write"], base = "home", path = ".config/example" },
-  { access = ["execute"], base = "preset", path = "build.ts" },
-]
-network = [{ scope = "host", host = "api.example.com" }]
-commands = ["bun"]
-environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
-system = [{ capability = "split-dns", resource = "private-domain" }]
-```
-
-Permission schema v2 supports the unrestricted author statement:
-
-```toml
-[permissions]
-schema_version = 2
-opaque_code = "unrestricted"
-```
-
-For Shell and Sys categories, use `permission_defaults` to apply one declaration to entries that
-do not provide their own target-local override:
-
-```toml
-[permission_defaults]
-schema_version = 2
-opaque_code = "unrestricted"
-
-[[files]]
-source = "foo.sh"
-target = "foo"
-
-[[files]]
-source = "bar.sh"
-target = "bar"
-```
-
-Defaults are resolved separately for each command or Sys item; a targeted operation does not
-inherit capabilities from unrelated entries. An entry-level permission table replaces the
-default for that entry.
-
-Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`; non-absolute paths are
-normalized relative paths, with `.` meaning the selected base root. Commands contain one program
-identity without arguments. Environment entries contain names and `plain`/`secret` sensitivity,
-never values or ciphertext. Do not repeat commands, script paths, ordinary destinations, or fixed
-package providers already declared in the preset configuration. Declare statically identified App script
-effects; additional statements can help reviewers understand intended effects.
-
-`opaque_code = "unrestricted"` describes code for review; it does not grant trust or administrator
-access. All scripts run with the access available to their process and are not sandboxed, whether
-this field is present or absent. Declare environment inputs and administrator requirements
-explicitly. Capability statements are not proof that all script effects have been disclosed.
-
-Interactive lifecycle operations can authorize the listed external code when you confirm the Plan.
-This authorization applies only to that operation and captured snapshot; it saves no persistent grant.
-The confirmation includes code delivered for later execution, such as installed Shell commands.
-Automation and `--yes` require an existing matching grant; `--yes` cannot supply human code consent.
-Explicit `info`/`update --run-generators` evaluation also requires a grant; use interactive
-`shine app refresh` when you want to approve a generator for one operation.
-
-For persistent authorization, inspect the target first, then choose snapshot or development trust.
-Development trust also authorizes future code changes; use it only when you intend that scope.
-
-| Operation | Command |
-| --- | --- |
-| Inspect without granting trust | `shine trust inspect <TARGET>` |
-| Grant snapshot trust | `shine trust grant <TARGET>` |
-| Trust future changes | `shine trust grant <TARGET> --development` |
-
-Snapshot trust covers the reviewed target and effective category content. Changes to files,
-metadata, source layers, or executable permissions require renewed review. Dependencies such as
-`node_modules`, interpreters, external tools, and downloads are not protected by this grant.
-
-Development trust is long-term authorization of future code from the displayed local source for the
-specified target and capability. Source directory/layer changes and new targets or capabilities need
-new authorization. It does not mean continuing code review. Shell live deployment requires this mode.
-When live deployment is blocked, review the target with `shine trust inspect <TARGET>` before
-choosing `shine trust grant <TARGET> --development`. If you do not want to authorize future code
-changes, set `external_shell_mode = "snapshot"` and review again; ordinary snapshot trust cannot
-authorize live deployment.
-`opaque_code = "unrestricted"` does not enable development trust. Trust is granted locally;
-a Preset cannot distribute or enable its own authorization.
-Use `trust list` to check grants and `trust list --verbose` for details and review guidance.
-
-Every external Shell command uses the canonical `shell/<CATEGORY>/<COMMAND>` trust target. Use
-`preset` to inspect or trust every executable target
-in the current active Preset. Revoking `preset` clears every stored Preset trust grant:
-
-Inspect the target first, then choose only the required grant or revoke operation.
-Development trust also authorizes future code changes; use it only when you intend that scope.
-
-| Operation | Command |
-| --- | --- |
-| Inspect without granting trust | `shine trust inspect preset` |
-| Grant snapshot trust | `shine trust grant preset` |
-| Trust future changes | `shine trust grant preset --development` |
-| Revoke trust | `shine trust revoke preset` |
-
-Older grants marked as needing review cannot authorize new operations. Review and grant them again.
-
-AI tools may generate and statically validate Presets, but cannot approve their own code. Review the
-actual generated changes through a trusted human interface. A changed snapshot invalidates the approval.
-Development trust for an AI-writable directory permits future AI edits for enrolled targets. An AI
-with unrestricted terminal access can grant trust or execute scripts directly; its tool host must enforce
-that authority boundary.
-
-## From source folders to installed capabilities
-
-Any tool or process that places a preset folder on a machine can be the synchronization layer.
-Shine does not require Git or provide general-purpose folder synchronization. It turns selected
-source files into installed capabilities: it creates managed command entries, resolves local values,
-keeps an installed snapshot by default, reports pending changes, and removes only what it owns.
-
-The built-in `shell/image-tools/` category is a complete example. It exposes three image commands
-through this metadata:
-
-```toml
-description = "Personal image workflow commands."
-
-[[files]]
-source = "compress.ts"
-target = "img-compress"
-runtime = "bun"
-platforms = ["unix", "windows"]
-env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
-
-[[files]]
-source = "resize.ts"
-target = "img-resize"
-runtime = "bun"
-platforms = ["unix", "windows"]
-env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }, { source = "IMAGE_MAX_WIDTH", sensitivity = "plain" }, { source = "IMAGE_MAX_HEIGHT", sensitivity = "plain" }]
-
-[[files]]
-source = "convert.ts"
-target = "img-convert"
-runtime = "bun"
-platforms = ["unix", "windows"]
-env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
-```
-
-These commands compress, resize, and convert JPEG, PNG, and WebP. Every machine that runs them
-needs Bun 1.3.14 or newer in `PATH`; Shine does not bundle Bun. No separate image library is needed.
-
-The workflow below uses all three commands, so install the whole category:
-
-```bash
-shine info shell/image-tools
-shine install shell/image-tools
-```
-
-After installation, open a new terminal or reload your shell profile as described in
-[Shell presets](./shell-presets.md#browse-and-install), then run the commands:
-
-```bash
-img-compress photo.jpg screenshots/
-img-resize --width 1280 --output-dir ./resized photos/
-img-convert --format webp --quality 75 --output-dir ./webp hero.png gallery/
-shine info shell/image-tools --diff
-shine upgrade shell/image-tools
-shine shell uninstall image-tools/img-compress --dry-run
-```
-
-The last command previews removal of `img-compress` only. If you only need that command in the
-first place, install `shell/image-tools/img-compress` instead of the whole category.
-
-Each command accepts multiple file or directory inputs. A directory scan processes direct JPEG,
-PNG, and WebP children only; it never recurses. Without `--output-dir`, output stays beside its
-source as `photo.compressed.jpg`, `photo.resized.jpg`, or the selected conversion extension. An
-output directory flattens the selected inputs, so duplicate target names fail explicitly. Existing
-files also fail unless `--force` is present, and source images are never modified in place.
-`--force` does not permit replacing an input image.
-
-Batch processing continues after an individual failure and returns a nonzero status if any item
-failed. The first 20 failures appear in the terminal. If there are more, the complete list is also
-written to a uniquely named `image-tools-errors-*.log` under `--output-dir`, or the current directory
-when no output directory was supplied.
-
-`IMAGE_QUALITY`, `IMAGE_MAX_WIDTH`, and `IMAGE_MAX_HEIGHT` default to `80`, `1920`, and `1080`.
-Command options override them for one invocation; changing the Shine values keeps the preference on
-that machine. In the default snapshot mode, changing a copied or external source still requires
-`shine upgrade` before the installed command changes.
+Replace example paths and `<PATH>` with your own directory; quote paths containing spaces.
 
 ## Override selected files with an overlay
 
@@ -388,35 +50,6 @@ to inspect the effective overlay afterward.
 For example, `app/starship/starship.toml` overrides the file at the same path in the base source;
 other presets continue to use the base source.
 
-### Mirror an overlay from Git
-
-Shine can manage a local mirror of a read-only overlay repository used by multiple devices:
-
-Git-managed overlays are global settings. Run the following commands outside any Shine project:
-neither the current directory nor its ancestors may contain a `shine.config.toml`.
-Inside a Shine project, `overlay link --git` is rejected before
-changing the configuration or mirror. For a project-specific overlay, clone the repository yourself
-and use `shine preset overlay link <PATH>` from the project instead.
-
-```bash
-shine preset overlay link --git https://example.com/team/shine-overlay.git --branch main
-shine preset pull
-shine preset overlay info
-```
-
-The managed copy lives under `~/.shine/overlay/`. Each pull replaces it with the remote branch's
-latest state and discards local edits. Make changes and push them in an upstream checkout, then synchronize each
-device with `shine preset pull`, `shine update --pull`, or `shine upgrade --pull`.
-Relinking with a different Git URL switches the existing mirror to that repository. Without
-`--branch`, each sync follows the configured remote's default branch. A failed fetch preserves
-the previous checkout.
-
-The managed overlay must be a standalone Git checkout at that directory. Shine refuses ordinary
-directories, linked checkouts, and linked Git metadata without changing their contents. Move an
-unexpected directory aside before retrying. After a successful fetch, synchronization discards
-tracked edits, untracked and ignored files, and nested repositories in the managed mirror, even
-when the remote commit is unchanged. Keep local customizations in a manually linked overlay instead.
-
 To customize one built-in category, copy it at the overlay root instead of exporting everything. For
 example, copy Surge before editing its local proxy, group, and rule files:
 
@@ -431,6 +64,27 @@ you do not customize and let them continue to come from the built-in version. Se
 [Manage application configuration](./app-presets.md#surge-uri-subscriptions) for the remaining Surge
 steps.
 
+### Mirror an overlay from Git
+
+Shine can manage a local mirror of a read-only overlay repository used by multiple devices:
+
+Git-managed overlays are global settings. Run the following commands outside any Shine project:
+neither the current directory nor its ancestors may contain a `shine.config.toml`.
+For a project-specific overlay, clone the repository yourself
+and use `shine preset overlay link <PATH>` from the project instead.
+
+```bash
+shine preset overlay link --git https://example.com/team/shine-overlay.git --branch main
+shine preset pull
+shine preset overlay info
+```
+
+Treat the managed mirror as read-only: pulling replaces its contents, including local edits and
+extra files. Edit and push changes from a separate checkout, then run `shine preset pull` on each
+device. Use a manually linked overlay if you need to keep local edits. Without `--branch`, Shine
+follows the remote's default branch. If Shine reports an unexpected directory at the mirror path,
+move it aside before retrying.
+
 ## Export the complete preset collection
 
 ```bash
@@ -441,8 +95,6 @@ shine preset export
 Export includes built-in presets plus overrides and additions from the active overlay. It does not
 copy files that exist only in the external base directory. `preset copy` always extracts the original
 built-in category.
-
-Replace `<PATH>` in activation commands with your actual directory, quoted as one shell argument.
 
 Both `preset copy` and `preset export` reject linked or special output files and linked
 subdirectories, including with `--force`. Choose an ordinary directory tree for the output.
@@ -457,13 +109,15 @@ You can also select the source for one command through an environment variable:
 SHINE_PRESETS=~/dotfiles/shine-presets shine preset export
 ```
 
+To stop using the external collection, run `shine preset unlink`. This removes the source setting,
+not its files or installed presets. Project inheritance and `SHINE_PRESETS` may still select another
+source; check `Preset Source` afterward.
+
 ### Choose how external shell presets are deployed
 
-External shell presets use **snapshot** mode by default. During installation, Shine copies the
-effective category under `~/.shine/installed/shell/` and commands execute the managed copy. After
-editing the source, run `shine update` to inspect changes and `shine upgrade` to apply them. This gives
-shell scripts the same review-before-update flow as application configuration. `update` reports
-legacy direct-link installations, and `upgrade` migrates them.
+External Shell presets use **snapshot** mode by default: installed commands keep using the
+reviewed copy until you update them. After editing the source, run `shine update` to inspect changes
+and `shine upgrade` to apply them.
 
 For preset development, explicitly enable **live** mode when linking the source:
 
@@ -471,21 +125,23 @@ For preset development, explicitly enable **live** mode when linking the source:
 shine preset link ~/dotfiles/shine-presets --live
 ```
 
-In live mode, ordinary shell and Bun source changes take effect on the next invocation. Files with
-`transforms` are rendered before each call; a rendering failure aborts that call rather
-than executing stale output. Changes to entry metadata such as `target`, `runtime`, `transforms`, or
-`env` still require `shine upgrade` to rebuild the managed entry. Restore snapshot mode by running
-`shine preset link <PATH>` without `--live`, or use `shine preset unlink`.
+Once installed in live mode, Shell and Bun source edits take effect on the next invocation.
+Template substitutions also refresh on each invocation; a failed substitution stops the command.
+Changes to `target`, `runtime`, `transforms`, or `env` still require `shine upgrade`.
 
-If a linked overlay or live preset directory is moved, link the new path and run `shine update`.
-Snapshot deployments stay current when their effective relative files and bytes are unchanged.
-Live deployments report the old and new source paths because `shine upgrade` must repoint their
-managed command entries; this relocation is shown separately from content changes.
+To return to snapshot mode while keeping the same source, run
+`shine preset link ~/dotfiles/shine-presets` without `--live`. After switching either way, run
+`shine update shell/<CATEGORY>` and `shine upgrade shell/<CATEGORY>` for each installed category
+you want to switch. Linking alone does not change already installed commands.
+
+Live mode requires [development trust](#declare-permissions), which also authorizes future code
+changes. If you move a linked source, link the new path and run `shine update`; apply any reported
+changes with `shine upgrade`.
 
 ### Use locked packages in external Bun presets
 
 Built-in Bun presets remain self-contained. External presets and overlays may use ordinary registry
-packages by committing both `package.json` and `bun.lock` in the same physical category directory as
+packages by committing both `package.json` and `bun.lock` in the same category directory as
 the effective script:
 
 ```text
@@ -498,26 +154,24 @@ shell/my-tools/
 ```
 
 This convention also applies to Bun app artifact, teardown, and generator scripts under
-`app/<category>/`. Both files are required. Shine rejects a lone manifest or lock and, in this first
-version, any `trustedDependencies` declaration. An overlay declaration applies only when
+`app/<category>/`. Both files are required; `trustedDependencies` is not allowed.
+An overlay declaration applies only when
 the overlay supplies the effective script; adding package files beside an inherited built-in script
 does not enable dependencies for it.
 
 Scripts without the required manifest and lock file cannot download packages automatically.
 A locked external script may download missing packages on its first execution; `list` and `info`
-do not fetch them. Shine does not copy `node_modules` or clear Bun's shared caches when you
-uninstall a preset or Shine itself.
+do not fetch them. Include the manifest and lock file when sharing a preset; do not rely on a local
+`node_modules` directory being carried to another machine.
 
 For snapshot Shell presets, package or lock changes appear in `shine update` and take effect after
 `shine upgrade`. In live mode they are read on the next command invocation, while status still
 reports that the installed command should be refreshed. Fully offline machines need the relevant
 Bun cache already populated, or a bundled/vendored script. Native extensions, workspaces, `file:`,
-`link:`, and dependencies requiring lifecycle scripts are not guaranteed in this version.
+`link:`, and dependencies requiring lifecycle scripts are not guaranteed currently.
 
-To migrate an external script that currently relies on Bun's implicit installation, create its
-category-local `package.json`, generate `bun.lock` with the repository's Bun version, commit both,
-and test from an empty Bun cache. Without the pair, bare package imports now fail instead of being
-downloaded automatically.
+Generate and commit `bun.lock` with the Bun version your preset supports. Before sharing the
+preset, test dependency loading with an empty Bun cache.
 
 ## Create a commit-ready preset repository
 
@@ -543,9 +197,8 @@ Choose one pull/update operation:
 | Pull, then check for updates | `shine update --pull` |
 | Pull, then apply configuration updates | `shine upgrade --pull` |
 
-Shine locates the repositories containing the base presets and active overlay. If both sources are in
-one repository it pulls only once; non-Git sources are skipped. `update --pull`
-and `upgrade --pull` reload configuration after pulling, so an updated `shine.config.toml` affects later steps.
+Git must be available in `PATH`. Commit or set aside your edits before pulling. Changes pulled
+into `shine.config.toml` also affect the following `update` or `upgrade`.
 
 Every repository processed must meet these conditions before any pull begins:
 
@@ -554,14 +207,24 @@ Every repository processed must meet these conditions before any pull begins:
 - the current branch has an upstream.
 
 These sources use `git pull --ff-only`. Shine never stashes, rebases, resets, or resolves conflicts.
-Validation stops before modifying any repository. These restrictions do not apply to an overlay
-managed with `--git`, which is intentionally disposable. Git must be available in `PATH`.
+Resolve reported worktree or branch problems yourself before retrying. These restrictions do not
+apply to an overlay managed with `--git`, where pulling replaces the local mirror.
 
 ## Create category metadata
 
-Generate a `shine.toml` template in an application, shell, or sys category directory:
+Each category has its own directory and `shine.toml`. For example, create an App category:
 
-Choose the category type; run only its command:
+```bash
+mkdir -p ~/dotfiles/shine-overlay/app/my-editor
+cd ~/dotfiles/shine-overlay/app/my-editor
+shine preset new app
+```
+
+This creates metadata only. Add `config.toml` beside it and set `dest` in `shine.toml` to the
+application's configuration directory. Keep the generated `metadata_schema_version = 2`.
+
+For other category types, create a directory under `shell/<name>` or `sys/<os>` instead and run
+the corresponding command there:
 
 | Operation | Command |
 | --- | --- |
@@ -572,13 +235,10 @@ Choose the category type; run only its command:
 To start from a built-in category, run `shine preset copy <kind>/<name>` from your repository or
 overlay root. It creates the kind/category path.
 
-Templates omit an empty permission table. Add `--unrestricted` if you want the unrestricted author
-statement; it does not grant trust, skip approval, or sandbox the script. See
-[capability declarations](#declare-permissions).
-
-Existing files require `--force`; review them before replacing the template. After editing metadata,
-first run `shine preset validate . --format json`, then use the relevant isolated installation
-`--dry-run` command. Shell install dry-run previews command entries without installing or modifying files.
+Existing files require `--force`; review them before replacing the template. Add the configuration
+files or scripts referenced by `shine.toml` and declare script access and required inputs as described
+[below](#declare-permissions). Then [validate the category](#validate-and-package-a-preset) and
+[preview its installation](#preview-and-install-your-category).
 
 ### Give an application file its own destination
 
@@ -616,6 +276,28 @@ metadata revision moves an already managed source, `shine upgrade` moves it only
 is unmodified and the new destination is free. Otherwise both locations are left untouched for the
 user to resolve.
 
+## Create a preset with AI
+
+Shine provides an Agent Skill in the source repository at `skills/shine-preset-author/`.
+Install it through your AI client's skill installer or skills directory, then describe the App
+configuration, Shell command, system setup, or built-in customization you want.
+
+The skill generates a preset, validates it, and previews installation in an isolated directory.
+It does not activate the preset or run its scripts. Review the result before installing it.
+
+## Study a built-in example {#from-source-folders-to-installed-capabilities}
+
+For a complete Shell example, copy the built-in image tools into your overlay:
+
+```bash
+cd ~/dotfiles/shine-overlay
+shine preset copy shell/image-tools
+```
+
+Read `shell/image-tools/shine.toml` alongside its scripts to see how command names, Bun, supported
+platforms, and environment inputs fit together. Command usage is documented in the
+[image workflow](../reference/built-in-presets.md#image-workflow).
+
 ## Declare runtime environment inputs
 
 Shell Bun commands and App generators, hooks, and artifacts use structured `env` entries:
@@ -627,28 +309,15 @@ env = [
 ]
 ```
 
-`target` defaults to `source`. Declare names and sensitivity only, never values or ciphertext.
-Each entry receives only its own declared Shine inputs; a category's other inputs are not added.
-Sensitivity must agree wherever the same source is declared in the effective permission scope.
-It describes the permission contract and does not itself encrypt or decrypt a value. App inputs
-keep their existing configured-value behavior; Shell inputs retain encrypted-first lookup.
-Generator `when_env` still names a source from its `env` list and remains a separate condition.
+`source` names the value in Shine configuration; `target` is the name the script reads and defaults
+to `source`. Declare only names and sensitivity, never values or ciphertext. Set values separately
+using [environment configuration](./environment.md). Each entry receives only its declared Shine
+inputs. Keep sensitivity consistent for the same source; `sensitivity = "secret"` does not itself
+encrypt a value. A generator's `when_env` must name a source in its `env` list.
 
-Legacy string arrays such as `env = ["SOURCE=TARGET"]` are no longer accepted in preset metadata.
-Relevant commands report a migration hint; unrelated commands do not automatically migrate files.
-Review and apply the conversion explicitly:
-
-| Operation | Command |
-| --- | --- |
-| Preview this source's migration | `shine preset migrate ./my-presets --dry-run` |
-| Apply after reviewing the preview | `shine preset migrate ./my-presets` |
-
-Migration reads the old explicit sensitivity declarations, preserves aliases and conditions, and
-backs up metadata before applying changes. Missing or conflicting sensitivity requires manual
-correction. Git-managed overlays must be migrated in their upstream checkout. Migration does not
-run scripts, decrypt values, grant trust, or update installed launchers and recovery records.
-Changed external snapshots require renewed trust review. Use normal install/upgrade after migration.
-The command-line `shine env run --with SOURCE=TARGET` syntax is unchanged.
+Old string arrays such as `env = ["SOURCE=TARGET"]` are no longer accepted. Use
+[metadata migration](#migrate-a-1x-source), then review any missing or conflicting sensitivity
+declarations. The command-line `shine env run --with SOURCE=TARGET` syntax is unchanged.
 
 ## Shell entries with an optional runtime
 
@@ -665,9 +334,8 @@ platforms = ["unix", "windows"]
 env = [{ source = "API_URL", sensitivity = "plain" }, { source = "SERVICE_TOKEN", target = "API_TOKEN", sensitivity = "secret" }]
 ```
 
-Supported extensions are `.ts`, `.js`, `.mts`, and `.mjs`. Shine creates a managed entry without an
-extension, which users invoke as `my-tool`. Existing native `.sh` and `.ps1` entries remain
-compatible.
+Supported extensions are `.ts`, `.js`, `.mts`, and `.mjs`. After installation, invoke the command
+as `my-tool`, without the source-file extension.
 
 Every device that runs the command needs Bun in `PATH`. Shine does not install Bun or manage
 `node_modules`; external categories may opt into Bun-managed locked packages as described above.
@@ -682,8 +350,8 @@ Python, Node, and Deno are not currently valid `runtime` values.
 
 ## Author a system bootstrap item
 
-A sys category is one OS directory such as `sys/ubuntu/`. Every executable sys preset declares
-`version = 2`, then describes ordinary ensure-present software with detection and a fixed provider:
+A Sys category is one OS directory such as `sys/macos/`. Declare `version = 2`, then describe how
+to detect and install each program. This example uses Homebrew on macOS:
 
 ```toml
 version = 2
@@ -717,26 +385,22 @@ Use `provider = "pacman"` only in `sys/arch/`, with one package name per item. I
 existing pacman databases; complete a full system update before bootstrap as described in
 [Arch Linux preparation](system-init.md#arch-linux-preparation).
 
-Detection supports `command`, `path`, and `any` command/path probes. Package installation ensures the software is present; it does not upgrade an existing installation. A complex item may use
-`[items.install] kind = "script", path = "install/<item>.sh"`; the script handles only that item,
-returns a normal exit code. Every init item must declare both `detect` and `install`; there is no
-platform-wide dispatcher fallback. Version 1 manifests are rejected before detection or profile
-writes; see [the v2 migration guide](sys-preset-v2-migration.md).
+Each item needs both `detect` and `install`. Detection can check a `command`, a `path`, or `any`
+of several command/path checks. Package installation ensures the program is present without
+upgrading an existing installation. For custom installation logic, use `kind = "script"` and
+`path = "install/<item>.sh"` under `[items.install]`; that script should handle only its own item.
+For version 1 presets, follow [the v2 migration guide](sys-preset-v2-migration.md).
 
 Shell integrations accept exactly one of `path`, `env`, `eval`, `source`, `aliases`, or `fragment`.
-Use `profile/base.pre.sh` and `profile/base.post.sh` only for OS-wide content; put complex item logic
-in `profile/<item>.sh`. Phase, optional `priority`, manifest order, and declaration order determine
-stable composition. Named `[profiles.*]` tables select bootstrap items; they do not define shell
+Use `phase = "pre"` or `"post"` to choose when an integration loads. Within a phase, lower
+`priority` values load first; ties follow the order in `shine.toml`. Use `profile/base.pre.sh` and
+`profile/base.post.sh` only for OS-wide content; put complex item logic in `profile/<item>.sh`.
+Named `[profiles.*]` tables select bootstrap items; they do not define shell
 content or disable integrations outside the selection.
 
-External sys install scripts and executable profile content (`eval`, `source`, fragments, and base
-files) require either human confirmation of the current lifecycle Plan or an existing matching grant; the
-project config and Preset cannot authorize themselves. A snapshot grant is invalidated by changed
-category content or source layer; an explicit development grant accepts code edits only from its
-enrolled source. If trust is missing during bootstrap preflight, no installer has run
-yet. Static detection, package metadata, PATH, env, and aliases remain available without a grant.
-Validate with
-`shine sys list`, `shine sys info <ITEM>`, and `shine sys bootstrap <ITEM> --dry-run`.
+External Sys installation scripts and executable shell configuration need
+[code authorization](#declare-permissions). After linking your source, inspect it with `shine sys list`
+and `shine sys info <ITEM>`, then preview with `shine sys bootstrap <ITEM> --dry-run` before applying.
 
 ## Application artifact runtimes
 
@@ -751,11 +415,14 @@ env = [{ source = "PROFILE_PATH", sensitivity = "plain" }, { source = "API_TOKEN
 ```
 
 The default is `native`, which executes the script directly. `bun` accepts only `.ts`, `.js`, `.mts`,
-or `.mjs` and requires Bun on the machine. `env` is the only Shine `[env]` allowlist passed to the
-artifact. Each entry declares its source, optional target alias, and sensitivity together; no duplicate
+or `.mjs` and requires Bun on the machine. Only Shine `[env]` variables listed in `env` are passed
+to the artifact. Each entry declares its source, optional target alias, and sensitivity together; no duplicate
 `[permissions].environment` entry is needed. Listed sources are forwarded only when configured; missing
 optional values are omitted. Fixed application path variables are listed below. External presets
 require human confirmation of the operation plan or a matching trust grant.
+
+To run the artifact, use `shine app artifact apply <CATEGORY>` and review the plan. See
+[application artifacts](./tasks-and-serve.md#generate-application-helper-resources) for the workflow.
 
 ### Run a script after an App configuration changes
 
@@ -798,3 +465,215 @@ declaration. Command hooks do not receive this App-specific set.
 
 The script source directories are temporary. Do not save their paths or write persistent results
 there; use `SHINE_STATE_DIR` or `SHINE_CACHE_DIR`, creating the output directory when needed.
+
+## Describe capabilities and required inputs {#declare-permissions}
+
+Declare the access your scripts need in `shine.toml`. Use `[permissions]` for an App category,
+`[files.permissions]` for a Shell command, or `[items.permissions]` for a Sys item. Tables are
+optional, but App code checks require declarations for the behavior they identify.
+
+For example:
+
+```toml
+[permissions]
+schema_version = 1
+filesystem = [
+  { access = ["read", "write"], base = "home", path = ".config/example" },
+]
+network = [{ scope = "host", host = "api.example.com" }]
+```
+
+For Shell and Sys categories, use `permission_defaults` to apply one declaration to entries that
+do not provide their own target-local override:
+
+```toml
+[permission_defaults]
+schema_version = 1
+network = [{ scope = "host", host = "api.example.com" }]
+
+[[files]]
+source = "foo.sh"
+target = "foo"
+
+[[files]]
+source = "bar.sh"
+target = "bar"
+```
+
+An entry's own permission table replaces `permission_defaults` for that entry.
+
+Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`. Except with `absolute`,
+paths must be relative and contain no `..`; `.` means the base directory itself. Commands contain a program
+name without arguments. Environment declarations contain names and `plain`/`secret` sensitivity,
+never values. Do not repeat inputs, commands, script paths, or destinations already declared in
+other metadata fields.
+
+**Scripts are not sandboxed.** They run with their process's access. Permission statements,
+including schema-v2 `opaque_code = "unrestricted"`, do not grant trust or administrator access.
+Declare environment inputs explicitly, and add `administrator = true` when administrator access
+is required.
+
+### Authorize external code
+
+For an interactive installation or update, review the operation plan and confirm the listed code.
+This authorizes only that operation and the reviewed content, including Shell commands installed
+for later use. Changes after review require a new approval. `--yes` cannot provide this consent;
+automation needs a matching trust grant already in place.
+
+For persistent authorization, inspect the target, then choose the scope you need:
+
+| Operation | Command |
+| --- | --- |
+| Inspect code and required access | `shine trust inspect <TARGET>` |
+| Trust the reviewed version | `shine trust grant <TARGET>` |
+| Also trust future code changes | `shine trust grant <TARGET> --development` |
+| List grants | `shine trust list` |
+| Revoke a grant | `shine trust revoke <TARGET>` |
+
+Targets are `app/<CATEGORY>`, `shell/<CATEGORY>/<COMMAND>`, or `sys/<ITEM>`. `preset` selects all executable
+targets in the active presets; `shine trust revoke preset` clears all stored preset grants.
+
+Snapshot trust requires renewed review when category files, metadata, source layers, or executable
+permissions change. It does not verify external dependencies, interpreters, tools, or downloads.
+Development trust also accepts future code changes from the selected local source. A source move,
+new target, or new capability requires another grant. Use it only if you accept that scope;
+Shell live mode requires it. Choose snapshot mode if you want to review each update.
+
+Explicit `info`/`update --run-generators` also requires persistent trust. For one-operation
+generator approval, use interactive `shine app refresh`. If an old grant is marked as needing
+review, inspect the target and grant it again.
+
+AI-generated code needs your review too. Development trust on an AI-writable directory also
+authorizes future AI edits for the covered targets.
+
+## Validate and package a preset
+
+Run these checks from the category directory:
+
+```bash
+shine preset validate .
+shine preset lint .
+shine preset plan . --platform macos
+```
+
+`validate` checks metadata and referenced files. It also accepts a preset repository root or a
+`shine.toml` file. Both checks cover supported platform declarations regardless of your current OS.
+`lint` reports portability and code-declaration issues; fix errors and review warnings before
+proceeding. If lint cannot load the category, use `validate` to find the input error.
+
+Run `plan` for each platform you support: `macos`, `linux`, or `windows`. It shows a hypothetical
+first installation, including required permissions and anything that would block it. The preview
+uses simulated conditions, so missing inputs or trust in that report do not describe your current
+machine. Use an installation `--dry-run` to inspect your actual setup. These checks do not run preset scripts
+or change your installed configuration; a successful preview is not installation approval.
+
+For repeatable tests, add `shine.test.toml` to the category and run `shine preset test .`. Tests
+describe starting conditions and expected results without executing scripts. The source repository's
+`examples/presets/` directory contains App, Shell, and Sys examples. Use relative paths and supported
+placeholders such as `${HOME}` in tests that must work on other machines. `plan` and `test` accept
+one category at a time.
+
+To distribute a reviewed category, write the bundle outside its source directory:
+
+```bash
+shine preset pack . --output ../../my-editor.shine-preset.tar.gz
+```
+
+The bundle excludes `shine.test.toml`. Use `--force` only to replace an existing output; it does not
+bypass validation or allow output inside the category, including through a symbolic link.
+
+## Check App code before execution
+
+Before distributing App scripts, run:
+
+```bash
+shine preset lint <PATH>
+```
+
+Shine checks Bun generators, script hooks, artifacts, teardown scripts, and supported local
+JavaScript/TypeScript dependencies. Fix blocking findings at the reported file and line: declare
+the access the script needs, or change the script to match its declarations. Parse failures also
+block execution. Trust, `--yes`, and `opaque_code = "unrestricted"` do not bypass these checks.
+
+Common declarations include:
+
+| Script behavior | Required declaration |
+| --- | --- |
+| Fetch from `https://example.org/data` | Network host `example.org` |
+| Read `in` with `Bun.file('in').text()` | Filesystem `read` on `in` |
+| Copy a file with Node `copyFile` | `read` on the source and `write` on the destination |
+| Rename a file with Node `rename` | `remove` on the source and `write` on the destination |
+| Read a configured environment value | An `env` entry with `source`, optional `target`, and `sensitivity` |
+
+The script reads the `target` name from an environment mapping. Only documented fixed variables
+are exempt from declaration; a `SHINE_` prefix alone is not an exemption. Never put environment
+values or URL credentials in capability declarations.
+
+Run `lint` even if `plan` or `test` succeeds: those commands check only scripts selected by their
+simulated inputs, while lint checks all App script entries, including inactive generators.
+
+Static checks cannot cover every effect of a script. Passing lint does not prove that code is
+safe; review the code and complete the normal authorization steps before running it.
+
+## Preview and install your category
+
+After validation, link the directory containing `app/`, `shell/`, or `sys/`, not the category
+directory itself. For the `my-editor` example above:
+
+```bash
+shine preset overlay link ~/dotfiles/shine-overlay
+shine app info my-editor
+shine app install my-editor --dry-run
+```
+
+Check the source, destination, required inputs, and permissions in the output. When ready, install
+and confirm the plan:
+
+```bash
+shine app install my-editor
+```
+
+After editing this installed preset, inspect changes with `shine update app/my-editor` and apply
+them with `shine upgrade app/my-editor`. Unlinking the source does not uninstall it; use
+`shine app uninstall my-editor --dry-run` to preview removal, then omit `--dry-run` to proceed.
+
+For Shell categories, use `shine shell install <CATEGORY> --dry-run`, then install without
+`--dry-run` and open a new terminal. For Sys items, use `shine sys bootstrap <ITEM> --dry-run`
+before applying. See the [Shell guide](./shell-presets.md), [App guide](./app-presets.md), and
+[system guide](./system-init.md) for prerequisites, updates, removal, and recovery limits.
+
+## Tool compatibility {#tool-compatibility}
+
+For editors and CI, add `--format json` to the authoring commands. Validation errors fail the
+command; warnings do not. Use `preset lint --deny-warnings` if reviewed warnings should also fail CI.
+
+Run `shine preset schema --format json` for the report and `shine.test.toml` formats supported by
+your installed version. After upgrading Shine, check that your tools still support these formats.
+Treat `complete = false` or a nonempty `unfinished_cases` list as an incomplete check and resolve
+the reported issue before accepting the result.
+
+## Migrate a 1.x source
+
+Preview the active external source and overlay, or name a repository, category, or manifest:
+
+| Operation | Command |
+| --- | --- |
+| Preview active external sources | `shine preset migrate --dry-run` |
+| Preview this source's migration | `shine preset migrate ./my-presets --dry-run` |
+| Apply after reviewing the preview | `shine preset migrate ./my-presets` |
+
+Review the metadata diff before confirming; the default answer is No. Migration changes only
+`shine.toml` and backs it up before writing. It does not change scripts, data files, environment
+values, installed resources, or trust. Resolve entries reported as needing manual migration.
+Version 1 Sys presets require the [v2 migration guide](./sys-preset-v2-migration.md).
+
+Use `--yes` only after review. For automated inspection, use `--format json --dry-run`; applying
+with JSON output also requires `--yes`. JSON reports do not include file contents or diffs.
+
+A Git-managed overlay is read-only. Migrate and validate its upstream checkout, commit and push
+the changes, then run `shine preset pull` on each consuming device.
+
+If migration reports mixed LF/CRLF line endings, choose one style for that file and retry.
+
+After migration, validate the category and use the normal install or upgrade command to apply it.
+Review changed external code again when prompted.

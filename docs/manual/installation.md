@@ -22,9 +22,6 @@ If a configuration file cannot be updated, follow the error message and configur
 If your shell differs from the one shown, or you use Fish or another shell, add the directory to
 its configuration manually.
 
-For Bash, a login file created by the printed command loads `~/.bashrc` in interactive sessions,
-so aliases and shell integrations also work over SSH. Existing login files keep their startup logic.
-
 Open a new terminal or reconnect over SSH, then verify the installation:
 
 ```bash
@@ -160,21 +157,22 @@ Run `shine self uninstall --dry-run` from the account and configuration you want
 Review the listed changes. Run `shine self uninstall` to approve them interactively, or
 `shine self uninstall --yes` to accept them without a prompt.
 
-Shine uses each domain's uninstall rules for managed App files, Shell configuration, Sys items
-and environment proxies. For the default account configuration, it also checks for exact Sys
-startup blocks and the retired HTTP service. It keeps personal settings, tasks, external presets,
-encryption identities, custom Sys profiles and software installed by bootstrap. The configuration
-directory can still contain those files, caches and locks. The preview lists any trust grants
-and broker policies scheduled for removal. If Shine cannot inspect the account's service
-manager, retry from a session that can. If it finds a legacy service while using a custom
-configuration directory, review `shine clear serve` separately.
+The preview lists managed App files, Shell configuration, Sys settings, command proxies, trust
+grants, and broker policies selected for removal. Personal settings, tasks, external presets,
+encryption identities, custom Sys profiles, and software installed by bootstrap are kept.
+Uninstall does not delete the entire configuration directory.
 
-If an interrupted operation or a modified managed file blocks cleanup, follow the affected resource's
-recovery or uninstall instructions and rerun the command. If a Shell startup block points to
-another Shine configuration or contains edits, review the reported file. Only the exact loader
-for the selected configuration can be removed automatically. Earlier successful steps stay applied.
-Shine removes program copies last, and only when it can confirm that it installed them and they
-remain unchanged. A changed or different-version copy needs separate review.
+With the default account configuration, cleanup also includes the old HTTP service. If Shine
+cannot access the account's service manager, retry from a session that can. When using a custom
+configuration directory, review any reported old service with `shine clear serve` separately.
+
+If unfinished operations or modified files block cleanup, follow the reported recovery or
+uninstall instructions, then retry. Review Shell startup settings that contain your edits or refer
+to another Shine configuration; they cannot be removed automatically. Earlier successful cleanup
+steps stay applied.
+
+Program removal comes last. Shine only removes unchanged copies it can confirm it installed.
+Review any changed or different-version copy separately.
 
 For a Cargo installation, use the Cargo uninstall command printed by Shine. For a manual download
 or an older installation without a matching receipt, remove the executable through its original

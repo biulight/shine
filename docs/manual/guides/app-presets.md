@@ -266,11 +266,11 @@ shine env set SURGE_PROFILE "/absolute/path/to/Profile.conf"
 shine app artifact apply surge
 ```
 
-Apply and remove require Bun and a running Surge Mac with CLI module support. Apply checks that
-the installed module matches the reviewed preset before enabling it. If they differ, review your
-edits and install or upgrade the preset first. Install and upgrade deploy files and reload Surge;
-they do not issue a module-enable command. A new module starts disabled, but Surge remembers a
-previously enabled module across deletion and reinstallation.
+Apply and remove require Bun and a running Surge Mac with CLI module support. If apply reports
+that the installed module differs from the preset, review your edits and install or upgrade the
+preset first. A module installed for the first time needs `artifact apply` to enable it. An already enabled
+module takes effect when install or upgrade reloads Surge; deleting and reinstalling it does not
+reset that enabled state.
 
 Modules change the effective configuration without rewriting `[General]` in the original Profile.
 Their enable state is device-wide, not limited to the path in `SURGE_PROFILE`. Add more values on
@@ -296,14 +296,15 @@ shine app artifact remove surge
 ```
 
 `artifact remove` runs only the declared teardown script. Uninstall also attempts teardown when one
-is declared; a cleanup failure warns but does not stop safe removal of managed files.
-Surge teardown disables `shine-general` and reloads before undoing includes; `artifact remove`
-keeps the installed files, while uninstall removes managed files afterward. Do not delete the module
-file first: deletion alone can leave its effect active until reload and does not clear remembered
-enable state. If already deleted, restore the module file and run remove again to clear that state.
-CLI failures fail the artifact command. An interrupted apply may have updated includes, or an
-interrupted remove may have disabled the module; fix the reported issue and repeat the command to
-finish. Other modules are not changed.
+is declared. Managed files may still be removed if application cleanup fails; inspect warnings and
+the final result before retrying or completing cleanup manually.
+For Surge, `artifact remove` disables `shine-general`, reloads Surge, and undoes the profile
+changes while keeping installed files. Uninstall also removes the managed files. Do not delete the
+module file first: deletion can leave its effect active until reload and does not reset its enabled
+state. If already deleted, restore the file and run remove again.
+
+If apply or remove fails or is interrupted, some application settings may already have changed.
+Fix the reported issue and repeat the command to finish. Other Surge modules are not changed.
 
 ### Clash Verge Rev
 
@@ -426,10 +427,10 @@ Unix defaults are the installing user's ownership and `0600`; optional numeric `
 `unix_gid`, and `unix_mode` (`0400` or `0600`) select the service account's access. Run installation
 as an account allowed to create the destination and set that ownership. When assigning a different
 non-root owner, pre-create all parent directories with Unix search (`x`) permission for that UID
-or the selected GID (or others). Shine checks the applicable owner/group/other mode bits before
-decryption; supplementary groups and ACL-only grants are not used to satisfy this check. Existing
-directory permissions are not changed automatically. Windows uses private
-current-user ACLs and rejects Unix permission fields. Review permissions before installing.
+or the selected GID (or others). Access through supplementary groups or ACLs alone is insufficient;
+set the applicable Unix directory permissions yourself. Shine does not change existing directory
+permissions. On Windows, secret files are private to the current user; omit the Unix fields.
+Review permissions before installing.
 
 An existing unowned target is adopted only when its content exactly matches the decrypted file.
 Different content is a conflict, including with `--replace-managed`; no plaintext `.shine.bak`
