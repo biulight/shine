@@ -33,7 +33,9 @@ class PathHints(unittest.TestCase):
             entry.size = len(data)
             tar.addfile(entry, io.BytesIO(data))
         curl = self.bin / "curl"
-        curl.write_text('#!/bin/sh\ncp "$TEST_ARCHIVE" "$4"\n')
+        curl.write_text(
+            '#!/bin/sh\n[ "$1" != -fSL ] || shift\ncp "$TEST_ARCHIVE" "$4"\n'
+        )
         curl.chmod(0o755)
         self.env = dict(os.environ)
         self.env.pop("ZDOTDIR", None)
