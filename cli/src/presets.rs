@@ -953,6 +953,51 @@ mod tests {
             assert!(path.exists(), "{path:?} should exist after export");
         }
 
+        let mut legacy_paths = Vec::new();
+        for (os, ext) in [("ubuntu", "sh"), ("macos", "sh"), ("windows", "ps1")] {
+            let category = dir.join("sys").join(os);
+            let metadata = fs::read_to_string(category.join("shine.toml"))
+                .await
+                .unwrap();
+            let manifest = shine_core::runtime::parse_sys_manifest(&metadata).unwrap();
+            for phase in ["pre", "post"] {
+                assert!(
+                    category
+                        .join(format!("profile/base.{phase}.{ext}"))
+                        .is_file()
+                );
+                let legacy = category.join(format!("profile.{phase}.{ext}"));
+                assert!(
+                    !legacy.exists(),
+                    "unexpected legacy template: {}",
+                    legacy.display()
+                );
+                legacy_paths.push(legacy);
+            }
+            for integration in manifest.items.iter().flat_map(|item| &item.shell) {
+                if let Some(fragment) = &integration.fragment {
+                    assert!(category.join(fragment).is_file(), "missing {os}/{fragment}");
+                }
+            }
+        }
+
+        // Export updates bundled assets, but must not prune an older user's files.
+        for legacy in &legacy_paths {
+            fs::write(legacy, b"user-owned legacy profile\n")
+                .await
+                .unwrap();
+        }
+        PresetAssetReader::new(None)
+            .extract_all(&dir, true)
+            .await
+            .unwrap();
+        for legacy in &legacy_paths {
+            assert_eq!(
+                fs::read(legacy).await.unwrap(),
+                b"user-owned legacy profile\n"
+            );
+        }
+
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

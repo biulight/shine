@@ -3564,12 +3564,13 @@ local rule files beside the profile rather than into the old publishing director
 - **Fix**: `81244f8` — detect and preserve a leading BOM when editing profile files.
 - **Rule**: on Windows, treat the BOM as part of the file-start invariant when splicing content.
 
-## 2026-06-18 — External presets mode must fall back to embedded templates
+## 2026-06-18 — Legacy Sys templates needed an embedded fallback
 
 - **Symptom**: sys profile installation failed when the external presets dir lacked a template.
 - **Fix**: `5606438` — fall back to the embedded copy.
-- **Rule**: external/overlay presets extend embedded assets; a missing external file degrades to
-  embedded content, never to an error.
+- **Historical scope**: this fallback applied to the pre-v2 Sys template loader. Sys v2 composes
+  profiles from the selected snapshot; full external sources do not inherit missing files from
+  embedded presets. Only overlay mode extends embedded assets.
 
 ## 2026-06-16 — Version checks must be non-fatal and rate-limit aware
 

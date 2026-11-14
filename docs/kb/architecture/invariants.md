@@ -1217,9 +1217,10 @@ reinstall behavior and non-deduplicating `%APPEND%` are part of the documented c
 - **Fallback depends on the selected preset mode.** In built-in mode, an overlay replaces matching
   paths and unmatched paths continue to read embedded assets. A full external preset source is
   authoritative for app and shell category discovery: a missing category or file is not silently
-  borrowed from the binary. Sys profile installation has a narrower compatibility fallback to its
-  embedded template when a selected external sys preset omits a previously-known profile file
-  (commit `5606438`). Do not generalize that compatibility path into cross-source category fallback.
+  borrowed from the binary. Sys v2 composes profiles from the selected snapshot's optional
+  `profile/base.*` files and enabled item integrations; it does not fall back to legacy root
+  `profile.pre.*` or `profile.post.*` templates. Existing installed profiles merge against their
+  saved base and the newly composed content, independently of those legacy source files.
 
 ## External shell deployment
 

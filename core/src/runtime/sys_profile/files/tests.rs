@@ -1,6 +1,82 @@
 use super::*;
 use crate::runtime::{FileSystemObservationHost, HostOperation, InMemoryHost, ProcessOutput};
 
+#[tokio::test]
+async fn composed_profiles_migrate_without_legacy_source_templates() {
+    for (os_id, ext, setting, user_setting) in [
+        (
+            "ubuntu",
+            "sh",
+            "export TOOL_ENABLED=1\n",
+            "export USER_SETTING=1\n",
+        ),
+        (
+            "macos",
+            "sh",
+            "export TOOL_ENABLED=1\n",
+            "export USER_SETTING=1\n",
+        ),
+        (
+            "windows",
+            "ps1",
+            "$env:TOOL_ENABLED = '1'\n",
+            "$env:USER_SETTING = '1'\n",
+        ),
+    ] {
+        for phase in SYS_PROFILE_PHASES {
+            let base = format!("{setting}# user settings\n").into_bytes();
+            let template = format!("# shine sys/tool\n{setting}# user settings\n").into_bytes();
+            for with_base in [true, false] {
+                let host = InMemoryHost::new();
+                let profile_dir = Path::new("/profile");
+                let phase_name = phase.as_str();
+                let active = profile_dir.join(format!("{os_id}-sys.{phase_name}.{ext}"));
+                let base_path = profile_dir.join(format!("{os_id}-sys.{phase_name}.base.{ext}"));
+                let new_path = profile_dir.join(format!("{os_id}-sys.{phase_name}.new.{ext}"));
+                let user = [base.as_slice(), user_setting.as_bytes()].concat();
+                host.put_file(&active, user.clone());
+                if with_base {
+                    host.put_file(&base_path, base.to_vec());
+                }
+                // No legacy source template exists; migration uses the saved merge base.
+                let report = install_sys_profile_phase_with_template(
+                    &host,
+                    ProfilePhaseInstall {
+                        profile_dir,
+                        os_id,
+                        script_dir: Path::new("/missing-templates"),
+                        phase,
+                        ext,
+                        force_profile: false,
+                        template_override: Some(&template),
+                    },
+                )
+                .await
+                .unwrap();
+                assert!(report.updated);
+                assert_eq!(report.needs_action, !with_base);
+                if with_base {
+                    assert_eq!(
+                        host.read(&active).await.unwrap(),
+                        [template.as_slice(), user_setting.as_bytes()].concat()
+                    );
+                    assert_eq!(host.read(&base_path).await.unwrap(), template);
+                } else {
+                    assert_eq!(host.read(&active).await.unwrap(), user);
+                    assert_eq!(host.read(&new_path).await.unwrap(), template);
+                    assert!(host.read(&base_path).await.is_err());
+                }
+                assert!(
+                    !host
+                        .operations()
+                        .iter()
+                        .any(|op| matches!(op, HostOperation::Run { .. }))
+                );
+            }
+        }
+    }
+}
+
 async fn reconcile(host: &InMemoryHost) -> Result<SysProfileFileUpdate> {
     install_sys_profile_phase_with_template(
         host,
