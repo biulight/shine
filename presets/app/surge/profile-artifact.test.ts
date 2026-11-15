@@ -63,10 +63,13 @@ describe("Surge profile artifact", () => {
       const fixture = await makeFixture(original);
       try {
         await chmod(fixture.profile, 0o600);
+        // Windows exposes limited mode bits; preserve the observed mode on every OS.
+        const originalMode = (await stat(fixture.profile)).mode & 0o777;
+        if (process.platform !== "win32") expect(originalMode).toBe(0o600);
         for (const script of [buildScript, unbuildScript] as const) {
           await expect(runArtifact(script, fixture.profile)).rejects.toThrow("legacy Shine proxy-group block");
           expect(await readFile(fixture.profile, "utf8")).toBe(original);
-          expect((await stat(fixture.profile)).mode & 0o777).toBe(0o600);
+          expect((await stat(fixture.profile)).mode & 0o777).toBe(originalMode);
         }
       } finally {
         await rm(fixture.dir, { recursive: true, force: true });
@@ -91,6 +94,8 @@ describe("Surge profile artifact", () => {
     );
     try {
       await chmod(fixture.profile, 0o640);
+      const originalMode = (await stat(fixture.profile)).mode & 0o777;
+      if (process.platform !== "win32") expect(originalMode).toBe(0o640);
       const first = await runArtifact(buildScript, fixture.profile);
       expect(first.changed).toBe(true);
 
@@ -106,7 +111,7 @@ describe("Surge profile artifact", () => {
       );
       expect(patched).not.toContain("shine local proxy groups");
       expect(patched.replace(/\r\n/g, "")).not.toContain("\n");
-      expect((await stat(fixture.profile)).mode & 0o777).toBe(0o640);
+      expect((await stat(fixture.profile)).mode & 0o777).toBe(originalMode);
 
       const second = await runArtifact(buildScript, fixture.profile);
       expect(second.changed).toBe(false);
