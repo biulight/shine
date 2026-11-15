@@ -4,16 +4,15 @@ version.workspace = true
 edition = "2024"
 rust-version = "1.90"
 license.workspace = true
+authors.workspace = true
 description = "Reusable lifecycle runtime and domain core for Shine applications"
 readme = "README.md"
 repository = "https://github.com/biulight/shine"
-homepage = "https://github.com/biulight/shine"
 keywords = ["configuration", "toml", "presets"]
 categories = ["config"]
 
 [dependencies]
 anyhow = { workspace = true }
-directories = { workspace = true }
 flate2 = "1.1.4"
 jsonc-parser = { version = "=0.34.0", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
