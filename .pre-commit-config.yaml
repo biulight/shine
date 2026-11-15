@@ -8,6 +8,10 @@ repos:
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-yaml
+        exclude: ^website/pnpm-lock\.yaml$
+      - id: check-yaml
+        name: check pnpm lockfile yaml
+        files: ^website/pnpm-lock\.yaml$
         # pnpm 12 stores package-manager and project locks as separate YAML documents.
         args: [--allow-multiple-documents]
       - id: end-of-file-fixer
