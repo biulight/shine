@@ -143,9 +143,15 @@ const config = {
         copyright: `Copyright © ${new Date().getFullYear()} Biulight. Built with Docusaurus.`,
       },
       prism: {
-        theme: themes.github,
-        darkTheme: themes.dracula,
-        additionalLanguages: ['powershell', 'toml'],
+        theme: {
+          ...themes.github,
+          styles: [...themes.github.styles, {types: ['shine-command'], style: {color: '#16713b'}}],
+        },
+        darkTheme: {
+          ...themes.dracula,
+          styles: [...themes.dracula.styles, {types: ['shine-command'], style: {color: '#50fa7b'}}],
+        },
+        additionalLanguages: ['powershell', 'toml', 'bash', 'ini', 'ignore'],
       },
       algolia: {
         appId: 'YHLGHU6YJW',
