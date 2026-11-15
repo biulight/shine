@@ -14,7 +14,7 @@ pub(in crate::lifecycle_plan) fn render_compact_permissions(plan: &PlanV1) -> Ve
     {
         return Vec::new();
     }
-    let effects = render_permission_summary(plan, &plan.permissions.required, "      ");
+    let effects = render_permission_summary(plan, &plan.permissions.required, "      ", false);
     let mut lines = Vec::new();
     if !effects.is_empty() {
         lines.push(format!("    {}", crate::colors::bold("Planned effects")));
@@ -54,7 +54,7 @@ pub(in crate::lifecycle_plan) fn render_scope_summary(
     permissions: &shine_core::plan::PermissionResolutionV1,
     indent: &str,
 ) -> Vec<String> {
-    let mut lines = render_permission_summary(plan, &permissions.required, indent);
+    let mut lines = render_permission_summary(plan, &permissions.required, indent, false);
     // Keep scoped blockers even when the aggregate diagnostics have the same code.
     if !permissions.is_satisfied() || permissions.required.is_empty() {
         let mut diagnostics = permissions.clone();
@@ -64,10 +64,29 @@ pub(in crate::lifecycle_plan) fn render_scope_summary(
     lines
 }
 
-pub(in crate::lifecycle_plan) fn render_permission_summary(
+pub(super) fn render_inline_permissions(
     plan: &PlanV1,
     required: &shine_core::plan::PermissionSetV1,
     indent: &str,
+) -> Vec<String> {
+    render_permission_summary(plan, required, indent, true)
+}
+
+/// Keep list separators, literal quotes and the empty-cell marker distinct
+/// from permission data. This is display quoting, never an execution operand.
+pub(super) fn inline_permission_value(value: &str) -> String {
+    if value.contains([',', '"']) || value.trim() != value || value == "—" {
+        format!("{value:?}")
+    } else {
+        escape_controls(value)
+    }
+}
+
+fn render_permission_summary(
+    plan: &PlanV1,
+    required: &shine_core::plan::PermissionSetV1,
+    indent: &str,
+    inline: bool,
 ) -> Vec<String> {
     use shine_core::plan::FilesystemPurposeV1;
     use std::collections::{BTreeMap, BTreeSet};
@@ -159,15 +178,28 @@ pub(in crate::lifecycle_plan) fn render_permission_summary(
         .collect::<BTreeSet<_>>();
     let mut lines = Vec::new();
     for (group, values) in explicit {
-        lines.push(format!("{indent}{}", escape_controls(&group)));
-        lines.extend(values.into_iter().map(|value| {
+        let values = values.into_iter().map(|value| {
             let display = if group.starts_with("filesystem ") {
                 crate::path_display::permission_path(&value)
             } else {
                 value
             };
-            format!("{indent}  - {}", escape_controls(&display))
-        }));
+            if inline {
+                inline_permission_value(&display)
+            } else {
+                escape_controls(&display)
+            }
+        });
+        if inline {
+            lines.push(format!(
+                "{indent}{}: {}",
+                escape_controls(&group),
+                values.collect::<Vec<_>>().join(", ")
+            ));
+        } else {
+            lines.push(format!("{indent}{}", escape_controls(&group)));
+            lines.extend(values.map(|value| format!("{indent}  - {value}")));
+        }
     }
     for (label, summary) in summaries {
         let count = if label == "Installed commands" {

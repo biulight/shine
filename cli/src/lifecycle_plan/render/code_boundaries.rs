@@ -1,21 +1,43 @@
 use crate::output::escape_controls;
 use shine_core::plan::{
-    CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2, CodeTrustStateV2, PlanV1,
+    CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2, CodeTrustStateV2, PlanActionV1,
+    PlanOperationV1, PlanV1,
 };
+
+/// Bootstrap's Update means detection succeeded, not a software upgrade.
+/// Keep this interpretation local to an unambiguous bootstrap step; neither
+/// its action nor its trust boundary may be rewritten in the reviewed Plan.
+pub(super) fn bootstrap_action(plan: &PlanV1, target: &str) -> Option<PlanActionV1> {
+    if plan.operation != PlanOperationV1::SysBootstrap {
+        return None;
+    }
+    let mut steps = plan.steps.iter().filter(|step| step.target == target);
+    let step = steps.next()?;
+    (steps.next().is_none() && step.resource.as_deref() == Some("bootstrap")).then_some(step.action)
+}
 
 pub(in crate::lifecycle_plan) fn render_code_boundaries(
     plan: &PlanV1,
     indent: &str,
     verbose: bool,
 ) -> Vec<String> {
-    if plan.code_boundaries.is_empty() {
+    render_code_boundary_entries(plan, &plan.code_boundaries, indent, verbose)
+}
+
+pub(super) fn render_code_boundary_entries(
+    plan: &PlanV1,
+    boundaries: &[shine_core::plan::CodeBoundaryV2],
+    indent: &str,
+    verbose: bool,
+) -> Vec<String> {
+    if boundaries.is_empty() {
         return Vec::new();
     }
     let mut lines = vec![format!(
         "{indent}{}",
         crate::colors::bold("Code execution and trust")
     )];
-    for boundary in &plan.code_boundaries {
+    for boundary in boundaries {
         let kind = match boundary.entry_kind {
             CodeEntryKindV2::AppHook => "app hook",
             CodeEntryKindV2::AppGenerator => "app generator",
@@ -27,6 +49,18 @@ pub(in crate::lifecycle_plan) fn render_code_boundaries(
         let timing = match boundary.timing {
             CodeTimingV2::ExecuteNow => "executes during this operation",
             CodeTimingV2::DeliverForLater => "delivered for later execution/source",
+        };
+        let timing = if boundary.entry_kind == CodeEntryKindV2::SysBootstrapScript
+            && boundary.timing == CodeTimingV2::ExecuteNow
+            && boundary.target_role == CodeTargetRoleV2::Selected
+        {
+            match bootstrap_action(plan, &boundary.target) {
+                Some(PlanActionV1::Update) => "installation skipped; trust requirements retained",
+                Some(PlanActionV1::Blocked) => "installation blocked; trust requirements retained",
+                _ => timing,
+            }
+        } else {
+            timing
         };
         let source = match boundary.source {
             CodeSourceV2::ShineDistribution => "Shine distribution",
@@ -72,8 +106,7 @@ pub(in crate::lifecycle_plan) fn render_code_boundaries(
         "{indent}  {}",
         crate::colors::yellow("! This operation contains unisolated code. It can use the process's existing system access; author capability statements are not file, network, or command restrictions, and Shine does not verify that they describe all behavior.")
     ));
-    if plan
-        .code_boundaries
+    if boundaries
         .iter()
         .any(|boundary| boundary.entry_kind == CodeEntryKindV2::ShellCommand)
     {

@@ -185,10 +185,11 @@ bugs. Check this list before changing the modules named in each entry.
   rather than panicking or becoming success.
 
 - **Review layouts remain pure and conservative.** Compact, detailed and bootstrap projections
-  preserve their existing formatting and classification rules. Unknown/blocking diagnostics, code
+  preserve classification and scope attribution when summarizing display. Unknown/blocking diagnostics, code
   boundaries, administrator access and uncomputable permissions remain visible. Incomplete or
   ambiguous bootstrap attribution falls back to the full review; display never edits the Plan or
-  creates approval (ADR 0126).
+  creates approval (ADR 0126). Bootstrap table rows retain order and explicit non-execution actions;
+  grouped code cannot imply a target, execution timing or trust state absent from the Plan (ADR 0171).
 
 - **Frontend approval is a consumed local capability.** Trusted human review retains the exact
   request and opaque configuration revision. Execution consumes a non-cloneable, non-serializable
