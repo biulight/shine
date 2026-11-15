@@ -378,6 +378,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             };
             let mut step = PlanStepV1::new(format!("sys/{}", item.id), Some("bootstrap"), action);
             if !present
+                && matches!(&item.detect, Some(SysDetection::Dpkg { conflicts, .. }) if !conflicts.is_empty())
+            {
+                step = step.with_diagnostic_code("sys_dpkg_conflicts_may_be_removed");
+            }
+            if !present
                 && matches!(
                     install,
                     SysInstall::Package {

@@ -235,6 +235,14 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
 
 fn describe_detection(detect: Option<&SysDetection>) -> String {
     match detect {
+        Some(SysDetection::Dpkg {
+            packages,
+            conflicts,
+        }) => format!(
+            "dpkg installed: {}; without: {}",
+            packages.join(", "),
+            conflicts.join(", ")
+        ),
         Some(SysDetection::Command {
             command,
             version_args,

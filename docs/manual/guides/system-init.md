@@ -7,7 +7,7 @@ sidebar_position: 3
 
 Use system presets to install selected development tools on macOS, Ubuntu, Arch Linux, or Windows
 and enable their shell integration. Shine can also manage system settings such as private DNS separately.
-It does not upgrade third-party software.
+Ongoing software updates remain the responsibility of the package manager or upstream tool.
 
 ## Inspect before installing {#inspect-before-applying}
 
@@ -116,7 +116,8 @@ the requested integration is active.
 
 Use the package manager or upstream tool that installed the software, such as Homebrew, apt, pacman,
 winget, mise, or rustup. Rerunning `shine sys bootstrap` skips software it detects as already
-installed; it does not upgrade it. `shine update` and `shine upgrade` manage Shine configuration,
+installed. Completing an incomplete package set may update its existing components; see the
+[Ubuntu installation notes](../built-in-presets/system-bootstrap.md#ubuntu-installation-notes). `shine update` and `shine upgrade` manage Shine configuration,
 not third-party software versions.
 
 ## Manage system settings {#managed-system-items}

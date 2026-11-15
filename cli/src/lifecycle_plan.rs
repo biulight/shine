@@ -1221,6 +1221,25 @@ mod tests {
     }
 
     #[test]
+    fn dpkg_conflict_removal_is_visible_in_bootstrap_review() {
+        let mut plan = bootstrap_display_plan();
+        plan.steps[0]
+            .diagnostic_codes
+            .push("sys_dpkg_conflicts_may_be_removed".into());
+        let fingerprint = plan.fingerprint().unwrap();
+        for verbose in [false, true] {
+            let rendered = render_bootstrap_plan_lines(&plan, "missing", verbose)
+                .unwrap()
+                .join("\n");
+            assert!(
+                rendered.contains("may remove declared conflicting packages and their dependents")
+            );
+            assert!(rendered.contains("package rollback is unsupported"));
+        }
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
     fn pacman_preparation_is_visible_once_in_all_review_layouts_without_mutating_plan() {
         let mut plan = bootstrap_display_plan();
         for step in &mut plan.steps[..2] {

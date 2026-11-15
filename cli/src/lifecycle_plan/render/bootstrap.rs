@@ -145,6 +145,9 @@ pub(in crate::lifecycle_plan) fn render_bootstrap_plan_lines(
                 continue;
             }
             let message = match code.as_str() {
+                "sys_dpkg_conflicts_may_be_removed" => {
+                    "Installer may remove declared conflicting packages and their dependents; package rollback is unsupported"
+                }
                 "sys_bootstrap_profile_recovery_unsupported" => {
                     "Recovery is unsupported for this profile step"
                 }

@@ -83,7 +83,7 @@ the target ran but does not own third-party package uninstall or version rollbac
 |---|---|---|---|---|---|
 | macOS | `homebrew`, `rust`, `astronvim` | opaque scripts | script/provider dependent | embedded | unsupported |
 | macOS | Homebrew/Cask package items | opaque typed provider invocation | provider dependent | embedded | package uninstall/rollback unsupported |
-| Ubuntu | `rust`, `astronvim`, `atuin`, `yazi`, `starship`, `zoxide`, `bat`, `eza`, `bun`, `pnpm`, `mise`, `homebrew`, `zerotier` | opaque scripts | script/provider dependent | embedded | unsupported |
+| Ubuntu | `rust`, `astronvim`, `atuin`, `yazi`, `starship`, `zoxide`, `bat`, `eza`, `docker`, `bun`, `pnpm`, `mise`, `homebrew`, `zerotier` | opaque scripts | script/provider dependent | embedded; Docker uses official APT steps including conflict removal and a hello-world verification container | unsupported |
 | Ubuntu | APT/Homebrew package items | opaque typed provider invocation | provider dependent | embedded | package uninstall/rollback unsupported |
 | Windows | WinGet package items | opaque typed provider invocation | provider/elevation dependent | embedded | package uninstall/rollback unsupported |
 | all supported platforms | `split-dns` | typed managed system action | administrator | embedded | journaled exact-state create/update/remove with receipt-gated recovery |

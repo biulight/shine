@@ -49,7 +49,7 @@ Shine 随附了一些作者整理的常用脚本、应用配置和系统安装�
 
 ## 系统预设
 
-以下组合用于安装选定的开发工具，不升级已有软件。`mise` 项目只安装并启用 mise，
+以下组合用于安装选定的开发工具，已完成的安装会被跳过；bootstrap 不用于日常软件更新。`mise` 项目只安装并启用 mise，
 工具版本由 mise 自行配置。
 
 <div className="built-in-presets-system-table" aria-hidden="true" />
@@ -59,7 +59,7 @@ Shine 随附了一些作者整理的常用脚本、应用配置和系统安装�
 | macOS | `required` | Homebrew、Yazi、Starship。 |
 | macOS | `recommended`（默认） | `required` 加 Rust、Neovim、AstroNvim、ZeroTier、Zsh 插件、zoxide、Atuin、fzf、bat、eza。 |
 | macOS | `all` | `recommended` 加 nvm、Bun、pnpm、mise、Fastfetch。 |
-| Ubuntu | `recommended`（默认） | Rust、Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza。 |
+| Ubuntu | `recommended`（默认） | Rust、Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza、Docker Engine。 |
 | Ubuntu | `all` | `recommended` 加 ZeroTier、Bun、pnpm、mise、Homebrew。 |
 | Ubuntu | `minimal` | Neovim、fzf、bat、eza、zoxide；适合不需要历史同步、提示符与 JavaScript 工具链的服务器。 |
 | Arch Linux | `minimal`（默认） | 通过 pacman 安装 Neovim、fzf、bat、eza、zoxide，支持 Bash/Zsh 集成。仅支持官方 x86_64 Arch Linux。 |

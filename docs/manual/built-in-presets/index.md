@@ -49,7 +49,8 @@ These presets provide application configuration; install the applications separa
 
 ## System presets
 
-The following profiles select development tools to install. They do not upgrade existing software.
+The following profiles select development tools to install. Complete installations are skipped;
+bootstrap is not a general software update command.
 The `mise` item installs and activates mise; tool versions are configured through mise itself.
 
 <div className="built-in-presets-system-table" aria-hidden="true" />
@@ -59,7 +60,7 @@ The `mise` item installs and activates mise; tool versions are configured throug
 | macOS | `required` | Homebrew, Yazi, Starship. |
 | macOS | `recommended` (default) | `required` plus Rust, Neovim, AstroNvim, ZeroTier, Zsh plugins, zoxide, Atuin, fzf, bat, eza. |
 | macOS | `all` | `recommended` plus nvm, Bun, pnpm, mise, Fastfetch. |
-| Ubuntu | `recommended` (default) | Rust, Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza. |
+| Ubuntu | `recommended` (default) | Rust, Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza, Docker Engine. |
 | Ubuntu | `all` | `recommended` plus ZeroTier, Bun, pnpm, mise, Homebrew. |
 | Ubuntu | `minimal` | Neovim, fzf, bat, eza, zoxide; for servers without history synchronization, a prompt, or JavaScript tooling. |
 | Arch Linux | `minimal` (default) | Neovim, fzf, bat, eza, zoxide via pacman; Bash/Zsh integration. Official x86_64 Arch Linux only. |

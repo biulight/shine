@@ -334,6 +334,27 @@ fn validate_bootstrap(item: &SysItem) -> Result<()> {
 
 fn validate_detection(id: &str, detection: &SysDetection) -> Result<()> {
     match detection {
+        SysDetection::Dpkg {
+            packages,
+            conflicts,
+        } => {
+            if packages.is_empty() {
+                bail!("sys item `{id}` dpkg detection requires packages");
+            }
+            for name in packages.iter().chain(conflicts) {
+                if name.len() < 2
+                    || !name.as_bytes()[0].is_ascii_alphanumeric()
+                    || !name.bytes().all(|b| {
+                        b.is_ascii_lowercase() || b.is_ascii_digit() || b"+.-".contains(&b)
+                    })
+                {
+                    bail!("sys item `{id}` has invalid dpkg package name");
+                }
+            }
+            if packages.iter().any(|name| conflicts.contains(name)) {
+                bail!("sys item `{id}` dpkg packages overlap conflicts");
+            }
+        }
         SysDetection::Command {
             command,
             version_args,

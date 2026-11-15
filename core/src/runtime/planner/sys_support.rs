@@ -52,6 +52,18 @@ pub(super) async fn observe_sys_detection<H: FileSystemObservationHost>(
     permissions: &mut PermissionAccumulator,
 ) -> Result<bool> {
     match detection {
+        SysDetection::Dpkg {
+            packages,
+            conflicts,
+        } => {
+            let bytes = read_optional(
+                runtime.host(),
+                Path::new(crate::runtime::sys_dpkg::STATUS_PATH),
+            )
+            .await?;
+            state.bytes(format!("detection:{target}:dpkg"), bytes.as_deref())?;
+            crate::runtime::sys_dpkg::is_present(bytes.as_deref(), packages, conflicts)
+        }
         SysDetection::Command {
             command,
             version_args,

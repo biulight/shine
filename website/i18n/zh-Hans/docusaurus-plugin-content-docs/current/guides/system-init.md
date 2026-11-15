@@ -6,7 +6,7 @@ sidebar_position: 3
 # 初始化与管理系统
 
 使用系统预设，可以在 macOS、Ubuntu、Arch Linux 或 Windows 上安装选定的开发工具，并启用相应的 Shell
-集成。Shine 也能单独管理私有 DNS 等系统设置，但不负责升级第三方软件。
+集成。Shine 也能单独管理私有 DNS 等系统设置，第三方软件的日常更新仍由包管理器或上游工具负责。
 
 ## 先查看，再预览 {#先查看再执行}
 
@@ -105,7 +105,8 @@ Shell 集成用于让终端找到工具，或启用提示符、历史搜索等�
 ## 升级已安装的软件 {#用软件自己的工具升级}
 
 请使用安装该软件的包管理器或上游工具，例如 Homebrew、apt、pacman、winget、mise 或 rustup。
-重新运行 `shine sys bootstrap` 会跳过已检测到的软件，不会升级它。`shine update` 和
+重新运行 `shine sys bootstrap` 会跳过已检测为安装完成的软件；补齐不完整的包组合时，可能更新其中的已有组件，
+详见[Ubuntu 安装说明](../built-in-presets/system-bootstrap.md#ubuntu-installation-notes)。`shine update` 和
 `shine upgrade` 处理的是 Shine 管理的配置，不负责第三方软件版本。
 
 ## 管理系统设置 {#受管系统项目}

@@ -41,6 +41,17 @@ See [Arch system maintenance](https://wiki.archlinux.org/title/System_maintenanc
 - **Yazi:** installs from the official stable APT repository with preview dependencies. It requires
   administrator access, but not Rust or Cargo. Existing installations are skipped without changing
   their installation method.
+- **Docker Engine:** included in `recommended` and `all`. Follows the
+  [official Ubuntu APT installation](https://docs.docker.com/engine/install/ubuntu/#install-using-the-apt-repository):
+  removes conflicting distribution packages, configures Docker's signed stable repository, and installs
+  Engine, CLI, containerd, Buildx and Compose. Requires administrator access. Removing conflicts such as
+  `docker.io`, `podman-docker`, `containerd` or `runc` can affect existing workloads and dependent packages;
+  review the installation plan before continuing. Container data is not deleted.
+  Installation is skipped only when all five official packages are fully installed and no conflicting
+  package remains; a `dockerd` command alone is insufficient. Missing components are installed through APT, which may also update other packages in this set.
+  After installation, Shine starts Docker if needed and runs `hello-world` to verify it; network access
+  to Docker Hub is required. Use `sudo docker`; Shine does not add your user to the `docker` group.
+  Review Docker's firewall notes before publishing container ports.
 - **pnpm:** does not require Node.js, npm, or Corepack beforehand. It installs under
   `~/.local/share/pnpm`; Shine configures the command path. Open a new shell to use it.
 - **Minimal server setup:** `minimal` includes only the tools in its [profile row](./index.md#system-presets), without history sync,
