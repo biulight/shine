@@ -133,7 +133,11 @@ before resolving it.
 
 Some presets process source files before installation:
 
-- `jsonc-to-json` removes JSONC comments and trailing commas and writes standard JSON.
+- `jsonc-to-json` converts JSONC and supported JSON5 syntax to standard JSON. Along with comments
+  and trailing commas, it accepts unquoted keys, single-quoted strings, hexadecimal numbers,
+  leading `+`, decimals such as `.5` and `5.`, string escapes such as `\x41`, `\v` and `\0`,
+  and backslash line continuations. `Infinity` and `NaN` are rejected because they are not valid
+  JSON numbers; numbers outside the supported numeric range also cause an error.
 - `template` replaces `@@VAR_NAME@@` with the current `[env]` value.
 - The `json-merge` strategy manages declared top-level keys while preserving other user settings.
 
