@@ -67,7 +67,7 @@ impl Provider {
                     "App secret fingerprint key missing; preserve state and restore the key"
                 );
                 let mut key = Zeroizing::new(vec![0; 32]);
-                getrandom::getrandom(&mut key)
+                getrandom::fill(&mut key)
                     .map_err(|_| anyhow::anyhow!("cannot generate fingerprint key"))?;
                 key
             }

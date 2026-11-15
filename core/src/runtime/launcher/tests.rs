@@ -1093,7 +1093,6 @@ async fn host_unlink_preserves_all_resources_when_any_launcher_is_foreign() {
 #[test]
 #[cfg(unix)]
 fn launcher_template_bytes_remain_compatible() {
-    use sha2::{Digest, Sha256};
     let source = Path::new("/captured root/O'Connor/$tools/run.ts");
     let env = vec!["SOURCE=TARGET".to_string(), "PLAIN".to_string()];
     let cases = [
@@ -1140,7 +1139,7 @@ fn launcher_template_bytes_remain_compatible() {
     ];
     let hashes = cases
         .iter()
-        .map(|content| format!("{:x}", Sha256::digest(content.as_bytes())))
+        .map(|content| crate::digest::sha256_hex(content.as_bytes()))
         .collect::<Vec<_>>();
     assert_eq!(
         hashes,

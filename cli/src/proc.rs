@@ -12,14 +12,10 @@ pub(crate) fn ensure_command(name: &str) -> Result<()> {
     let found = std::env::var_os("PATH")
         .map(|paths| {
             std::env::split_paths(&paths).any(|dir| {
-                if dir.join(name).is_file() {
-                    return true;
-                }
+                let found = dir.join(name).is_file();
                 #[cfg(windows)]
-                if dir.join(format!("{name}.exe")).is_file() {
-                    return true;
-                }
-                false
+                let found = found || dir.join(format!("{name}.exe")).is_file();
+                found
             })
         })
         .unwrap_or(false);

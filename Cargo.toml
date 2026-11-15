@@ -14,8 +14,8 @@ authors = ["Felix Jiang <biulight007@gmail.com>"]
 [workspace.dependencies]
 anyhow = "1.0.102"
 directories = "6.0.0"
-toml = "1.1.2"
-toml_edit = "0.25.11"
+toml = "1.2.1"
+toml_edit = "0.25.19"
 shine-core = { path = "core", version = "2.10.0" }
 
 [package]
@@ -91,20 +91,20 @@ shellexpand = "3.1.2"
 tokio = { version = "1.52.1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "fs", "process", "sync", "signal", "time"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }
-rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
+rust-embed = { version = "8.14.0", features = ["debug-embed", "interpolate-folder-path"] }
 owo-colors = { version = "4", features = ["supports-colors"] }
-similar = "3.1"
+similar = "3.2.1"
 reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls", "socks"] }
 semver = "1.0.28"
 serde_json = "1.0.145"
 flate2 = "1.1.4"
 tar = "0.4.44"
 glob = "0.3"
-uuid = { version = "1.23.1", features = ["serde", "v4", "v7"] }
-sha2 = "0.10.9"
+uuid = { version = "1.29.2", features = ["serde", "v4", "v7"] }
+sha2 = "0.11.1"
 zeroize = "1.8"
-chacha20poly1305 = "0.10.1"
-getrandom = "0.2"
+chacha20poly1305 = "0.11.0"
+getrandom = "0.4.3"
 unicode-normalization = "0.1.24"
 
 [target.'cfg(unix)'.dependencies]

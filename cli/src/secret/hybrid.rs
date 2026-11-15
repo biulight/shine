@@ -128,7 +128,8 @@ impl Envelope {
             .map_err(|_| anyhow::anyhow!("invalid hybrid data key length"))?;
         let plaintext = cipher
             .decrypt(
-                XNonce::from_slice(self.nonce()),
+                <&XNonce>::try_from(self.nonce())
+                    .map_err(|_| anyhow::anyhow!("invalid hybrid nonce length"))?,
                 Payload {
                     msg: &self.bytes[self.age_end..],
                     aad: &self.bytes[..self.age_end],
@@ -157,7 +158,7 @@ fn encode(key: &[u8], nonce: &[u8; 24], gpg: &[u8], age: &[u8], plain: &[u8]) ->
         .map_err(|_| anyhow::anyhow!("invalid hybrid data key length"))?;
     let encrypted = cipher
         .encrypt(
-            XNonce::from_slice(nonce),
+            nonce.into(),
             Payload {
                 msg: plain,
                 aad: &bytes,
@@ -178,8 +179,7 @@ pub async fn encrypt(plain: &[u8], recipients: &Recipients) -> Result<String> {
         "hybrid plaintext exceeds size limit"
     );
     let mut material = Zeroizing::new([0u8; 56]);
-    getrandom::getrandom(&mut *material)
-        .map_err(|_| anyhow::anyhow!("OS randomness unavailable"))?;
+    getrandom::fill(&mut *material).map_err(|_| anyhow::anyhow!("OS randomness unavailable"))?;
     let nonce: &[u8; 24] = material[..24].try_into().unwrap();
     let mut wrapped = Zeroizing::new(String::from(KEY_PREFIX));
     // encode_string avoids an unprotected intermediate copy of the key.

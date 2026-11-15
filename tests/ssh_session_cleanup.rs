@@ -91,7 +91,9 @@ fn ssh_cli_preserves_option_order_and_remote_wrapper_boundaries_in_both_modes() 
         let bytes = BASE64.decode(encoded).unwrap();
         String::from_utf16(
             &bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                 .collect::<Vec<_>>(),
         )

@@ -1,5 +1,5 @@
 //! Pure profile three-way merge and initial user-edit recognition; no Host capabilities.
-use similar::{DiffTag, TextDiff};
+use similar::{Algorithm, DiffTag, TextDiff};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProfileChange {
@@ -67,7 +67,10 @@ fn split_profile_lines(content: &str) -> Vec<String> {
 fn profile_changes(base_lines: &[String], new_lines: &[String]) -> Vec<ProfileChange> {
     let base_refs = base_lines.iter().map(String::as_str).collect::<Vec<_>>();
     let new_refs = new_lines.iter().map(String::as_str).collect::<Vec<_>>();
-    TextDiff::from_slices(&base_refs, &new_refs)
+    // Preserve the pre-3.2 edit boundaries used for ownership/conflict decisions.
+    TextDiff::configure()
+        .algorithm(Algorithm::RawMyers)
+        .diff_slices(&base_refs, &new_refs)
         .ops()
         .iter()
         .filter_map(|op| {

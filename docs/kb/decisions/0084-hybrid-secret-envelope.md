@@ -15,7 +15,7 @@ Each wrapper is nonempty and at most 1 MiB; plaintext is at most 16 MiB.
 The entire header and both wrappers, in the above order, are AEAD associated data.
 This authenticates all metadata and both access paths without self-reference.
 
-Use RustCrypto `chacha20poly1305` 0.10.1 and `getrandom` 0.2 OS randomness. Each seal
+Use RustCrypto `chacha20poly1305` 0.11 and `getrandom` 0.4 OS randomness. Each seal
 uses one fresh 32-byte key and one fresh 24-byte nonce for exactly one encryption.
 Never reuse a key, persist it, or pass it in argv. Zeroizing buffers own key material
 and decrypted wrapper text, including error paths. External processes necessarily
@@ -95,7 +95,7 @@ by the OS on exit; lock files contain no secrets and must not be unlinked on rel
 
 ## References
 
-- [RustCrypto implementation](https://docs.rs/chacha20poly1305/0.10.1/chacha20poly1305/)
+- [RustCrypto implementation](https://docs.rs/chacha20poly1305/0.11.0/chacha20poly1305/)
 - [GnuPG options](https://gnupg.org/documentation/manuals/gnupg/GPG-Configuration-Options.html)
 - [Prior tagged routing](0008-age-secret-backend-tagged-ciphertext.md)
 

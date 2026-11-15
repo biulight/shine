@@ -988,7 +988,9 @@ mod tests {
     fn decode_powershell_script(encoded: &str) -> String {
         let bytes = BASE64.decode(encoded).unwrap();
         let units = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
         String::from_utf16(&units).unwrap()

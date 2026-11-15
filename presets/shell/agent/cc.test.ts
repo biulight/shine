@@ -70,7 +70,8 @@ describe("provider configuration", () => {
     ["invalid credential key", customConfig.replace('"FIRST_TOKEN"', '"invalid key"'), ".credentialKey"],
     ["numeric environment", customConfig.replace('"983616"', "983616"), "string values"],
     ["invalid environment name", customConfig.replace("CUSTOM_PROVIDER_VALUE", '"INVALID=KEY"'), "environment names"],
-    ["NUL environment", customConfig.replace('"first-only"', '"\\u0000"'), "invalid TOML"],
+    // Bun 1.4 parses escaped NUL; provider validation must still reject it.
+    ["NUL environment", customConfig.replace('"first-only"', '"\\u0000"'), /invalid (TOML|providers\[1\]\.env)/],
     ["inline credential", customConfig.replace("CUSTOM_PROVIDER_VALUE", "ANTHROPIC_AUTH_TOKEN"), "use credentialKey"],
     ["lowercase credential", customConfig.replace("CUSTOM_PROVIDER_VALUE", "anthropic_auth_token"), "use credentialKey"],
     ["unknown field", customConfig.replace('label = "First"', 'unknown = "First"'), "unknown field"],

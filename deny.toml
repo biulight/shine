@@ -25,7 +25,8 @@ allow = [
 ]
 confidence-threshold = 0.8
 exceptions = [
-  #{ allow = ["Zlib"], name = "adler32", version = "*" },
+  # serde_json's default hasher; reviewed upstream Zlib notice is retained in its source.
+  { allow = ["Zlib"], name = "foldhash", version = "=0.2.0" },
 ]
 
 [licenses.private]
