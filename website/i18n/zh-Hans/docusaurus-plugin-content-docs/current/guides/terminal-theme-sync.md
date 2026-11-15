@@ -33,19 +33,8 @@ export SHINE_SYNC_TERMINAL_THEME=0
 
 环境变量优先级更高，适合临时禁用。即使关闭自动同步，仍可随时手动运行 `shine theme sync`。
 
-也可以安装 `utils` 类别中的 `shine-theme-sync` 命令，用于自己维护的 profile：
-
-```bash
-shine shell install utils
-```
-
-打开新的 Shell 后，直接运行：
-
-```bash
-shine-theme-sync
-```
-
-这个命令会让设置在当前会话生效，不需要额外使用 `eval`。
+自行维护 profile 时，可按需使用 [`shine-theme-sync` 预设命令](../built-in-presets/utils.md#terminal-theme)，
+将这些设置应用到当前会话。
 
 ## SSH 会话
 

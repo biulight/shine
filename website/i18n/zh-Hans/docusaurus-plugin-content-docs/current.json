@@ -18,5 +18,9 @@
   "sidebar.manual.category.Reference.link.generated-index.description": {
     "message": "查询 Shine 命令、配置文件与覆盖规则。",
     "description": "The generated-index page description for category 'Reference' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Built-in presets": {
+    "message": "内置预设",
+    "description": "The label for category 'Built-in presets' in sidebar 'manual'"
   }
 }

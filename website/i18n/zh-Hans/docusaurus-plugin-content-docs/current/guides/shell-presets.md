@@ -8,8 +8,6 @@ sidebar_position: 1
 Shell 预设把常用脚本安装为可以直接调用的命令，支持 Bash、Zsh 和 PowerShell。
 部分命令需要 Bun 等额外运行环境，请先确认预设的要求。
 
-内置类别、平台限制、当前会话命令和所需环境变量见[内置预设](../reference/built-in-presets.md#shell-预设)。
-
 ## 查看与安装
 
 先查看预设，再选择一种安装范围：
@@ -102,22 +100,7 @@ live 模式会在下次调用时直接使用修改后的来源，需要 `--devel
 
 ## 内置常用命令
 
-| 类别 | 命令 | 用途 |
-| --- | --- | --- |
-| `image-tools` | `img-compress`、`img-resize`、`img-convert` | 使用 Bun 1.3.14 或更高版本批量处理 JPEG、PNG、WebP |
-| `proxy` | `setproxy`、`usetproxy` | 设置或清除当前终端代理；也会修改 Yarn 的持久代理设置 |
-| `utils` | `copyfile` | 通过 OSC52 将文件内容复制到本地剪贴板 |
-| `utils` | `shine-env-export` | 将 Shine env 值载入当前 shell |
-| `utils` | `shine-theme-sync` | 在当前会话应用终端明暗主题设置 |
-| `agent` | `ccenv` | 选择 Codex、DeepSeek 或 Qwen provider，并为启动的 Claude Code 设置专用环境变量；需要 Bun |
+可选命令及其前置条件见[内置 Shell 预设](../built-in-presets/index.md#shell-预设)。
+`shine shell list` 只显示当前平台可用条目。
 
-某些类别按平台提供不同脚本；`shine shell list` 只显示当前平台可用的条目。
-
-`ccenv` 默认通过本机 `http://127.0.0.1:8317` 的 CLIProxyAPI 使用 Codex，也可交互选择 DeepSeek 或 Qwen。相应凭据使用 `CLIPROXYAPI_AUTH_TOKEN`、`DEEPSEEK_API_KEY` 或 `QWEN_API_KEY`；加密值使用同名的 `_SECRET` 后缀，旧版 `_GPG_SECRET` 仍可读取。所选 provider 的变量只传给启动的 Claude 进程，不会修改当前终端。Claude 参数会原样转发；若首个参数与 `ccenv` 的 `--run` 兼容参数冲突，先写 `--`：
-
-```bash
-ccenv --print "hello"
-ccenv -- --run
-```
-
-想用 Bun 编写跨平台命令预设？请参阅[可选运行时的 Shell 入口](./custom-presets.md#可选运行时的-shell-入口)。
+用 Bun 编写跨平台预设的方法见[可选运行时的 Shell 入口](./custom-presets.md#可选运行时的-shell-入口)。

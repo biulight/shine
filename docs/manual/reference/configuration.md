@@ -8,9 +8,9 @@ sidebar_position: 2
 Shine stores global configuration and state under `~/.shine/` and creates `config.toml` when needed.
 On Unix, when `SUDO_USER` identifies the invoking user, home-relative paths use that user's home.
 
-Use this page to look up settings and their precedence. For step-by-step use, see
-[environment variables and secrets](../guides/environment.md) or
-[custom presets](../guides/custom-presets.md).
+For setup instructions, see [environment variables and secrets](../guides/environment.md) or
+[custom presets](../guides/custom-presets.md). Category-level `shine.toml` fields are in
+[Preset configuration](./preset-configuration.md).
 
 ## Common global fields
 

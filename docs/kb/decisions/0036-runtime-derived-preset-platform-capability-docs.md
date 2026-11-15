@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-08-27
 - **Evidence**: `core/src/runtime/{app_metadata,shell}.rs`, `tests/builtin_presets/docs.rs` (relocated by ADR 0147),
-  `docs/manual/reference/built-in-presets.md`
+  `docs/manual/built-in-presets/index.md`
 
 ## Context
 
@@ -14,7 +14,7 @@ operating systems.
 
 ## Decision
 
-The built-in preset reference contains a delimited platform capability block for every App category
+The built-in preset overview contains a delimited platform capability block for every App category
 and Shell command. A host-independent Rust conformance test generates the expected rows from the
 pristine embedded preset bundle using the same destination selection, file-level `platforms`, and
 per-file destination rules as runtime loading. The test compares the complete generated block in

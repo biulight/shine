@@ -19,7 +19,7 @@ shine sys info neovim
 ```
 
 Use `shine sys list --all` to browse other platforms. Available items and named selections
-(profiles) are listed in [Built-in presets](../reference/built-in-presets.md#system-presets).
+(profiles) are listed in [Built-in presets](../built-in-presets/index.md#system-presets).
 
 Preview the items you want to install:
 
@@ -39,8 +39,7 @@ Choose one method:
 | Choose items interactively | `shine sys bootstrap` |
 | Install only fzf | `shine sys bootstrap fzf` |
 | Install Neovim, then fzf | `shine sys bootstrap neovim fzf` |
-| Use the recommended selection (macOS, Ubuntu, Windows) | `shine sys bootstrap --preset recommended` |
-| Use the minimal selection (Ubuntu, Arch Linux) | `shine sys bootstrap --preset minimal` |
+| Use a named selection | `shine sys bootstrap --preset <PROFILE>` |
 
 Before changing the system, Shine shows a plan and asks for confirmation; the default is No.
 Review the changes, permissions, and recovery limits. Add `--verbose` if you need more detail.
@@ -56,25 +55,8 @@ For scripts, see [system command options](../reference/commands.md#system-preset
 
 ## Arch Linux preparation {#arch-linux-preparation}
 
-Only official x86_64 Arch Linux is supported. The only preset is `minimal` (the default),
-which includes Neovim, fzf, bat, eza, and zoxide.
-
-Before installation, review Arch's update instructions and complete a full system update
-(omit `sudo` as root). Once the update succeeds, preview and install:
-
-```bash
-sudo pacman -Syu
-
-shine sys bootstrap --preset minimal --dry-run
-shine sys bootstrap --preset minimal
-```
-
-Shine does not upgrade the system automatically. Arch does not support partial upgrades;
-do not run `pacman -Sy` alone before installing packages.
-
-If a download fails with HTTP 404, confirm that the system update completed successfully;
-if the problem persists, check the configured mirrors. For other errors, follow pacman's output.
-See [Arch system maintenance](https://wiki.archlinux.org/title/System_maintenance).
+For the built-in Arch selection and required full system update, follow
+[Arch Linux preparation](../built-in-presets/system-bootstrap.md#arch-linux-preparation).
 
 ## Open a new terminal and check the result
 
@@ -89,7 +71,7 @@ This shows the latest saved result for each item, possibly from different runs. 
 whether software is still installed or whether the current system configuration matches.
 
 Software-specific steps, including Atuin history import, are in
-[Ubuntu installation notes](../reference/built-in-presets.md#ubuntu-installation-notes).
+[Ubuntu installation notes](../built-in-presets/system-bootstrap.md#ubuntu-installation-notes).
 
 ## Use a download proxy
 
@@ -137,12 +119,10 @@ winget, mise, or rustup. Rerunning `shine sys bootstrap` skips software it detec
 installed; it does not upgrade it. `shine update` and `shine upgrade` manage Shine configuration,
 not third-party software versions.
 
-For mise, use mise itself to configure and install tools and manage their versions.
-
 ## Manage system settings {#managed-system-items}
 
 Use `apply` and `uninstall` for managed settings such as `split-dns`. Before using that item,
-complete the [private DNS setup](../reference/built-in-presets.md#private-split-dns).
+complete the [private DNS setup](../built-in-presets/split-dns.md).
 
 | Goal | Command |
 | --- | --- |
@@ -166,10 +146,6 @@ approval. Use `shine sys info split-dns` for details and `shine sys status` for 
 - **Shell configuration conflicts:** inspect the files identified by Shine. Use
   `shine sys bootstrap --force-profile` only if you want to back up and replace the conflicting
   profile instead of preserving and merging your edits.
-- **Rust commands are missing on an older Ubuntu setup:** upgrade Shine, run
-  `shine sys bootstrap rust`, and open a new shell. This repairs integration without reinstalling
-  detected Rust. In Bash/Zsh, you can also run `. "$HOME/.cargo/env"` for the current session if
-  that file exists.
 
 ## Supported shells {#platform-notes}
 

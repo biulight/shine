@@ -68,7 +68,7 @@ Shine 帮你集中管理这些内容，也能将密码、访问密钥等敏感�
 ## 从这里开始
 
 先[安装 Shine](./installation.md)，再跟随[快速开始](./quick-start.md)完成第一次预设安装，
-或查看[内置预设](./reference/built-in-presets.md)选择需要的工具和配置。
+或查看[内置预设](./built-in-presets/index.md)选择需要的工具和配置。
 需要加密功能时，从[环境变量与密钥](./guides/environment.md)开始。
 
 遇到问题时查看[故障排查](./troubleshooting.md)；查找命令和选项时使用[命令参考](./reference/commands.md)。

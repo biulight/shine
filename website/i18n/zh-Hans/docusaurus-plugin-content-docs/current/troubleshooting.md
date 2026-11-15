@@ -66,25 +66,21 @@ shine info app/starship --diff
 
 ## 生成式 App 文件刷新失败
 
-先确认类别已经安装、选择器使用 `[[files]].source` 的相对路径，并满足 generator 的 env 前提：
+先确认类别已经安装，`SOURCE_FILE` 使用 `[[files]].source` 的相对路径：
 
 ```bash
-shine app info surge
+shine app info <CATEGORY>
 shine env list
-shine app refresh surge subscription-proxies.conf
+shine app refresh <CATEGORY> <SOURCE_FILE>
 ```
 
-按以下顺序检查：
+按该预设的要求准备运行时和环境输入。Surge 特有的订阅错误见[刷新订阅](./built-in-presets/surge.md#刷新订阅)。
 
-1. 安装 Bun，并确认 `SURGE_SUBSCRIPTION_URL` 或 `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`
-   为 HTTPS 订阅地址。
-2. 如果报错为 HTTP 状态、超时、响应过大或无兼容节点，检查订阅服务。服务商返回完整 Surge
-   托管配置时，请改用通用 URI/Base64 订阅地址；Shine 不会从完整配置中截取代理部分。
-3. 如果目标文件已被修改，先查看差异；只有确定要覆盖本地修改时才加 `--force`。
+如果目标文件已被修改，先查看差异；只有确定要覆盖本地修改时才加 `--force`。
+刷新失败会保留上次成功生成的文件。
 
-刷新失败会保留上次成功生成的文件。日常 `shine update` 和 `shine upgrade` 不会刷新这类手动订阅，
-需要显式运行 `shine app refresh`。报错会隐去订阅 URL、响应正文和节点内容；提交问题时仍请检查
-输出，避免附上秘密。
+自动与手动生成的区别见[刷新生成的配置](./guides/app-presets.md#生成式文件与-surge-uri-订阅)。
+提交问题前，请检查报错输出，避免附上秘密。
 
 ## `shine preset pull` 拒绝更新来源
 

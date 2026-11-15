@@ -5,8 +5,6 @@ sidebar_position: 6
 
 # Tasks and application artifacts
 
-This guide shows how to save personal command shortcuts and run application artifact scripts.
-
 ## Save common commands
 
 Save a complete command as a task:
@@ -47,23 +45,9 @@ shine task delete logs
 Task names may contain letters, numbers, dots, hyphens, and underscores and must start with a letter
 or number.
 
-## Generate application helper resources
+## Connect an application preset {#generate-application-helper-resources}
 
-Some application presets declare an artifact script that generates extra files from current
-configuration:
-
-```bash
-shine app artifact apply surge
-```
-
-Shine shows a plan and asks for confirmation before running the script. Scripts run with your
-permissions without sandbox isolation; review external code before approving it. Non-interactive
-runs require `--yes` and an existing trust grant for external code. A script failure fails the
-command, with details shown in the terminal.
-
-Some presets also declare automatic actions after installation or upgrade; those actions require
-review and approval too. `shine update` only checks for updates. Follow the
-[application preset guide](./app-presets.md) for setup, prerequisites, and removal instructions.
-
-If you want to write an artifact script, see [Custom presets](./custom-presets.md) for its runtime,
-input declarations, and output directories.
+For a preset's additional setup step, use `shine app artifact apply <CATEGORY>`.
+Follow [Manage application configuration](./app-presets.md#build-helper-resources) for prerequisites,
+authorization, and cleanup. To write these scripts, see
+[Custom presets](./custom-presets.md#application-artifact-runtimes).

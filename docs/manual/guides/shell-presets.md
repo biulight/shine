@@ -9,9 +9,6 @@ Shell presets install reusable scripts as commands you can call directly in Bash
 PowerShell. Some commands need an additional runtime such as Bun; check the preset's requirements
 before installing.
 
-See [built-in presets](../reference/built-in-presets.md#shell-presets) for categories, platform
-limits, commands available in the current session, and required environment variables.
-
 ## Browse and install
 
 List the presets first, then choose one installation scope:
@@ -116,29 +113,8 @@ follow the authorization guidance. See [Custom presets](./custom-presets.md) for
 
 ## Common built-in commands
 
-| Category | Commands | Purpose |
-| --- | --- | --- |
-| `image-tools` | `img-compress`, `img-resize`, `img-convert` | Batch-process JPEG, PNG, and WebP files with Bun 1.3.14 or newer |
-| `proxy` | `setproxy`, `usetproxy` | Set or clear the session proxy and Yarn's persistent proxy settings |
-| `utils` | `copyfile` | Copy file content to the local clipboard through OSC 52 |
-| `utils` | `shine-env-export` | Load a Shine environment value into the current shell |
-| `utils` | `shine-theme-sync` | Apply terminal light/dark theme settings to the current session |
-| `agent` | `ccenv` | Select a Codex, DeepSeek, or Qwen provider and launch Claude Code with provider-specific environment values; requires Bun |
-
-Some categories provide different scripts by platform. `shine shell list` shows only entries
-available on the current platform.
-
-By default, `ccenv` connects to CLIProxyAPI at `http://127.0.0.1:8317` for Codex and can interactively
-select DeepSeek or Qwen. Credentials use `CLIPROXYAPI_AUTH_TOKEN`, `DEEPSEEK_API_KEY`, or
-`QWEN_API_KEY`. Encrypted values use the corresponding `_SECRET` suffix; legacy `_GPG_SECRET`
-values remain readable. Provider variables are passed only to the launched Claude process and never
-modify the current terminal. Claude arguments are forwarded unchanged. If the first argument
-conflicts with a `ccenv --run` compatibility argument, insert `--` first:
-
-```bash
-ccenv --print "hello"
-ccenv -- --run
-```
+Browse the [built-in Shell presets](../built-in-presets/index.md#shell-presets) for optional commands
+and their prerequisites. `shine shell list` shows entries available on the current platform.
 
 To write a cross-platform command preset with Bun, see
 [Shell entries with an optional runtime](./custom-presets.md#shell-entries-with-an-optional-runtime).

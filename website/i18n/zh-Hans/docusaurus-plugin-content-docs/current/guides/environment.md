@@ -32,13 +32,7 @@ Shine 可以保存预设模板变量，也可以使用 GPG 或 age 封存项目�
 | 保存变量值 | `shine env set HTTP_PROXY_PORT 6152` |
 | 删除所选位置保存的值 | `shine env delete HTTP_PROXY_PORT` |
 
-`PROXY_NO_PROXY` 控制 `setproxy` 设置的 `NO_PROXY` 和 `no_proxy`，默认为
-`localhost,127.0.0.1,::1`。修改它或其他代理变量后，`shine update` 会把已安装的
-`proxy` shell 预设标记为可更新；运行 `shine upgrade` 应用新值。
-
-内置图片命令默认使用 `IMAGE_QUALITY=80`、`IMAGE_MAX_WIDTH=1920`、
-`IMAGE_MAX_HEIGHT=1080`。可用 `--quality`、`--width`、`--height` 只覆盖当次运行，也可用
-`shine env set` 为当前机器保留不同默认值。
+预设专属的默认值与用法见[内置预设](../built-in-presets/index.md)。
 
 `shine env list` 隐藏敏感值；`shine env explain KEY` 隐藏所有值，并指出生效值来自哪个文件。
 只在安全终端中使用 `--reveal`；它不会解密秘密。注入时优先使用 `KEY_SECRET`，再使用 `KEY`，
@@ -283,7 +277,7 @@ $exportCode = shine env secret export MY_TOKEN --as API_TOKEN
 if ($LASTEXITCODE -eq 0) { Invoke-Expression $exportCode }
 ```
 
-安装 `utils` shell 预设后，也可以使用 `shine-env-export MY_TOKEN --as API_TOKEN`。
+也可按需使用封装此操作的 [Shell 小工具](../built-in-presets/utils.md#export-a-value)。
 导出的值会留在当前 Shell 中；只有一个命令需要时，优先使用[单次注入](#只向一个命令提供变量)。
 含 NUL 的值不能导出为环境变量。
 

@@ -83,7 +83,7 @@ permission boundaries.
 ## Start here
 
 First, [install Shine](./installation.md), then follow the [quick start](./quick-start.md) to install
-your first preset, or browse the [built-in presets](./reference/built-in-presets.md) to choose tools
+your first preset, or browse the [built-in presets](./built-in-presets/index.md) to choose tools
 and settings you need. For encryption features, start with
 [environment variables and secrets](./guides/environment.md).
 
