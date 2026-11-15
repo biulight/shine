@@ -312,7 +312,7 @@ fn snapshot_only_upgrade_still_requires_approval_and_preserves_trust() {
     assert_eq!(fs::read(state.join("trust.toml")).unwrap(), trust);
 }
 
-// These review outputs are small enough to drain after the child exits.
+// Drain concurrently: a complete review can fill the PTY before the child exits.
 #[cfg(unix)]
 fn output_with_terminal(
     mut command: Command,
@@ -351,20 +351,33 @@ fn output_with_terminal(
     } else {
         command.stderr(Stdio::from(slave));
     }
-    let output = command.output().unwrap();
-    drop(command);
     assert_eq!(
         unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
         0
     );
-    let mut terminal = Vec::new();
-    match master.read_to_end(&mut terminal) {
-        Ok(_) => {}
-        Err(error)
-            if error.raw_os_error() == Some(libc::EIO)
-                || error.kind() == std::io::ErrorKind::WouldBlock => {}
-        Err(error) => panic!("reading test PTY: {error}"),
-    }
+    let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader_finished = finished.clone();
+    let reader = std::thread::spawn(move || {
+        let mut terminal = Vec::new();
+        loop {
+            match master.read_to_end(&mut terminal) {
+                Ok(_) => break,
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if reader_finished.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => panic!("reading test PTY: {error}"),
+            }
+        }
+        terminal
+    });
+    let output = command.output().unwrap();
+    drop(command);
+    finished.store(true, std::sync::atomic::Ordering::Release);
+    let terminal = reader.join().unwrap();
     drop(keep_alive);
     (output, terminal)
 }
@@ -962,6 +975,127 @@ fn sys_bootstrap_preview_encodes_data_without_executing_or_mutating_inputs() {
         assert!(!state.join("sys-manifest.toml").exists());
         assert!(!state.join("trust.toml").exists());
         assert!(!fixture.0.join("home/.shine").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sys_bootstrap_numbered_review_keeps_color_modes_and_requires_approval() {
+    for installed in [false, true] {
+        let mut expected = None;
+        for (terminal_stdout, no_color, force_color) in [
+            (false, false, false),
+            (false, false, true),
+            (true, false, false),
+            (true, true, false),
+        ] {
+            let fixture = sys_output_fixture();
+            let state = fixture.0.join("state");
+            if installed {
+                use std::os::unix::fs::PermissionsExt;
+                let binary = fixture.0.join("home/.local/bin/if");
+                fs::create_dir_all(binary.parent().unwrap()).unwrap();
+                fs::write(&binary, "#!/bin/sh\nexit 99\n").unwrap();
+                fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let before = upgrade_tree_state(&state.join("presets"));
+            let config_before = fs::read(state.join("config.toml")).unwrap();
+            let mut command = fixture.command();
+            command
+                .args(["sys", "bootstrap", "--", "--help"])
+                .env("SHELL", "/bin/bash")
+                .env("TERM", "xterm-256color")
+                .env_remove("NO_COLOR")
+                .env_remove("FORCE_COLOR")
+                .env_remove("CLICOLOR_FORCE")
+                .env_remove("CLICOLOR")
+                .env_remove("IGNORE_IS_TERMINAL");
+            if no_color {
+                command.env("NO_COLOR", "1");
+            }
+            if force_color {
+                command.env("FORCE_COLOR", "1");
+            }
+            // stdin stays closed: the real handler must render review and refuse
+            // execution, even when stdout is a terminal or color is forced.
+            let (output, terminal) = output_with_terminal(command, terminal_stdout);
+            assert!(!output.status.success());
+            let stdout = String::from_utf8_lossy(if terminal_stdout {
+                &terminal
+            } else {
+                &output.stdout
+            });
+            let stderr = String::from_utf8_lossy(if terminal_stdout {
+                &output.stderr
+            } else {
+                &terminal
+            });
+            assert!(
+                stderr.contains(
+                    "security Plan approval requires an interactive terminal or explicit --yes"
+                ),
+                "{stderr}\n{stdout}"
+            );
+            assert_eq!(
+                stdout.contains("\x1b["),
+                force_color || (terminal_stdout && !no_color),
+                "{stdout:?}"
+            );
+            if force_color || (terminal_stdout && !no_color) {
+                let styled = if installed {
+                    "\x1b[2m--help\x1b[0m"
+                } else {
+                    "\x1b[36m--help\x1b[39m"
+                };
+                assert!(stdout.contains(styled), "{stdout:?}");
+            }
+            let plain = console::strip_ansi_codes(&stdout)
+                .replace('\r', "")
+                .replace(fixture.0.to_str().unwrap(), "<fixture>");
+            assert!(plain.contains("#   Item"), "{plain}");
+            assert!(plain.contains("01  --help"), "{plain}");
+            assert!(
+                plain.contains("Commands")
+                    && plain.contains("Execute")
+                    && plain.contains("Installation")
+            );
+            let row = plain
+                .lines()
+                .find(|line| line.starts_with("    01  "))
+                .unwrap();
+            assert_eq!(
+                row.split_whitespace().nth(2),
+                Some(if installed { "skip" } else { "run" })
+            );
+            assert_eq!(
+                plain.contains("installation skipped; trust requirements retained"),
+                installed
+            );
+            assert_eq!(plain.contains("executes during this operation"), !installed);
+            assert!(!plain.contains("(update)"));
+            if let Some(expected) = &expected {
+                assert_eq!(&plain, expected);
+            } else {
+                expected = Some(plain);
+            }
+            // Ordinary CLI startup can initialize maintenance metadata. It must
+            // not apply the reviewed bootstrap or change its inputs without consent.
+            assert_eq!(upgrade_tree_state(&state.join("presets")), before);
+            assert_eq!(fs::read(state.join("config.toml")).unwrap(), config_before);
+            for path in [
+                "sys-manifest.toml",
+                "trust.toml",
+                "runtime/sys",
+                "sys-operation-journal.toml",
+            ] {
+                assert!(
+                    !state.join(path).exists(),
+                    "unexpected bootstrap state: {path}"
+                );
+            }
+            assert!(!fixture.0.join("home/.bashrc").exists());
+            assert!(!fixture.0.join("home/.zshrc").exists());
+        }
     }
 }
 

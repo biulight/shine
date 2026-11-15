@@ -92,8 +92,12 @@ user destinations, ambiguous entries, blocked Plans and recovery reviews stay ex
 Security Plan commands accept `--verbose`; the display preference is scoped to the command future
 and never changes the execution request. Full permissions and purpose groups remain fingerprint-bound
 (ADR 0094). `lifecycle_plan/render.rs` is a display-only facade over compact, detailed and
-bootstrap layouts, permissions, code boundaries and labels. Bootstrap retains its ordered scopes
-and distinct permission formatting; incomplete attribution falls back to the full detailed review.
+bootstrap layouts, permissions, code boundaries and labels. Ready default bootstrap review uses a
+numbered installation/command/script table, attributed Attention notices and grouped ordinary built-in
+code boundaries. Bootstrap Update steps mean detected software, so review separates skipped installers
+with retained trust requirements from Execute steps; profile delivery remains distinct. This projection
+does not change Core boundaries or preflight trust checks. Other permissions and exceptional code remain explicit; verbose and blocked review stay
+expanded, and incomplete attribution falls back to the full detailed review (ADR 0171).
 Ordinary built-in Shell installation can project a task summary when all concrete effects have
 consistent typed attribution; overlapping maintenance attributions may describe the same cache
 write. Source, commands, user destinations and recovery backup paths stay visible. Plain environment

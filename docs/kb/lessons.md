@@ -1,5 +1,27 @@
 # Lessons Learned
 
+## 2026-11-16 — Bootstrap Update does not mean software upgrade
+
+- **Symptom**: already-installed items displayed `(update)` and entered the summary of code executing
+  during bootstrap, although execution detected their presence and skipped the installers.
+- **Cause**: display translated the generic action directly and grouped conservative code boundaries
+  without checking the bootstrap step's action. The earlier layout fixture covered missing software.
+- **Fix**: show installation `skip/run`, retain detection commands and profile changes, and describe
+  skipped installation boundaries as retained trust requirements. Do not remove those boundaries:
+  external script preflight still checks trust before execution's presence check.
+- **Regression**: real embedded all-detected/mixed plans, missing external trust, operation-only
+  consent, unchanged Plan/approval and invalidation after detection changes; color/TTY output covers
+  both installation states without allowing real installation.
+
+## 2026-11-16 — Inline permission lists must distinguish separators from path data
+
+- **Symptom**: compact bootstrap review rendered one path containing `, ` identically to two
+  separate filesystem permissions. Control-character escaping alone did not disambiguate the list.
+- **Fix**: quote inline permission values containing commas, quotes, surrounding whitespace or
+  the empty-cell marker. Keep ordinary paths concise and leave raw Plan identities unchanged.
+- **Regression**: compare one comma-bearing destination with two destinations; cover script table
+  cells, quote escaping, and unchanged approval data. This is display quoting, not shell quoting.
+
 ## 2026-11-13 — Installer PATH hints must cover login Bash
 
 - **Symptom**: after following the installer hint on a fresh Linux system, SSH login still

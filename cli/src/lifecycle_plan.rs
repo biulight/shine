@@ -1019,7 +1019,7 @@ mod tests {
         );
     }
 
-    fn bootstrap_display_plan() -> PlanV1 {
+    pub(in crate::lifecycle_plan) fn bootstrap_display_plan() -> PlanV1 {
         use shine_core::plan::{PermissionResolutionV1, PlanOperationV1, PlanPermissionScopeV1};
         let scopes = vec![
             (
@@ -1109,6 +1109,12 @@ mod tests {
         assert_embedded_bootstrap_permission_provenance("windows").await;
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bootstrap_renderer_uses_embedded_macos_permission_provenance() {
+        assert_embedded_bootstrap_permission_provenance("macos").await;
+    }
+
     async fn assert_embedded_bootstrap_permission_provenance(os_id: &str) {
         use shine_core::runtime::{
             InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
@@ -1130,6 +1136,14 @@ mod tests {
                     "winget",
                     false,
                     0,
+                ),
+                "macos" => (
+                    RuntimePlatform::Macos,
+                    shine_core::runtime::ShellType::Zsh,
+                    ".zshrc",
+                    "brew",
+                    false,
+                    2,
                 ),
                 _ => unreachable!("unsupported test platform"),
             };
@@ -1167,6 +1181,8 @@ mod tests {
             .await
             .unwrap();
         assert!(plan.is_ready());
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
         let rendered = render_bootstrap_plan_lines(&plan, "missing", false)
             .unwrap()
             .join("\n");
@@ -1179,6 +1195,58 @@ mod tests {
         let detailed = render_bootstrap_plan_lines(&plan, "missing", true)
             .unwrap()
             .join("\n");
+        assert_eq!(serde_json::to_value(&plan).unwrap(), before);
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+        assert!(rendered.contains("#   Item"), "{rendered}");
+        assert_eq!(
+            rendered.matches("distribution trust").count(),
+            1,
+            "{rendered}"
+        );
+        assert!(rendered.contains("Profile code is delivered for later execution/source"));
+        assert_eq!(rendered.matches("Recovery is unsupported").count(), 1);
+        if os_id == "ubuntu" {
+            assert_eq!(
+                rendered,
+                r"Security Plan · sys-bootstrap
+  12 bootstrap items · 1 profile configuration
+
+  Attention
+    ! Administrator access required: neovim, fzf, docker
+    ! Unrestricted network access required: neovim, fzf
+    ! docker: Installer may remove declared conflicting packages and their dependents; package rollback is unsupported
+    ! Profile configuration: Recovery is unsupported for this profile step
+  Code execution and trust
+    built-in · distribution trust
+      Bootstrap code executes during this operation · all 12 bootstrap items
+      Profile code is delivered for later execution/source · all 12 bootstrap items
+
+  Bootstrap items
+    #   Item         Installation  Commands        Execute
+    01  rust         run           bash, rustup    preset:install/rust.sh
+    02  neovim       run           apt-get, nvim   —
+    03  astronvim    run           bash            preset:install/astronvim.sh
+    04  atuin        run           atuin, bash     preset:install/atuin.sh
+    05  yazi         run           bash, yazi      preset:install/yazi.sh
+    06  starship     run           bash, starship  preset:install/starship.sh
+    07  zoxide       run           bash, zoxide    preset:install/zoxide.sh
+    08  zsh-vi-mode  run           bash            preset:install/zsh-vi-mode.sh
+    09  fzf          run           apt-get, fzf    —
+    10  bat          run           bash, bat       preset:install/bat.sh
+    11  eza          run           bash, eza       preset:install/eza.sh
+    12  docker       run           bash            preset:install/docker.sh
+
+  Profile configuration
+    ~  bash
+      command: git
+      filesystem write: ~/.bashrc, ~/.zshrc
+      Shell integration · remove/write (8 paths)
+
+  Shared changes
+    Installation state and recovery files · remove/write (2 paths)
+  Use --verbose for all paths, identities and diagnostic codes."
+            );
+        }
         assert_eq!(
             detailed
                 .matches(&format!("Shine state/runtime/sys/{os_id}"))
@@ -1285,7 +1353,7 @@ mod tests {
             .join("\n");
         let rust = compact.find("01  rust").unwrap();
         let fzf = compact.find("02  fzf").unwrap();
-        let profile = compact.find("Profile configuration").unwrap();
+        let profile = compact.find("\n  Profile configuration\n").unwrap();
         let shared = compact.find("Shared changes").unwrap();
         assert!(compact[..rust].contains("Administrator access required"));
         assert!(compact[rust..fzf].contains("curl"));
