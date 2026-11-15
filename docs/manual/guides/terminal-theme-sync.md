@@ -39,20 +39,9 @@ export SHINE_SYNC_TERMINAL_THEME=0
 The environment variable has higher precedence and is useful for temporary overrides. Manual
 `shine theme sync` remains available even when automatic synchronization is disabled.
 
-You can also install the `shine-theme-sync` command from the `utils` category for a profile you
-manage yourself:
-
-```bash
-shine shell install utils
-```
-
-Open a new shell, then run the command directly:
-
-```bash
-shine-theme-sync
-```
-
-This command applies the settings to the current session; no additional `eval` is needed.
+For a profile you manage yourself, the optional
+[`shine-theme-sync` preset command](../built-in-presets/utils.md#terminal-theme) applies these settings
+to the current session.
 
 ## SSH sessions
 

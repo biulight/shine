@@ -79,29 +79,22 @@ old version performs its automatic migration.
 
 ## Refreshing a generated application file fails
 
-Confirm that the category is installed, the selector is the relative `[[files]].source` path, and
-the generator's environment prerequisites are present:
+Confirm that the category is installed. Use the relative `[[files]].source` path for `SOURCE_FILE`:
 
 ```bash
-shine app info surge
+shine app info <CATEGORY>
 shine env list
-shine app refresh surge subscription-proxies.conf
+shine app refresh <CATEGORY> <SOURCE_FILE>
 ```
 
-Check these prerequisites in order:
+Prepare the runtime and environment inputs required by that preset. For Surge-specific subscription
+errors, see [Refresh subscriptions](./built-in-presets/surge.md#refresh-subscriptions).
 
-1. Install Bun and make sure `SURGE_SUBSCRIPTION_URL` or `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`
-   contains an HTTPS subscription URL.
-2. For an HTTP error, timeout, oversized response, or no compatible nodes, check the subscription
-   service. If it returns a complete Surge managed configuration, use its generic URI/Base64
-   subscription URL instead; Shine does not extract proxy sections from a complete configuration.
-3. If the destination was modified, inspect the difference. Add `--force` only if you intend to
-   replace those local changes.
+If the destination was modified, inspect the difference. Add `--force` only if you intend to replace
+those local changes. A failed refresh preserves the last successfully generated file.
 
-A failed refresh preserves the last successfully generated file. Routine `shine update` and
-`shine upgrade` do not refresh this manual subscription; run `shine app refresh` explicitly.
-Errors redact subscription URLs, response bodies, and node content. Still check output for
-secrets before including it in a bug report.
+For automatic versus manual generation, see [Refresh generated configuration](./guides/app-presets.md#generated-files-and-surge-uri-subscriptions).
+Check error output for secrets before including it in a bug report.
 
 ## `shine preset pull` refuses to update a source
 

@@ -68,8 +68,8 @@ fn built_in_preset_platform_capability_docs_are_current() {
     let update = std::env::var_os("SHINE_UPDATE_PRESET_CAPABILITIES").as_deref()
         == Some(std::ffi::OsStr::new("1"));
     for relative in [
-        "docs/manual/reference/built-in-presets.md",
-        "website/i18n/zh-Hans/docusaurus-plugin-content-docs/current/reference/built-in-presets.md",
+        "docs/manual/built-in-presets/index.md",
+        "website/i18n/zh-Hans/docusaurus-plugin-content-docs/current/built-in-presets/index.md",
     ] {
         let path = repository_root.join(relative);
         let document = std::fs::read_to_string(&path).unwrap();

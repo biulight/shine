@@ -34,13 +34,7 @@ Choose commands for the operation you need; do not run this as a set/delete sequ
 | Save a value | `shine env set HTTP_PROXY_PORT 6152` |
 | Delete the selected stored value | `shine env delete HTTP_PROXY_PORT` |
 
-`PROXY_NO_PROXY` controls the `NO_PROXY` and `no_proxy` values set by `setproxy` and defaults to
-`localhost,127.0.0.1,::1`. After changing it or another proxy variable, `shine update` marks the
-installed `proxy` shell preset as updatable; run `shine upgrade` to apply the value.
-
-The built-in image commands use `IMAGE_QUALITY=80`, `IMAGE_MAX_WIDTH=1920`, and
-`IMAGE_MAX_HEIGHT=1080` by default. Override them for one run with `--quality`, `--width`, or
-`--height`, or keep different machine-local defaults with `shine env set`.
+Preset-specific defaults and usage are in [Built-in presets](../built-in-presets/index.md).
 
 `shine env list` hides sensitive values; `shine env explain KEY` hides all values and shows which
 file supplies the effective value. Use `--reveal` only in a trusted terminal; it does not decrypt
@@ -302,8 +296,8 @@ $exportCode = shine env secret export MY_TOKEN --as API_TOKEN
 if ($LASTEXITCODE -eq 0) { Invoke-Expression $exportCode }
 ```
 
-After installing the `utils` shell preset, you can also use
-`shine-env-export MY_TOKEN --as API_TOKEN`. Exported values remain available in the current shell;
+The optional [shell utility shortcut](../built-in-presets/utils.md#export-a-value) wraps this operation.
+Exported values remain available in the current shell;
 use [one-command injection](#provide-values-to-one-command) when only one command needs them.
 Values containing NUL cannot be exported as environment variables.
 

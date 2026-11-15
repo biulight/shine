@@ -8,8 +8,8 @@ sidebar_position: 2
 Shine 将全局配置和状态保存在 `~/.shine/`，需要时创建 `config.toml`。
 Unix 上，若 `SUDO_USER` 指明发起 sudo 的用户，主目录相对路径使用该用户的主目录。
 
-本页用于查询配置字段和覆盖顺序。具体操作见[环境变量与密钥](../guides/environment.md)或
-[自定义预设](../guides/custom-presets.md)。
+配置步骤见[环境变量与密钥](../guides/environment.md)或[自定义预设](../guides/custom-presets.md)，
+类别级 `shine.toml` 字段见[预设配置](./preset-configuration.md)。
 
 ## 常用全局字段
 
