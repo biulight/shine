@@ -11,6 +11,20 @@
 //! decryption is purely tag-based and never consults `secret_backend`, so
 //! changing the default encrypt backend can never break existing secrets.
 
+// Age plugin recipients are not Bitcoin addresses. Retain the unbounded Bech32
+// strings accepted by 0.9; only the length policy differs, never the checksum.
+pub(crate) enum AgeBech32 {}
+impl bech32::Checksum for AgeBech32 {
+    type MidstateRepr = <bech32::Bech32 as bech32::Checksum>::MidstateRepr;
+    type CorrectionField = <bech32::Bech32 as bech32::Checksum>::CorrectionField;
+    const ROOT_GENERATOR: Self::CorrectionField = bech32::Bech32::ROOT_GENERATOR;
+    const ROOT_EXPONENTS: std::ops::RangeInclusive<usize> = bech32::Bech32::ROOT_EXPONENTS;
+    const CODE_LENGTH: usize = usize::MAX;
+    const CHECKSUM_LENGTH: usize = bech32::Bech32::CHECKSUM_LENGTH;
+    const GENERATOR_SH: [Self::MidstateRepr; 5] = bech32::Bech32::GENERATOR_SH;
+    const TARGET_RESIDUE: Self::MidstateRepr = bech32::Bech32::TARGET_RESIDUE;
+}
+
 mod age;
 mod exec;
 mod gpg;

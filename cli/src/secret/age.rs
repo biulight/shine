@@ -6,7 +6,7 @@
 //! is never confused with untagged GPG ciphertext.
 
 use anyhow::{Context, Result, bail};
-use bech32::{self, Variant};
+use bech32::{Fe32IterExt, Hrp, primitives::decode::CheckedHrpstring};
 use semver::Version;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -211,12 +211,17 @@ fn ensure_identity_plugin(plugin: &str) -> Result<()> {
 }
 
 pub(super) fn secure_enclave_recipient_to_tag(recipient: &str) -> Result<String> {
-    let (hrp, data, variant) =
-        bech32::decode(recipient).context("legacy Secure Enclave recipient is not valid Bech32")?;
-    if hrp != "age1se" || variant != Variant::Bech32 {
+    let decoded = CheckedHrpstring::new::<crate::secret::AgeBech32>(recipient)
+        .context("legacy Secure Enclave recipient is not valid Bech32")?;
+    if decoded.hrp() != Hrp::parse("age1se")? {
         bail!("legacy Secure Enclave recipient must use the age1se Bech32 encoding");
     }
-    bech32::encode("age1tag", data, Variant::Bech32).context("encoding native tagged age recipient")
+    // Re-tag the original 5-bit symbols without truncating or normalizing their padding.
+    Ok(decoded
+        .fe32_iter()
+        .with_checksum::<crate::secret::AgeBech32>(&Hrp::parse("age1tag")?)
+        .chars()
+        .collect())
 }
 
 fn phone_terminal_output_requested(transport: Option<&OsStr>, messages: Option<&OsStr>) -> bool {
@@ -426,9 +431,25 @@ mod tests {
         let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
         let converted = secure_enclave_recipient_to_tag(legacy).unwrap();
         assert_eq!(converted, tagged);
-        let (_, legacy_data, _) = bech32::decode(legacy).unwrap();
-        let (_, tagged_data, _) = bech32::decode(&converted).unwrap();
+        assert_eq!(
+            secure_enclave_recipient_to_tag(&legacy.to_uppercase()).unwrap(),
+            tagged
+        );
+        let (_, legacy_data) = bech32::decode(legacy).unwrap();
+        let (_, tagged_data) = bech32::decode(&converted).unwrap();
         assert_eq!(legacy_data, tagged_data);
+    }
+
+    #[test]
+    fn secure_enclave_retagging_preserves_raw_symbols() {
+        // Re-tagging historically preserves even non-byte-aligned 5-bit payloads.
+        for (legacy, tagged) in [
+            ("age1se1qsspa38", "age1tag1qslu3xe"),
+            ("age1se1qpckpuwq", "age1tag1qphtdtsq"),
+            ("age1se1qqqjflqpf", "age1tag1qqqsgmz73"),
+        ] {
+            assert_eq!(secure_enclave_recipient_to_tag(legacy).unwrap(), tagged);
+        }
     }
 
     #[test]
@@ -442,6 +463,9 @@ mod tests {
         assert!(secure_enclave_recipient_to_tag("age1se1invalid").is_err());
         assert!(secure_enclave_recipient_to_tag(&bad_checksum).is_err());
         assert!(secure_enclave_recipient_to_tag(tagged).is_err());
+        let wrong_variant =
+            bech32::encode::<bech32::Bech32m>(Hrp::parse("age1se").unwrap(), &[2; 33]).unwrap();
+        assert!(secure_enclave_recipient_to_tag(&wrong_variant).is_err());
     }
 
     #[test]

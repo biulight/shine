@@ -4,7 +4,7 @@
 
 use crate::commands::PhoneRecipientType;
 use anyhow::{Context, Result, bail};
-use bech32::{FromBase32, Variant};
+use bech32::{Hrp, primitives::decode::CheckedHrpstring};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -421,17 +421,21 @@ async fn validate_phone_setup_result(
 }
 
 fn validate_phone_recipient(recipient: &str, recipient_type: PhoneRecipientType) -> Result<()> {
-    let (hrp, data, variant) = bech32::decode(recipient)
+    let decoded = CheckedHrpstring::new::<crate::secret::AgeBech32>(recipient)
         .context("age-plugin-phone returned an invalid Bech32 recipient")?;
     let expected = match recipient_type {
         PhoneRecipientType::Tag => "age1tag",
         PhoneRecipientType::Phone => "age1phone",
     };
-    if hrp != expected || variant != Variant::Bech32 {
+    if decoded.hrp() != Hrp::parse(expected)? {
         bail!("age-plugin-phone returned a recipient that does not match the requested type");
     }
-    let bytes = Vec::<u8>::from_base32(&data).context("invalid phone recipient payload")?;
-    if bech32::encode(&hrp, data, variant)? != recipient {
+    // byte_iter drops trailing bits, so validate padding before converting.
+    decoded
+        .validate_segwit_padding()
+        .context("invalid phone recipient payload")?;
+    let bytes: Vec<u8> = decoded.byte_iter().collect();
+    if bech32::encode::<crate::secret::AgeBech32>(decoded.hrp(), &bytes)? != recipient {
         bail!("age-plugin-phone returned a non-canonical recipient");
     }
     if bytes.is_empty()
@@ -626,7 +630,6 @@ mod tests {
 
     #[test]
     fn phone_recipient_validation_checks_type_encoding_and_tag_structure() {
-        use bech32::ToBase32;
         validate_phone_recipient(TAG, PhoneRecipientType::Tag).unwrap();
         validate_phone_recipient(PHONE, PhoneRecipientType::Phone).unwrap();
         for (recipient, kind) in [
@@ -639,12 +642,40 @@ mod tests {
             assert!(validate_phone_recipient(recipient, kind).is_err());
         }
         for bytes in [vec![], vec![2; 32], vec![2; 34], vec![4; 33]] {
-            let invalid = bech32::encode("age1tag", bytes.to_base32(), Variant::Bech32).unwrap();
+            let invalid =
+                bech32::encode::<crate::secret::AgeBech32>(Hrp::parse("age1tag").unwrap(), &bytes)
+                    .unwrap();
             assert!(validate_phone_recipient(&invalid, PhoneRecipientType::Tag).is_err());
         }
         let wrong_variant =
-            bech32::encode("age1tag", vec![2; 33].to_base32(), Variant::Bech32m).unwrap();
+            bech32::encode::<bech32::Bech32m>(Hrp::parse("age1tag").unwrap(), &[2; 33]).unwrap();
         assert!(validate_phone_recipient(&wrong_variant, PhoneRecipientType::Tag).is_err());
+    }
+
+    #[test]
+    fn phone_recipient_rejects_checksum_valid_invalid_padding() {
+        // Valid Bech32 checksums, but excessive or nonzero byte-conversion padding.
+        for recipient in [
+            "age1phone1qr8zpud",
+            "age1phone1qp58qllv",
+            "age1phone1qqqjk6muw",
+        ] {
+            assert!(validate_phone_recipient(recipient, PhoneRecipientType::Phone).is_err());
+        }
+        validate_phone_recipient("age1phone1qqf352z7", PhoneRecipientType::Phone).unwrap();
+    }
+
+    #[test]
+    fn phone_recipient_preserves_long_plugin_payloads() {
+        use bech32::Checksum;
+        crate::secret::AgeBech32::sanity_check();
+        let recipient = bech32::encode::<crate::secret::AgeBech32>(
+            Hrp::parse("age1phone").unwrap(),
+            &[42; 700],
+        )
+        .unwrap();
+        assert!(recipient.len() > 1023);
+        validate_phone_recipient(&recipient, PhoneRecipientType::Phone).unwrap();
     }
 
     #[tokio::test]
