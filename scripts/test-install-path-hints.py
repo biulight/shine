@@ -61,10 +61,12 @@ class PathHints(unittest.TestCase):
         return output
 
     def configuration_command(self, output):
+        if "configure future shells:\n" not in output:
+            return ""
         return (
             output.split("configure future shells:\n", 1)[1]
             .split("Then run this", 1)[0]
-            .rstrip()
+            .strip()
         )
 
     def test_bash_and_zsh_commands_preserve_paths_and_existing_config(self):
@@ -78,20 +80,23 @@ class PathHints(unittest.TestCase):
             ):
                 with self.subTest(shell=shell, name=name):
                     directory = self.root / name
-                    output = self.install("/bin/" + shell, directory)
                     profile_dir = self.home if shell == "bash" else self.root / "z dir"
                     profile_dir.mkdir(exist_ok=True)
                     profile = profile_dir / (".bashrc" if shell == "bash" else ".zshrc")
                     profile.write_text("# keep without final newline")
+                    if shell == "zsh":
+                        self.env["ZDOTDIR"] = str(profile_dir)
+                    output = self.install("/bin/" + shell, directory)
                     command = self.configuration_command(output)
-                    # ZDOTDIR is deliberately not exported to the installer.
-                    setup = 'ZDOTDIR="$HOME/../z dir"; ' if shell == "zsh" else ""
                     for _ in range(2):
                         subprocess.run(
-                            [executable, "-f", "-c", setup + command],
+                            [executable, "-f", "-c", command],
                             env=self.env,
                             check=True,
                         )
+                        repeated = self.install("/bin/" + shell, directory)
+                        self.assertNotIn("configure future shells", repeated)
+                        command = self.configuration_command(repeated)
                     content = profile.read_text()
                     self.assertTrue(
                         content.startswith("# keep without final newline\n")
@@ -111,7 +116,9 @@ class PathHints(unittest.TestCase):
                     )
                     self.assertEqual(
                         result,
-                        "installed-binary\n" + str(directory) + ":" + self.env["PATH"],
+                        "installed-binary\n"
+                        + (str(directory) + ":") * 2
+                        + self.env["PATH"],
                     )
                     immediate = [
                         x[2:] for x in output.splitlines() if x.startswith("  ")
@@ -121,10 +128,7 @@ class PathHints(unittest.TestCase):
                             executable,
                             "-f",
                             "-c",
-                            immediate
-                            + "; "
-                            + immediate
-                            + '; shine; printf "\\n%s" "$PATH"',
+                            immediate + '; shine; printf "\\n%s" "$PATH"',
                         ],
                         env=self.env,
                         text=True,
@@ -177,10 +181,10 @@ class PathHints(unittest.TestCase):
                     directory = self.home / ".local/bin"
                     output = self.install("/bin/bash", directory)
                     command = self.configuration_command(output)
-                    for _ in range(2):
-                        subprocess.run(
-                            ["bash", "-c", command], env=self.env, check=True
-                        )
+                    subprocess.run(["bash", "-c", command], env=self.env, check=True)
+                    self.assertNotIn(
+                        "configure future shells", self.install("/bin/bash", directory)
+                    )
                     for flags in ("-ic", "-lic"):
                         result = subprocess.run(
                             ["bash", flags, 'shine && printf "\\n%s" "$PATH"'],
@@ -196,14 +200,19 @@ class PathHints(unittest.TestCase):
                             result.stdout.split("\n")[-1]
                             .split(":")
                             .count(str(directory)),
-                            1,
+                            2 if not existing and flags == "-lic" else 1,
                         )
                     selected = existing[0] if existing else ".bash_profile"
                     for name in profiles:
                         path = self.home / name
                         if name == selected:
                             self.assertTrue(path.exists(), name)
-                            self.assertEqual(path.read_text().count("export PATH="), 1)
+                            if sources_rc and existing:
+                                self.assertEqual(path.read_text(), original)
+                            else:
+                                self.assertEqual(
+                                    path.read_text().count("export PATH="), 1
+                                )
                             if name in existing:
                                 self.assertTrue(path.read_text().startswith(original))
                         elif name in existing:
@@ -216,8 +225,11 @@ class PathHints(unittest.TestCase):
         login = self.home / ".bash_profile"
         self.assertFalse(login.exists())  # Installation only prints the command.
         command = self.configuration_command(output)
-        for _ in range(2):
-            subprocess.run(["bash", "-c", command], env=self.env, check=True)
+        subprocess.run(["bash", "-c", command], env=self.env, check=True)
+        self.assertNotIn(
+            "configure future shells",
+            self.install("/bin/bash", self.home / ".local/bin"),
+        )
         with (self.home / ".bashrc").open("a") as stream:
             stream.write(
                 "\nrc_count=$(( ${rc_count:-0} + 1 ))\nalias cat='bat'\nalias ls='eza --icons'\n"
@@ -233,20 +245,21 @@ class PathHints(unittest.TestCase):
             self.assertIn("cat='bat'", result.stdout)
             self.assertIn("ls='eza --icons'", result.stdout)
         result = subprocess.run(
-            ["bash", "-lc", 'test -z "${rc_count:-}" && shine'],
+            ["bash", "-lc", 'test -z "${rc_count:-}"'],
             env=self.env,
             text=True,
             capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "installed-binary")
+        self.assertEqual(result.stdout, "")
 
     def test_existing_empty_or_path_only_login_file_keeps_startup_logic(self):
         directory = self.home / ".local/bin"
         output = self.install("/bin/bash", directory)
-        path_line = next(
-            line for line in output.splitlines() if line.startswith('case ":$PATH:"')
+        subprocess.run(
+            ["bash", "-c", self.configuration_command(output)], env=self.env, check=True
         )
+        path_line = (self.home / ".bashrc").read_text().strip()
         login = self.home / ".bash_profile"
         for original in ("", path_line + "\n"):
             with self.subTest(original=original):
@@ -273,13 +286,16 @@ class PathHints(unittest.TestCase):
         )
         original = profile.read_text()
         output = self.install("/bin/bash", directory)
-        for _ in range(2):
-            subprocess.run(
-                ["bash", "-c", self.configuration_command(output)],
-                env=self.env,
-                check=True,
-            )
-        self.assertTrue(profile.read_text().startswith(original))
+        self.assertNotIn(str(profile), self.configuration_command(output))
+        subprocess.run(
+            ["bash", "-c", self.configuration_command(output)],
+            env=self.env,
+            check=True,
+        )
+        self.assertNotIn(
+            "configure future shells", self.install("/bin/bash", directory)
+        )
+        self.assertEqual(profile.read_text(), original)
         self.assertEqual(profile.read_text().count('. "$HOME/.bashrc"'), 1)
         self.assertFalse((self.home / ".bash_profile").exists())
         result = subprocess.run(
@@ -297,6 +313,167 @@ class PathHints(unittest.TestCase):
         output = self.install("/bin/bash", directory)
         self.assertNotIn("Warning:", output)
 
+    def test_bash_common_loader_forms_preserve_read_only_login_profile(self):
+        directory = self.home / ".local/bin"
+        profile = self.home / ".profile"
+        rc = self.home / ".bashrc"
+        loaders = (
+            '. "$HOME/.bashrc"',
+            'source "${HOME}/.bashrc"',
+            ". $HOME/.bashrc",
+            "source ${HOME}/.bashrc",
+            ". ~/.bashrc; # interactive configuration",
+            '[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"',
+            '[ ! -r "$HOME/.bashrc" ] || source "$HOME/.bashrc"',
+            "if [ -f ~/.bashrc ]; then source ~/.bashrc; fi",
+            'if [ -n "$BASH_VERSION" ]; then\n  . "$HOME/.bashrc"\nfi',
+        )
+        for loader in loaders:
+            with self.subTest(loader=loader):
+                # Normal .bashrc files may return early in non-interactive shells.
+                rc.write_text("case $- in *i*) ;; *) return ;; esac\n")
+                profile.write_text(loader + "\n")
+                profile.chmod(0o444)
+                try:
+                    output = self.install("/bin/bash", directory)
+                    command = self.configuration_command(output)
+                    self.assertIn(str(rc), command)
+                    self.assertNotIn(str(profile), command)
+                    self.assertNotIn("Cannot", output)
+                    subprocess.run(["bash", "-c", command], env=self.env, check=True)
+                    self.assertEqual(profile.read_text(), loader + "\n")
+                    for flags in ("-ic", "-lic"):
+                        result = subprocess.run(
+                            ["bash", flags, "shine"],
+                            env=self.env,
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout, "installed-binary")
+                    self.assertNotIn(
+                        "configure future shells", self.install("/bin/bash", directory)
+                    )
+                finally:
+                    profile.chmod(0o644)
+
+    def test_bash_loader_fallback_uses_only_selected_login_profile(self):
+        directory = self.home / ".local/bin"
+        profile = self.home / ".bash_profile"
+        lower_profile = self.home / ".profile"
+        lower_profile.write_text('. "$HOME/.bashrc"\n')
+        for original in (
+            '# . "$HOME/.bashrc"\n',
+            'printf "%s\\n" \'source "$HOME/.bashrc"\'\n',
+            '. "$HOME/.bashrc.other"\n',
+            '[ -r "$HOME/.bashrc" ] || . "$HOME/.bashrc"\n',
+        ):
+            with self.subTest(original=original):
+                (self.home / ".bashrc").write_text("# existing rc\n")
+                profile.write_text(original)
+                output = self.install("/bin/bash", directory)
+                command = self.configuration_command(output)
+                self.assertIn(str(profile), command)
+                self.assertNotIn(str(lower_profile), command)
+                subprocess.run(["bash", "-c", command], env=self.env, check=True)
+                self.assertTrue(profile.read_text().startswith(original))
+                self.assertEqual(profile.read_text().count("export PATH="), 1)
+                self.assertEqual(lower_profile.read_text(), '. "$HOME/.bashrc"\n')
+
+    def test_bash_loader_hash_suffix_is_not_a_comment(self):
+        directory = self.home / ".local/bin"
+        profile = self.home / ".profile"
+        rc = self.home / ".bashrc"
+        (self.home / ".bashrc#login").write_text("loader_seen=alternate\n")
+        cases = (
+            ('. "$HOME/.bashrc"#login', False),
+            (". ~/.bashrc#login", False),
+            ('[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"#login', False),
+            ('. "$HOME/.bashrc" # comment', True),
+            ('. "$HOME/.bashrc"\t# comment', True),
+            ('. "$HOME/.bashrc";# comment', True),
+            ("if [ -f ~/.bashrc ]; then . ~/.bashrc; fi # comment", True),
+            ("if [ -f ~/.bashrc ]; then . ~/.bashrc; fi;# comment", True),
+        )
+        for loader, loads_rc in cases:
+            with self.subTest(loader=loader):
+                rc.write_text("loader_seen=rc\n")
+                profile.write_text(loader + "\n")
+                output = self.install("/bin/bash", directory)
+                subprocess.run(
+                    ["bash", "-c", self.configuration_command(output)],
+                    env=self.env,
+                    check=True,
+                )
+                if loads_rc:
+                    self.assertEqual(profile.read_text(), loader + "\n")
+                else:
+                    self.assertTrue(profile.read_text().startswith(loader + "\n"))
+                    self.assertEqual(profile.read_text().count("export PATH="), 1)
+                result = subprocess.run(
+                    ["bash", "-lic", 'shine && printf "\\n%s" "$loader_seen"'],
+                    env=self.env,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stdout,
+                    "installed-binary\n" + ("rc" if loads_rc else "alternate"),
+                )
+                self.assertNotIn(
+                    "configure future shells", self.install("/bin/bash", directory)
+                )
+
+    def test_bash_existing_profiles_receive_one_simple_command(self):
+        for name in (".bashrc", ".profile"):
+            (self.home / name).write_text("# keep without final newline")
+        directory = self.home / ".local/bin"
+        output = self.install("/bin/bash", directory)
+        command = self.configuration_command(output)
+        self.assertEqual(len(command.splitlines()), 1)
+        self.assertIn("| tee -a -- ", command)
+        self.assertNotIn('case ":$PATH:"', command)
+        for obsolete in ("grep", "shine_new_login", "IFS=", "for shine_file"):
+            self.assertNotIn(obsolete, command)
+        result = subprocess.run(
+            ["bash", "-c", command], env=self.env, capture_output=True, check=True
+        )
+        self.assertEqual(result.stdout, b"")
+        for name in (".bashrc", ".profile"):
+            content = (self.home / name).read_text()
+            self.assertTrue(content.startswith("# keep without final newline\n"))
+            self.assertEqual(content.count("export PATH="), 1)
+        repeated = self.install("/bin/bash", directory)
+        self.assertNotIn("configure future shells", repeated)
+        immediate = repeated.split("Then run this", 1)[1].split(":\n", 1)[1].strip()
+        self.assertTrue(immediate.startswith("export PATH="))
+
+    def test_bash_legacy_and_partial_configuration_only_print_missing_writes(self):
+        directory = self.home / ".local/bin"
+        # Literal fixtures from both previous installer renderings.
+        for quoted_directory in (str(directory), f"'{directory}'"):
+            legacy = (
+                f'case ":$PATH:" in *:{quoted_directory}:*) ;; *) '
+                f'export PATH={quoted_directory}"${{PATH:+:$PATH}}" ;; esac\n'
+            )
+            for configured in (".bashrc", ".profile"):
+                with self.subTest(
+                    configured=configured, quoted_directory=quoted_directory
+                ):
+                    missing = ".profile" if configured == ".bashrc" else ".bashrc"
+                    (self.home / configured).write_text(legacy)
+                    (self.home / missing).write_text("# preserve\n")
+                    output = self.install("/bin/bash", directory)
+                    command = self.configuration_command(output)
+                    self.assertNotIn(str(self.home / configured), command)
+                    self.assertIn(">> " + str(self.home / missing), command)
+                    subprocess.run(["bash", "-c", command], env=self.env, check=True)
+                    self.assertEqual((self.home / configured).read_text(), legacy)
+                    self.assertNotIn(
+                        "configure future shells", self.install("/bin/bash", directory)
+                    )
+
     def test_bash_hint_preserves_shared_profile_symlink_and_permissions(self):
         target = self.home / "shared config"
         target.write_text("# existing configuration without newline")
@@ -306,8 +483,11 @@ class PathHints(unittest.TestCase):
         output = self.install("/bin/bash", self.home / ".local/bin")
         self.assertEqual(target.read_text(), "# existing configuration without newline")
         command = self.configuration_command(output)
-        for _ in range(2):
-            subprocess.run(["bash", "-c", command], env=self.env, check=True)
+        subprocess.run(["bash", "-c", command], env=self.env, check=True)
+        self.assertNotIn(
+            "configure future shells",
+            self.install("/bin/bash", self.home / ".local/bin"),
+        )
         self.assertFalse((self.home / ".bash_profile").exists())
         self.assertEqual(target.stat().st_mode & 0o777, 0o640)
         self.assertTrue(
@@ -322,6 +502,45 @@ class PathHints(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "installed-binary")
 
+    def test_bash_hint_deduplicates_hard_link_targets(self):
+        rc = self.home / ".bashrc"
+        rc.write_text("# existing\n")
+        os.link(rc, self.home / ".profile")
+        output = self.install("/bin/bash", self.home / ".local/bin")
+        subprocess.run(
+            ["bash", "-c", self.configuration_command(output)],
+            env=self.env,
+            check=True,
+        )
+        self.assertEqual(rc.read_text().count("export PATH="), 1)
+        self.assertTrue(os.path.samefile(rc, self.home / ".profile"))
+
+    def test_bash_partial_tee_failure_can_be_retried_with_fresh_hint(self):
+        directory = self.home / ".local/bin"
+        rc = self.home / ".bashrc"
+        profile = self.home / ".profile"
+        rc.write_text("# rc\n")
+        profile.write_text("# login\n")
+        output = self.install("/bin/bash", directory)
+        profile.unlink()
+        profile.mkdir()
+        result = subprocess.run(
+            ["bash", "-c", self.configuration_command(output)],
+            env=self.env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(".profile", result.stderr)
+        self.assertEqual(rc.read_text().count("export PATH="), 1)
+        profile.rmdir()
+        profile.write_text("# login\n")
+        retry = self.configuration_command(self.install("/bin/bash", directory))
+        self.assertNotIn(str(rc), retry)
+        subprocess.run(["bash", "-c", retry], env=self.env, check=True)
+        for path in (rc, profile):
+            self.assertEqual(path.read_text().count("export PATH="), 1)
+
     def test_bash_hint_reports_write_failure_after_preflight(self):
         output = self.install("/bin/bash", self.home / ".local/bin")
         command = self.configuration_command(output)
@@ -332,6 +551,93 @@ class PathHints(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(".bashrc", result.stderr)
         self.assertFalse((self.home / ".bash_profile").exists())
+
+    def test_zsh_uses_only_install_time_exported_zdotdir(self):
+        executable = shutil.which("zsh")
+        if not executable:
+            self.skipTest("zsh is not installed")
+        custom = self.root / "z custom"
+        custom.mkdir()
+        directory = self.home / ".local/bin"
+        self.env.update(SHELL="/bin/zsh", SHINE_INSTALL_DIR=str(directory))
+        for mode in ("unset", "empty", "exported", "unexported"):
+            with self.subTest(mode=mode):
+                for parent in (custom, self.home):
+                    (parent / ".zshrc").unlink(missing_ok=True)
+                env = dict(self.env)
+                if mode in ("empty", "exported"):
+                    env["ZDOTDIR"] = str(custom) if mode == "exported" else ""
+                setup = 'ZDOTDIR="$1"; ' if mode == "unexported" else ""
+                output = subprocess.check_output(
+                    [
+                        executable,
+                        "-f",
+                        "-c",
+                        setup + '/bin/sh "$2"',
+                        "test",
+                        str(custom),
+                        str(INSTALLER),
+                    ],
+                    env=env,
+                    text=True,
+                )
+                profile = (custom if mode == "exported" else self.home) / ".zshrc"
+                command = self.configuration_command(output)
+                self.assertIn(str(profile), command)
+                self.assertNotIn("ZDOTDIR", command)
+                self.assertNotIn("grep", command)
+                self.assertFalse(profile.exists())
+                subprocess.run(
+                    [executable, "-f", "-c", setup + command, "test", str(custom)],
+                    env=env,
+                    check=True,
+                )
+                self.assertEqual(profile.read_text().count("export PATH="), 1)
+                other = (self.home if mode == "exported" else custom) / ".zshrc"
+                self.assertFalse(other.exists())
+                repeated = subprocess.check_output(
+                    [
+                        executable,
+                        "-f",
+                        "-c",
+                        setup + '/bin/sh "$2"',
+                        "test",
+                        str(custom),
+                        str(INSTALLER),
+                    ],
+                    env=env,
+                    text=True,
+                )
+                self.assertNotIn("configure future shells", repeated)
+                # Empty/unexported ZDOTDIR falls back in the hint; Zsh itself
+                # does not necessarily select HOME in those environments.
+                if mode in ("unset", "exported"):
+                    result = subprocess.check_output(
+                        [executable, "-ic", "shine"],
+                        env=env,
+                        text=True,
+                    )
+                    self.assertEqual(result, "installed-binary")
+
+    def test_zsh_rejects_unusable_configuration_destinations(self):
+        directory = self.home / ".local/bin"
+        profile = self.home / ".zshrc"
+        for kind in ("directory", "dangling_symlink", "missing_parent"):
+            with self.subTest(kind=kind):
+                if kind == "directory":
+                    profile.mkdir()
+                elif kind == "dangling_symlink":
+                    profile.symlink_to(self.home / "missing")
+                else:
+                    self.env["ZDOTDIR"] = str(self.home / "missing")
+                output = self.install("/bin/zsh", directory)
+                self.assertIn("Cannot", output)
+                self.assertNotIn("configure future shells", output)
+                self.assertIn("  export PATH=", output)
+                if profile.is_dir():
+                    profile.rmdir()
+                else:
+                    profile.unlink(missing_ok=True)
 
     def color_output(self, terminal_stream=None, **overrides):
         env = {**self.env, "TERM": "xterm-256color", "SHELL": "/bin/bash"}
@@ -383,7 +689,7 @@ class PathHints(unittest.TestCase):
         finally:
             os.close(master)
 
-    def test_colors_follow_stdout_without_coloring_copy_commands(self):
+    def test_colors_follow_stdout_and_highlight_copy_commands(self):
         code, (plain, errors) = self.color_output()
         self.assertEqual(code, 0)
         self.assertEqual(errors, "")
@@ -395,8 +701,12 @@ class PathHints(unittest.TestCase):
             self.assertIn(prefix, colored)
         self.assertEqual(re.sub(r"\x1b\[[0-9;]*m", "", colored), plain)
         self.assertEqual(
-            [line for line in colored.splitlines() if line.startswith("  ")],
-            [line for line in plain.splitlines() if line.startswith("  ")],
+            [line for line in colored.splitlines() if line.startswith("\x1b[36m")],
+            [
+                "\x1b[36m" + line + "\x1b[0m"
+                for line in plain.splitlines()
+                if line.startswith("  ")
+            ],
         )
         for overrides in (
             {"NO_COLOR": "1"},
@@ -435,15 +745,15 @@ class PathHints(unittest.TestCase):
         output = self.install("/bin/bash", directory)
         commands = [
             self.configuration_command(output),
-            output.split("Then run this", 1)[1].splitlines()[1].strip(),
+            output.split("Then run this", 1)[1].split(":\n", 1)[1].strip(),
         ]
-        self.assertIn("<<'SHINE_PATH'\n", commands[0])
-        self.assertEqual(commands[0].count('case ":$PATH:"'), 1)
+        self.assertEqual(len(commands[0].splitlines()), 1)
+        self.assertNotIn("shine_new_login", commands[0])
         # Read commands from stdin: bash -c does not exercise history expansion.
         result = subprocess.run(
             ["bash", "--noprofile", "--norc", "--noediting", "-i"],
             input="set -euH\n"
-            + "\n".join(commands + commands)
+            + "\n".join(commands)
             + '\nshine && printf "\\n%s\\n" "$PATH"\nexit\n',
             env={**self.env, "HISTFILE": "/dev/null", "TERM": "dumb"},
             text=True,
@@ -455,6 +765,9 @@ class PathHints(unittest.TestCase):
         self.assertEqual(
             result.stdout,
             "installed-binary\n" + str(directory) + ":" + self.env["PATH"] + "\n",
+        )
+        self.assertNotIn(
+            "configure future shells", self.install("/bin/bash", directory)
         )
         for name in (".bashrc", ".bash_profile"):
             self.assertEqual((self.home / name).read_text().count("export PATH="), 1)
@@ -506,11 +819,15 @@ class PathHints(unittest.TestCase):
                         self.assertEqual(blocked.read_text(), "# preserve\n")
 
     def test_newline_paths_are_rejected_before_installation(self):
-        for variable in ("HOME", "SHINE_INSTALL_DIR"):
+        for variable in ("HOME", "SHINE_INSTALL_DIR", "ZDOTDIR"):
             for separator in ("\n", "\r"):
                 with self.subTest(variable=variable, separator=repr(separator)):
                     directory = self.root / "not-installed"
-                    env = {**self.env, "SHINE_INSTALL_DIR": str(directory)}
+                    env = {
+                        **self.env,
+                        "SHINE_INSTALL_DIR": str(directory),
+                        "SHELL": "/bin/zsh",
+                    }
                     env[variable] = str(self.root / ("bad" + separator + "path"))
                     result = subprocess.run(
                         ["/bin/sh", str(INSTALLER)],

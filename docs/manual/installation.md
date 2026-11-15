@@ -17,15 +17,10 @@ supported version. For systems with older glibc, build from source in a compatib
 curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
 ```
 
-The default destination is `~/.local/bin/shine`. The installer does not modify shell configuration.
-Home and installation paths containing newline characters are not supported.
-If it reports that the directory is missing from `PATH`, run the printed configuration command,
-then the command for your current terminal.
-If a configuration file cannot be updated, follow the error message and configure it manually.
-If your shell differs from the one shown, or you use Fish or another shell, add the directory to
-its configuration manually.
+The default destination is `~/.local/bin/shine`. Make sure the installation directory is in `PATH`.
+If needed, the installer provides commands you can copy to add it and use Shine in your current terminal.
 
-Open a new terminal or reconnect over SSH, then verify the installation:
+Verify the installation:
 
 ```bash
 shine --version

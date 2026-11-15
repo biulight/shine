@@ -16,13 +16,10 @@ Shine 支持 macOS、Linux 和 Windows。官方安装脚本从 GitHub Releases �
 curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
 ```
 
-默认安装到 `~/.local/bin/shine`，安装脚本不会修改 Shell 配置。
-不支持包含换行符的用户主目录或安装路径。
-如果提示安装目录不在 `PATH` 中，请先执行输出中的配置命令，再执行使当前终端生效的命令。
-如果配置文件无法更新，请根据错误提示手动配置。
-如果使用的 Shell 与提示不同，或使用 Fish 等其他 Shell，请手动将该目录加入相应的配置。
+默认安装到 `~/.local/bin/shine`，请确保安装目录已加入 `PATH`。
+安装脚本会在需要时提供可复制的命令，方便你完成配置并在当前终端使用 Shine。
 
-打开新终端或重新连接 SSH，然后验证：
+验证安装：
 
 ```bash
 shine --version
