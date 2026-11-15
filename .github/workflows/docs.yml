@@ -49,6 +49,9 @@ jobs:
       - name: Type-check documentation site
         working-directory: website
         run: pnpm typecheck
+      - name: Test command highlighting
+        working-directory: website
+        run: pnpm test:highlight
       - name: Check documentation versions
         working-directory: website
         run: pnpm check:versions

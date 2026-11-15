@@ -12,6 +12,7 @@
     "clear": "docusaurus clear",
     "serve": "docusaurus serve",
     "typecheck": "tsc --noEmit",
+    "test:highlight": "node --test scripts/prism-shine.test.mjs",
     "write-translations": "docusaurus write-translations --locale zh-Hans",
     "check:versions": "node --test scripts/check-versions.test.mjs && node scripts/check-versions.mjs"
   },
