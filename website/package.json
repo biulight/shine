@@ -2,7 +2,7 @@
   "name": "@biulight/shine-docs",
   "version": "0.0.0",
   "private": true,
-  "packageManager": "pnpm@12.18.0",
+  "packageManager": "pnpm@12.21.0",
   "scripts": {
     "start": "docusaurus start",
     "build": "docusaurus build",
