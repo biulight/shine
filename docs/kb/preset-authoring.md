@@ -334,7 +334,11 @@ items = ["neovim"]
 
 - Every init item declares both `detect` and `install`. Unknown versions and v1 manifests fail
   before execution.
-- Detection kinds are `command`, `path`, or `any`.
+- Detection kinds are `command`, `path`, `any`, or `dpkg`.
+  `dpkg` requires a nonempty `packages` list and accepts a `conflicts` list. It reads
+  `/var/lib/dpkg/status` without executing a command: every required package must be fully installed,
+  and conflicts must be absent or reduced to configuration files. Planning binds the database bytes
+  to approval. Package names identify installation state, not cryptographic package provenance.
 - Package providers are fixed ensure-present Homebrew, Homebrew Cask, APT, pacman (Arch only), or Winget actions; they
   do not implement package upgrades. Complex installation uses one item-local script with normal
   exit status.

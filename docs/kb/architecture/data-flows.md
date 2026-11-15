@@ -1277,6 +1277,11 @@ invocation description. Every selected item and composed profile is preflighted 
 probe/installer or administrator prompt; execution stops after the first failed item. Successful
 items retain their existing additive profile and receipt handling (ADR 0128).
 
+`dpkg` detection shares the status-file parser in `sys_dpkg.rs` between planning and execution.
+Planning reads and hashes `/var/lib/dpkg/status` without running package commands; revalidation
+rejects approval if those bytes changed. Required packages must be fully installed and conflicting
+packages absent or configuration-only before the installer is skipped (ADR 0170).
+
 Every executable sys manifest declares `version = 2`. Each init item has both `[items.detect]` and
 `[items.install]`; Rust performs the read-only detection, invokes a fixed Homebrew/APT/pacman/Winget
 provider argv or one per-item script, limits runtime and retained logs, detects again, and produces the

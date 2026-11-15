@@ -107,6 +107,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/sys_bootstrap/selection.rs` | Ordered explicit/profile/interactive/default selection without installation effects |
 | `core/src/runtime/sys_bootstrap/provider.rs` | Named fixed provider invocation, platform admission, preview and administrator requirement |
 | `core/src/runtime/sys_bootstrap/{detection,execution}.rs` | Captured-context presence probes and bounded installer execution/result classification respectively |
+| `core/src/runtime/sys_dpkg.rs` | Shared observation-only dpkg status interpretation for bootstrap planning and detection |
 | `core/src/runtime/sys_profile/` | Sys profile facade, composition and phase-sentinel/BOM handling in `compose.rs` and `blocks.rs` |
 | `core/src/runtime/sys_profile/{files,reconcile,merge,three_way}.rs` | Profile observations and EOL normalization, ordered writes, bounded Git adapter and pure fallback merge respectively |
 | `core/src/runtime/validation.rs` | Stable V1 diagnostics/report facade and ordered all-platform validation orchestration |

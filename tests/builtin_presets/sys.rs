@@ -2,6 +2,368 @@ use shine_core::runtime::{PlanningInputVersions, RuntimePlatform, SysBootstrapPl
 
 #[cfg(unix)]
 #[test]
+fn docker_apt_installer_removes_conflicts_and_stops_on_failure() {
+    let root = std::env::temp_dir().join(format!("shine docker-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let script = root.join("docker.sh");
+    std::fs::write(
+        &script,
+        cli::presets::read_embedded_asset_bytes("sys/ubuntu/install/docker.sh").unwrap(),
+    )
+    .unwrap();
+    for conflicts in [false, true] {
+        let mut steps = vec!["query"];
+        if conflicts {
+            steps.push("remove");
+        }
+        steps.extend([
+            "update",
+            "dependencies",
+            "keydir",
+            "download",
+            "key",
+            "source",
+            "source-mode",
+            "refresh",
+            "packages",
+            "start",
+            "hello",
+        ]);
+        for failure in std::iter::once("").chain(steps.iter().copied()) {
+            let home = root.join(format!("{conflicts}-{failure}"));
+            std::fs::create_dir_all(home.join("tmp")).unwrap();
+            let statuses = if conflicts {
+                "docker.io\tinstalled\ncontainerd\tinstalled\nrunc\tunpacked\npodman-docker\tinstalled\ndocker-compose\tinstalled\ndocker-compose-v2\tinstalled\ndocker-doc\tinstalled\ndocker-buildx\tinstalled\n"
+            } else {
+                "docker.io\tconfig-files\nrunc\tnot-installed\nunrelated\tinstalled\n"
+            };
+            std::fs::write(home.join("status"), statuses).unwrap();
+            let output = std::process::Command::new("/bin/bash")
+                .args(["--noprofile", "--norc", "-c", r#"
+step() { printf '%s\n' "$1" >> "$HOME/calls"; [ "$FAILURE" != "$1" ] || return 42; }
+source() { [ "$*" = /etc/os-release ] || return 90; ID=ubuntu; VERSION_CODENAME=noble; UBUNTU_CODENAME=resolute; }
+dpkg() { [ "$*" = --print-architecture ] || return 91; echo amd64; }
+dpkg-query() {
+    [ "$#" = 2 ] && [ "$1" = -W ] && [ "$2" = '-f=${Package}\t${db:Status-Status}\n' ] || return 92
+    step query || return $?
+    command cat "$HOME/status"
+}
+apt-get() {
+    case "$*" in
+        'remove -y docker.io containerd runc podman-docker docker-compose docker-compose-v2 docker-doc docker-buildx') step remove ;;
+        'update --error-on=any')
+            if [ -f "$HOME/source" ]; then step refresh; else step update; fi ;;
+        'install -y ca-certificates curl') step dependencies ;;
+        'install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin') step packages ;;
+        *) return 93 ;;
+    esac
+}
+install() {
+    if [ "$*" = '-m 0755 -d /etc/apt/keyrings' ]; then step keydir
+    else
+        [ "$#" = 4 ] && [ "$1 $2" = '-m 0644' ] && [ "$4" = /etc/apt/keyrings/docker.asc ] || return 94
+        step key || return $?
+        command install -m 0644 "$3" "$HOME/key"
+    fi
+}
+curl() {
+    [ "$#" = 4 ] && [ "$1 $2 $3" = '-fsSL https://download.docker.com/linux/ubuntu/gpg -o' ] || return 95
+    printf partial > "$4"
+    step download || return $?
+    printf complete-key > "$4"
+}
+tee() {
+    [ "$*" = /etc/apt/sources.list.d/docker.sources ] || return 96
+    step source || return $?
+    command tee "$HOME/source"
+}
+chmod() {
+    [ "$*" = '0644 /etc/apt/sources.list.d/docker.sources' ] || return 99
+    step source-mode || return $?
+    command chmod 0644 "$HOME/source"
+}
+systemctl() {
+    case "$*" in
+        'is-active --quiet docker') [ -f "$HOME/started" ] ;;
+        'start docker') step start || return $?; touch "$HOME/started" ;;
+        *) return 97 ;;
+    esac
+}
+docker() { [ "$*" = 'run --rm hello-world' ] || return 98; step hello; }
+export -f step source dpkg dpkg-query apt-get install curl tee chmod systemctl docker
+umask 077
+exec /bin/bash "$1"
+"#, "docker-fixture"])
+                .arg(&script).env_clear().env("PATH", "/usr/bin:/bin")
+                .env("HOME", &home).env("TMPDIR", home.join("tmp"))
+                .env("FAILURE", failure).output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(if failure.is_empty() { 0 } else { 42 }),
+                "{conflicts}/{failure}: {output:?}"
+            );
+            let expected = if failure.is_empty() {
+                &steps[..]
+            } else {
+                &steps[..=steps.iter().position(|s| *s == failure).unwrap()]
+            };
+            assert_eq!(
+                std::fs::read_to_string(home.join("calls"))
+                    .unwrap()
+                    .lines()
+                    .collect::<Vec<_>>(),
+                expected,
+                "{conflicts}/{failure}"
+            );
+            assert_eq!(std::fs::read_dir(home.join("tmp")).unwrap().count(), 0);
+            if failure.is_empty() {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(home.join("key"))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o644
+                );
+                assert_eq!(
+                    std::fs::metadata(home.join("source"))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o644
+                );
+                assert_eq!(
+                    std::fs::read_to_string(home.join("source")).unwrap(),
+                    "Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: resolute\nComponents: stable\nArchitectures: amd64\nSigned-By: /etc/apt/keyrings/docker.asc\n"
+                );
+            }
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn docker_is_in_ubuntu_recommended_and_all_but_not_minimal() {
+    let runtime = super::support::runtime(RuntimePlatform::Linux);
+    let loaded = runtime.load_sys_preset("ubuntu").await.unwrap();
+    assert_eq!(
+        loaded.manifest.default_profile.as_deref(),
+        Some("recommended")
+    );
+    for profile in ["recommended", "all", "minimal"] {
+        assert_eq!(
+            loaded.manifest.profiles[profile]
+                .items
+                .iter()
+                .filter(|id| *id == "docker")
+                .count(),
+            usize::from(profile != "minimal")
+        );
+    }
+}
+
+#[test]
+fn dpkg_detection_rejects_invalid_or_overlapping_package_names() {
+    for detection in [
+        "packages = []",
+        "packages = ['--option']",
+        "packages = ['docker*']",
+        "packages = ['docker-ce'], conflicts = ['docker-ce']",
+    ] {
+        let manifest = format!(
+            "version = 2\n[[items]]\nid = 'test'\nlabel = 'Test'\ndetect = {{ kind = 'dpkg', {detection} }}\ninstall = {{ kind = 'script', path = 'install.sh' }}\n"
+        );
+        assert!(
+            shine_core::runtime::parse_sys_manifest(&manifest).is_err(),
+            "{detection}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn docker_bootstrap_skips_complete_packages_but_not_conflicts_or_partial_installs() {
+    use shine_core::plan::{PermissionV1, PlanApprovalV1};
+    use shine_core::runtime::{
+        CoreRuntime, FileSystemObservationHost, HostOperation, InMemoryHost, NullObserver,
+        ProcessOutput, SysItemStatus, SysRunManifest,
+    };
+    for (scenario, installer_exit) in [
+        ("complete", 0),
+        ("cli", 0),
+        ("docker.io", 42),
+        ("docker-compose", 42),
+        ("docker-compose-v2", 42),
+        ("docker-doc", 42),
+        ("docker-buildx", 42),
+        ("podman-docker", 42),
+        ("containerd", 42),
+        ("runc", 42),
+        ("partial", 0),
+        ("empty", 42),
+    ] {
+        let engine_present = scenario == "complete";
+        let embedded = super::support::runtime(RuntimePlatform::Linux);
+        let mut context = embedded.context().clone();
+        context.running_as_admin = !engine_present;
+        context.path_env = Some(String::new());
+        let runtime = CoreRuntime::new(InMemoryHost::new(), context, embedded.presets().clone());
+        // A dockerd binary alone must never suppress conflict removal or plugin installation.
+        runtime.host().put_file_with_mode(
+            runtime.context().home_dir.join(".local/bin/dockerd"),
+            b"fixture".to_vec(),
+            0o100755,
+        );
+        let packages = [
+            "docker-ce",
+            "docker-ce-cli",
+            "containerd.io",
+            "docker-buildx-plugin",
+            "docker-compose-plugin",
+        ];
+        let mut status = String::new();
+        for (index, package) in packages.iter().enumerate() {
+            if scenario == "empty"
+                || (scenario == "cli" && *package != "docker-ce-cli")
+                || (scenario == "partial" && index == 4)
+            {
+                continue;
+            }
+            status.push_str(&format!(
+                "Package: {package}\nStatus: install ok installed\n\n"
+            ));
+        }
+        if !matches!(scenario, "complete" | "cli" | "partial" | "empty") {
+            status.push_str(&format!(
+                "Package: {scenario}\nStatus: install ok installed\n\n"
+            ));
+        }
+        runtime
+            .host()
+            .put_file("/var/lib/dpkg/status", status.into_bytes());
+        let request = SysBootstrapPlanRequest {
+            os_id: "ubuntu".into(),
+            item_ids: vec!["docker".into()],
+            sys_shell: "zsh".into(),
+            force_profile: false,
+            input_versions: Default::default(),
+        };
+        let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+        assert!(plan.is_ready(), "{plan:#?}");
+        if !engine_present {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Administrator)
+            );
+        }
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .iter()
+                .all(|op| matches!(op, HostOperation::Read(_)))
+        );
+        assert_eq!(
+            plan.steps.iter().any(|step| step
+                .diagnostic_codes
+                .iter()
+                .any(|code| code == "sys_dpkg_conflicts_may_be_removed")),
+            !engine_present
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        // Even a package change that keeps the same install/skip decision invalidates approval.
+        let original_status = runtime
+            .host()
+            .read(std::path::Path::new("/var/lib/dpkg/status"))
+            .await
+            .unwrap();
+        let mut changed_status = original_status.clone();
+        changed_status.extend_from_slice(b"\nPackage: unrelated\nStatus: install ok installed\n");
+        runtime
+            .host()
+            .put_file("/var/lib/dpkg/status", changed_status);
+        assert!(
+            runtime
+                .run_sys_bootstrap_approved(
+                    request.clone(),
+                    &approval,
+                    &mut NoBootstrapInteraction,
+                    &mut NullObserver
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !runtime
+                .host()
+                .operations()
+                .iter()
+                .any(|op| matches!(op, HostOperation::Run { .. }))
+        );
+        runtime
+            .host()
+            .put_file("/var/lib/dpkg/status", original_status);
+
+        runtime.host().queue_process_output(Ok(ProcessOutput {
+            exit_code: Some(installer_exit),
+            ..Default::default()
+        }));
+        let report = runtime
+            .run_sys_bootstrap_approved(
+                request,
+                &approval,
+                &mut NoBootstrapInteraction,
+                &mut NullObserver,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            report.outcomes[0].status,
+            if engine_present {
+                SysItemStatus::AlreadyInstalled
+            } else {
+                // A zero exit without a newly detectable Engine is not success either.
+                SysItemStatus::Failed
+            }
+        );
+        let runs = runtime
+            .host()
+            .operations()
+            .into_iter()
+            .filter_map(|op| match op {
+                HostOperation::Run { program, args } => Some((program, args)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if engine_present {
+            assert!(
+                runs.is_empty(),
+                "existing Engine must not execute any process: {runs:?}"
+            );
+        } else {
+            assert_eq!(runs.len(), 1, "{runs:?}");
+            assert!(
+                runs[0]
+                    .1
+                    .iter()
+                    .any(|arg| std::path::Path::new(arg).ends_with("install/docker.sh")),
+                "{runs:?}"
+            );
+            assert!(
+                SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+                    .await
+                    .unwrap()
+                    .entries
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn yazi_apt_installer_uses_signed_stable_packages_and_stops_on_failure() {
     let root = std::env::temp_dir().join(format!("shine-yazi-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&root).unwrap();

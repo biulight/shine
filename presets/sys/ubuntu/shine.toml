@@ -1,5 +1,5 @@
 version = 2
-description = "Initialize Ubuntu system with selectable Rust, Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza, Bun, pnpm, mise, Homebrew, and ZeroTier setup steps."
+description = "Initialize Ubuntu system with selectable Rust, Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza, Docker Engine, Bun, pnpm, mise, Homebrew, and ZeroTier setup steps."
 default_profile = "recommended"
 
 [[items]]
@@ -165,6 +165,16 @@ when_command = "eza"
 aliases = { ls = "eza --icons", ll = "eza -la --icons", lt = "eza --tree" }
 
 [[items]]
+id = "docker"
+label = "Docker Engine"
+description = "Install official Docker Engine packages via APT, removing conflicting distribution packages first."
+requires_admin = true
+permissions = { schema_version = 1, administrator = true, filesystem = [{ access = ["execute"], base = "preset", path = "install/docker.sh" }], network = [{ scope = "any" }], commands = ["apt-get", "curl", "dpkg", "dpkg-query", "install", "mktemp", "rm", "systemctl", "docker", "cat", "tee", "chmod"] }
+
+detect = { kind = "dpkg", packages = ["docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"], conflicts = ["docker.io", "docker-compose", "docker-compose-v2", "docker-doc", "docker-buildx", "podman-docker", "containerd", "runc"] }
+install = { kind = "script", path = "install/docker.sh" }
+
+[[items]]
 id = "bun"
 label = "Bun"
 description = "Install the Bun JavaScript runtime."
@@ -244,10 +254,10 @@ domain_env = "PRIVATE_DNS_DOMAIN"
 servers_env = "PRIVATE_DNS_SERVERS"
 
 [profiles.recommended]
-items = ["rust", "neovim", "astronvim", "atuin", "yazi", "starship", "zoxide", "zsh-vi-mode", "fzf", "bat", "eza"]
+items = ["rust", "neovim", "astronvim", "atuin", "yazi", "starship", "zoxide", "zsh-vi-mode", "fzf", "bat", "eza", "docker"]
 
 [profiles.all]
-items = ["rust", "neovim", "astronvim", "atuin", "yazi", "starship", "zoxide", "zsh-vi-mode", "fzf", "bat", "eza", "zerotier", "bun", "pnpm", "mise", "homebrew"]
+items = ["rust", "neovim", "astronvim", "atuin", "yazi", "starship", "zoxide", "zsh-vi-mode", "fzf", "bat", "eza", "docker", "zerotier", "bun", "pnpm", "mise", "homebrew"]
 
 [profiles.minimal]
 items = ["neovim", "fzf", "bat", "eza", "zoxide"]

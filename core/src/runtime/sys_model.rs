@@ -48,6 +48,11 @@ pub struct SysItem {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum SysDetection {
+    Dpkg {
+        packages: Vec<String>,
+        #[serde(default)]
+        conflicts: Vec<String>,
+    },
     Command {
         command: String,
         #[serde(default)]

@@ -39,6 +39,7 @@ mod shell_launch;
 mod sys;
 mod sys_action_executor;
 mod sys_bootstrap;
+mod sys_dpkg;
 mod sys_manifest;
 mod sys_model;
 mod sys_profile;

@@ -12,6 +12,28 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         detection: &SysDetection,
     ) -> Result<DetectionResult> {
         match detection {
+            SysDetection::Dpkg {
+                packages,
+                conflicts,
+            } => {
+                let bytes = match self
+                    .host()
+                    .read(Path::new(crate::runtime::sys_dpkg::STATUS_PATH))
+                    .await
+                {
+                    Ok(bytes) => Some(bytes),
+                    Err(error) if error.is_not_found() => None,
+                    Err(error) => return Err(error.into_anyhow("reading dpkg status")),
+                };
+                if crate::runtime::sys_dpkg::is_present(bytes.as_deref(), packages, conflicts)? {
+                    Ok(DetectionResult::Present(format!(
+                        "dpkg packages: {}",
+                        packages.join(", ")
+                    )))
+                } else {
+                    Ok(DetectionResult::Missing)
+                }
+            }
             SysDetection::Command {
                 command,
                 version_args,
