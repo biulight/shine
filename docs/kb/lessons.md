@@ -6,24 +6,36 @@
   reported `shine: command not found`, although the binary worked by absolute path.
 - **Cause**: the hint only wrote `.bashrc`; login Bash does not automatically read that file.
   Tests explicitly sourced the file and missed actual startup behavior.
-- **Fix**: the user-run hint appends an idempotent PATH statement to `.bashrc` and the first
-  existing login profile, creating `.bash_profile` only if all login profiles are absent.
-  Select and preflight both destinations inside the installer without writing configuration;
-  emit a multiline user-run hint that reads the PATH statement once from a quoted heredoc,
-  with literal target paths, append-time deduplication and write failure handling. Reject LF/CR
-  in HOME or the installation path before downloading or writing; `read -r` expects one line.
+- **Fix**: select the first existing login profile in Bash's precedence order. If it contains
+  a common `.bashrc` source line (dot/source with HOME or tilde, optionally guarded by a file
+  check), append a plain PATH export only to `.bashrc`; the login profile needs no
+  write permission. Otherwise append to both entries, creating `.bash_profile` only if all login
+  profiles are absent. Inspect only the selected login file, not lower-priority ones.
+  A trailing comment must follow whitespace or a semicolon: `. "$HOME/.bashrc"#login`
+  loads a different file and must retain the two-entry fallback.
+  This heuristic targets ordinary interactive login/non-login terminals, not arbitrary shell
+  control flow or PATH availability in non-interactive jobs. Do not execute user configuration
+  during detection. Select and preflight the needed destinations without writing configuration.
+  Inspect existing content there too, recognizing the plain export and both legacy guarded forms;
+  print only the missing appends, with shared symlink/hard-link targets deduplicated. Use one
+  `printf` redirected to a single target or piped to `tee -a` for identical additions to two files.
+  New login files additionally receive an interactive-only `.bashrc` source statement.
+  Reject LF/CR in HOME or the installation path before downloading or writing so generated
+  statements and copyable commands stay on one line.
   Reject unusable files instead of shadowing them, preserve existing content,
   and provide a separate current-terminal command. Selection reflects the installation-time
-  configuration; rerun the installer if the login-file layout changes before using its hint.
+  configuration; rerun the installer after configuration changes or a partial append failure.
+  Repeated installation checks again; repeated pasting of an old hint is not deduplicated.
   Preflight is not a transaction: later write failures can leave an earlier append in place.
-  Do not add a `.bashrc` source command:
-  that would also activate unrelated interactive setup during login. Arbitrary early returns or
+  Do not add a `.bashrc` source command to existing login files. Arbitrary early returns or
   later PATH overrides in user configuration still require manual adjustment.
 - **Coverage**: start interactive login and non-login Bash with temporary HOME directories;
-  verify profile precedence, existing source chains, repeated setup/loading, literal paths and
+  verify profile precedence, existing source chains, repeated installation/loading, literal paths and
   unusable destinations. Feed pasted hints through interactive Bash stdin with history expansion
-  enabled: `bash -c` misses `!` expansion in double-quoted paths. Single-quote literal paths
-  separately from PATH expansion. Installer fixtures use a local archive and never download releases.
+  enabled: `bash -c` misses `!` expansion in double-quoted paths. Single-quote special paths
+  separately from PATH expansion. Both stored configuration and current-terminal hints use a
+  plain `export`: repeated sourcing or nested shells may repeat a directory in PATH. File-level
+  deduplication happens during installation, not on each shell startup. Fixtures never download releases.
 
 ## 2026-11-07 — Top-level errors need stderr-aware emphasis
 
@@ -3886,11 +3898,15 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Symptom**: the Unix installer printed a PATH assignment without a copyable persistence
   command, leaving users to locate and edit their shell configuration.
 - **Rule**: `curl ... | sh` identifies the installer interpreter, not the user's shell. Label
-  Bash/Zsh hints using `SHELL`, leave other shells to manual setup, and resolve `ZDOTDIR` in the
-  user's Zsh when the command is pasted. Print commands without editing profiles automatically.
+  Bash/Zsh hints using `SHELL` and leave other shells to manual setup. Resolve Zsh's destination
+  from exported `ZDOTDIR` at installation time, defaulting to HOME when absent or empty, and print
+  the literal `.zshrc` path. Custom unexported `ZDOTDIR` requires manual configuration or exporting
+  it before rerunning the installer; do not defer path selection or deduplication to pasted hints.
+  Print commands without editing profiles automatically.
 - **Coverage**: `python3 scripts/test-install-path-hints.py` runs the installer with a local
   archive and executes Bash/Zsh hints in temporary homes, checking literal special characters,
-  preservation of existing config and repeated execution. Fish must receive manual setup guidance
+  preservation of existing config, repeated installation and exported/unexported `ZDOTDIR`.
+  Fish must receive manual setup guidance
   without a generated command or automatic profile writes.
 
 
@@ -4013,11 +4029,11 @@ When cutting a release, always diff against the latest stable `v*` tag
 
 - **Symptom**: the printed installer hint populated `.bashrc` and `.bash_profile` with PATH
   assignments, so login Bash found Shine but never loaded bootstrap aliases from `.bashrc`.
-- **Fix**: when the user-run command creates a Bash login file, append an interactive-only
+- **Fix**: when the installer observes that a Bash login file needs creating, include an interactive-only
   `.bashrc` source statement. Preserve existing login logic; no legacy migration is needed for
   this unreleased behavior. Installation itself still only prints configuration instructions.
 - **Regression**: real Bash in temporary homes verifies login aliases, non-interactive isolation,
-  repeated commands and Ubuntu's existing `.profile` chain without double loading.
+  repeated installation and Ubuntu's existing `.profile` chain without double loading.
 
 
 ## 2026-11-14 — Linux release builds need an explicit glibc baseline
