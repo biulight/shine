@@ -1119,7 +1119,7 @@ async fn privileged_set_mode(path: &Path, mode: u32) -> anyhow::Result<()> {
     #[cfg(windows)]
     {
         let _ = (path, mode);
-        return Ok(());
+        Ok(())
     }
     #[cfg(unix)]
     {

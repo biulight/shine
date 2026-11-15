@@ -440,7 +440,7 @@ impl FileReleaseRequest {
 }
 
 pub fn keyed_fingerprint(key: &[u8], bytes: &[u8]) -> Result<String> {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key).context("invalid fingerprint key")?;
     mac.update(b"shine-app-secret-file-v1\0");
     mac.update(bytes);
@@ -595,6 +595,11 @@ mod tests {
     }
     #[test]
     fn secret_fingerprint_is_keyed_and_binary_exact() {
+        // Frozen HMAC-SHA256 vector includes the domain separator and its NUL.
+        assert_eq!(
+            keyed_fingerprint(b"one", b"password").unwrap(),
+            "4b536494beaab275040de9c659d17186ea5ed125815b0b94d6126500ee5477f3"
+        );
         assert_ne!(
             keyed_fingerprint(b"one", b"password").unwrap(),
             keyed_fingerprint(b"two", b"password").unwrap()

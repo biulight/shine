@@ -11,8 +11,6 @@ pub(super) async fn dispatch(config: &Config, command: ShellCommands) -> Result<
         ShellCommands::Install {
             target,
             dry_run: true,
-            replace_managed: _,
-            yes: _,
             ..
         } => Box::pin(shells::handle_install_dry_run(config, target.as_deref())).await,
         ShellCommands::Install {

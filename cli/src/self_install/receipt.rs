@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use shine_core::runtime::{FileSystemHost, PrivilegedOperationGuard, RealHost};
 use std::{
     fs::File,
-    io,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 
@@ -36,7 +36,15 @@ pub(super) async fn lock(config: &Config) -> Result<PrivilegedOperationGuard> {
 
 fn digest(file: &mut File) -> Result<String> {
     let mut hash = Sha256::new();
-    io::copy(file, &mut hash)?;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => hash.update(&buffer[..count]),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
     Ok(shine_core::digest::encode_sha256(&hash.finalize().into()))
 }
 
@@ -174,6 +182,26 @@ pub(super) fn remove(config: &Config, copies: &[CopyReceipt]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn streamed_digest_preserves_binary_bytes_and_partial_final_chunk() {
+        let dir = crate::test_support::make_temp_dir("shine-receipt-digest").await;
+        let path = dir.join("program");
+        let mut bytes = (0u8..=255).cycle().take(32 * 1024).collect::<Vec<_>>();
+        bytes.push(255);
+        std::fs::write(&path, bytes).unwrap();
+        let mut file = std::fs::File::open(&path).unwrap();
+        assert_eq!(
+            super::digest(&mut file).unwrap(),
+            "450f4b5f4f85c70445cc18862d8d61317ea86936734daf8013caf2fe18189197"
+        );
+        // A second read at EOF is the empty-input digest, not stale buffer content.
+        assert_eq!(
+            super::digest(&mut file).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     use super::*;
 
     #[tokio::test]

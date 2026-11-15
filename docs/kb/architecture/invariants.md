@@ -934,6 +934,8 @@ bugs. Check this list before changing the modules named in each entry.
   would see spurious per-line diffs) and uses the pure-Rust fallback over normalized bytes.
   Genuine content changes still write LF. The two sentinel *removal* styles above are unchanged —
   only the comparison layer normalizes.
+  The pure-Rust merge uses `similar::Algorithm::RawMyers` to retain pre-3.2 edit boundaries;
+  display-oriented heuristics must not silently change ownership or conflict decisions.
 - **Paths under `$HOME` are written as `$HOME/...`**, not absolute, for portability.
   Only that generated HOME prefix may expand. Literal path components must quote or escape dollar signs,
   backticks, quotes and backslashes according to the selected shell in generated Shell PATH, source and function snippets.
@@ -951,6 +953,11 @@ bugs. Check this list before changing the modules named in each entry.
   must leave the last installed profile intact.
 
 ## Config files
+
+- **JSONC transformation fixes its accepted syntax explicitly.** Preserve the existing comments,
+  trailing/missing commas, loose keys, single quotes, hexadecimal and unary-plus numbers. Do not
+  inherit newly enabled JSON5 value/escape options from parser defaults. Numbers unrepresentable
+  in the JSON output must fail rather than silently becoming `null`.
 
 - **CLI configuration parser errors discard both source and value-bearing messages.** Minimal,
   full and layered TOML readers plus comment-preserving writers use one shared CLI error mapper.

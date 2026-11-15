@@ -1619,7 +1619,7 @@ fn file_export_age_preserves_binary_files_and_phone_authorization() {
 fn hybrid_file_fixture(plaintext: &[u8]) -> String {
     use base64::{Engine, engine::general_purpose::STANDARD as B64};
     use chacha20poly1305::{
-        KeyInit, XChaCha20Poly1305, XNonce,
+        KeyInit, XChaCha20Poly1305,
         aead::{Aead, Payload},
     };
     let nonce = [9u8; 24];
@@ -1641,7 +1641,7 @@ fn hybrid_file_fixture(plaintext: &[u8]) -> String {
     let cipher = XChaCha20Poly1305::new_from_slice(&key).unwrap();
     let data = cipher
         .encrypt(
-            XNonce::from_slice(&nonce),
+            (&nonce).into(),
             Payload {
                 msg: plaintext,
                 aad: &bytes,

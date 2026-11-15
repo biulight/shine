@@ -16,6 +16,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Reject out-of-range numbers during JSONC-to-JSON conversion instead of silently writing `null`.
+
 - Restore Ubuntu 22.04 compatibility for Linux release binaries by building against glibc 2.35
   and checking both Linux architectures before uploading release assets.
 

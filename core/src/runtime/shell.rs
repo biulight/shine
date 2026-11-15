@@ -2201,7 +2201,7 @@ commands = ["git"]
             legacy_source.display()
         );
         host.put_file(&launcher, marker.as_bytes().to_vec());
-        host.put_file(&launcher.with_extension("cmd"), marker.as_bytes().to_vec());
+        host.put_file(launcher.with_extension("cmd"), marker.as_bytes().to_vec());
 
         let plan = runtime
             .plan_shells(super::super::ShellPlanRequest {
