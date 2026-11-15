@@ -116,7 +116,10 @@ shine app recover --yes
 
 部分预设会在安装前处理源文件，例如：
 
-- `jsonc-to-json`：移除 JSONC 注释和尾随逗号，再写入标准 JSON。
+- `jsonc-to-json`：将 JSONC 和支持的 JSON5 写法转换为标准 JSON。除注释和尾随逗号外，
+  还支持不带引号的键、单引号字符串、十六进制数、前导 `+`、`.5` 和 `5.` 等小数写法、
+  `\x41`、`\v`、`\0` 等字符串转义，以及反斜线续行。`Infinity` 和 `NaN` 不是合法的 JSON
+  数字，转换时会报错；超出支持范围的数字也会报错。
 - `template`：用当前 `[env]` 值替换 `@@VAR_NAME@@`。
 - `json-merge` 安装模式：只维护目标 JSON 中声明的顶层键，保留其它用户设置。
 

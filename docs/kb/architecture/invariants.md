@@ -955,9 +955,10 @@ bugs. Check this list before changing the modules named in each entry.
 ## Config files
 
 - **JSONC transformation fixes its accepted syntax explicitly.** Preserve the existing comments,
-  trailing/missing commas, loose keys, single quotes, hexadecimal and unary-plus numbers. Do not
-  inherit newly enabled JSON5 value/escape options from parser defaults. Numbers unrepresentable
-  in the JSON output must fail rather than silently becoming `null`.
+  trailing/missing commas, loose keys, single quotes, hexadecimal and unary-plus numbers. Accept
+  JSON5 leading/trailing decimal points, extended string escapes and line continuations, while
+  keeping parser options explicit. Non-finite and overflowing numbers must fail rather than
+  silently becoming `null`; decoded control characters must be escaped in the JSON output.
 
 - **CLI configuration parser errors discard both source and value-bearing messages.** Minimal,
   full and layered TOML readers plus comment-preserving writers use one shared CLI error mapper.

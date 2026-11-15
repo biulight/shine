@@ -9,6 +9,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
+- Accept JSON5 decimal-point shorthand, extended string escapes and line continuations in
+  `jsonc-to-json` transforms, while rejecting non-finite and overflowing numbers.
+
 - Add Arch Linux system bootstrap with a default `minimal` selection: Neovim, fzf, bat, eza,
   and zoxide. Install missing packages through pacman and manage their Bash/Zsh integrations.
   Complete a full Arch system update before bootstrap; Shine does not refresh package databases
