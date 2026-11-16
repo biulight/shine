@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-11-17 — Surge module inventory can include a detail line
+
+- **Symptom**: Surge Mac 6.11.0 listed modules successfully, but both artifact operations rejected
+  the inventory before attempting a native state change.
+- **Cause**: the CLI added a more deeply indented type and metadata line after each module state
+  row. Shine expected a state on every nonempty line.
+- **Rule**: query `surge-cli --raw module list` for discovery and verification. Read the exact
+  name from the JSON summary, cross-check detailed records when supplied, and reject duplicate
+  target identities or inconsistent state.
+
 ## 2026-11-17 — App install must plan the generator fallback when its gate is absent
 
 - **Symptom**: Surge install with only the primary subscription configured was blocked by

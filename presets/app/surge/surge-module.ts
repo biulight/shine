@@ -22,19 +22,48 @@ export const runSurgeCommand: SurgeCommand = async (args) => {
   }
 };
 
+function isModuleNameList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((name) => typeof name === "string" && name.length > 0);
+}
+
 export function generalModuleState(output: string): boolean | undefined {
-  const lines = output.trim().split(/\r?\n/);
-  if (lines.shift()?.trim() !== "Modules:") throw new Error("Unrecognized Surge module inventory");
-  let state: boolean | undefined;
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    const entry = /^\s*\[(on|off)\]\s+(.+?)\s*$/.exec(line);
-    if (!entry) throw new Error("Unrecognized Surge module inventory entry");
-    if (entry[2] !== moduleName) continue;
-    if (state !== undefined) throw new Error(`Duplicate Surge module identity: ${moduleName}`);
-    state = entry[1] === "on";
+  let inventory: unknown;
+  try {
+    inventory = JSON.parse(output);
+  } catch {
+    throw new Error("Unrecognized Surge module inventory JSON");
+  }
+  if (inventory === null || typeof inventory !== "object"
+    || !("available" in inventory) || !isModuleNameList(inventory.available)
+    || !("enabled" in inventory) || !isModuleNameList(inventory.enabled)) {
+    throw new Error("Unrecognized Surge module inventory JSON");
+  }
+
+  const available = inventory.available.filter((name) => name === moduleName).length;
+  const enabled = inventory.enabled.filter((name) => name === moduleName).length;
+  if (available > 1 || enabled > 1) throw new Error(`Duplicate Surge module identity: ${moduleName}`);
+  if (enabled > available) throw new Error("Inconsistent Surge module inventory");
+  const state = available === 0 ? undefined : enabled === 1;
+  if ("modules" in inventory) {
+    if (!Array.isArray(inventory.modules)) throw new Error("Unrecognized Surge module inventory JSON");
+    let detailState: boolean | undefined;
+    for (const entry of inventory.modules as unknown[]) {
+      if (entry === null || typeof entry !== "object"
+        || !("name" in entry) || typeof entry.name !== "string" || !entry.name
+        || !("enabled" in entry) || typeof entry.enabled !== "boolean") {
+        throw new Error("Unrecognized Surge module inventory JSON");
+      }
+      if (entry.name !== moduleName) continue;
+      if (detailState !== undefined) throw new Error(`Duplicate Surge module identity: ${moduleName}`);
+      detailState = entry.enabled;
+    }
+    if (detailState !== state) throw new Error("Inconsistent Surge module inventory");
   }
   return state;
+}
+
+export async function readGeneralModuleState(command: SurgeCommand): Promise<boolean | undefined> {
+  return generalModuleState(await command(["--raw", "module", "list"]));
 }
 
 export async function validateGeneralModule(path: string, reviewed: string | Uint8Array): Promise<void> {
@@ -55,7 +84,7 @@ export async function validateGeneralModule(path: string, reviewed: string | Uin
 }
 
 export async function setGeneralModule(enabled: boolean, command: SurgeCommand): Promise<void> {
-  const state = generalModuleState(await command(["module", "list"]));
+  const state = await readGeneralModuleState(command);
   if (state === undefined) {
     if (enabled) throw new Error(`Surge has not discovered ${moduleFile}; install it in Surge's Profiles directory before applying`);
     // Native disable rejects missing modules. The caller must still reload to clear
@@ -64,7 +93,7 @@ export async function setGeneralModule(enabled: boolean, command: SurgeCommand):
     return;
   }
   if (state !== enabled) await command(["module", enabled ? "enable" : "disable", moduleName]);
-  if (generalModuleState(await command(["module", "list"])) !== enabled) {
+  if (await readGeneralModuleState(command) !== enabled) {
     throw new Error(`Surge module ${moduleName} did not become ${enabled ? "enabled" : "disabled"}; retry after checking Surge`);
   }
   console.log(`surge: module ${moduleName} is ${enabled ? "enabled" : "disabled"}`);

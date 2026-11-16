@@ -31,6 +31,10 @@ deletion/reinstallation, so reinstall is not a guarantee of initially disabled b
 
 Explicit artifacts require a running Surge with CLI module support. Commands have a bounded
 timeout; nonzero exits, unexpected inventory and failed state verification propagate as errors.
+Use `surge-cli --raw module list` for discovery and state verification. Native probes on Surge
+Mac 6.10.0 and 6.11.0 confirmed the `available` and `enabled` name arrays. When the response
+includes detailed `modules` records, their target identity and state must agree with the name
+arrays. Other metadata is ignored. Invalid or contradictory responses fail the operation.
 No arbitrary controller output is printed. Only the fixed module is changed. The parser rejects
 duplicate identities rather than choosing an ambiguous native module. A missing module cannot be
 disabled by native CLI: remove warns and reloads to clear cached effects, but clearing a remembered

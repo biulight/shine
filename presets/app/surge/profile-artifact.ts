@@ -10,7 +10,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
-  generalModuleState, moduleFile, runSurgeCommand, setGeneralModule, validateGeneralModule,
+  moduleFile, readGeneralModuleState, runSurgeCommand, setGeneralModule, validateGeneralModule,
 } from "./surge-module";
 import type { SurgeCommand } from "./surge-module";
 
@@ -267,7 +267,7 @@ export async function runProfileArtifact(
     installedModule = options.installedModule ?? join(homedir(), "Library/Application Support/Surge/Profiles", moduleFile);
     reviewedModule = await readFile(join(import.meta.dir, moduleFile));
     await validateGeneralModule(installedModule, reviewedModule);
-    if (generalModuleState(await command(["module", "list"])) === undefined) {
+    if (await readGeneralModuleState(command) === undefined) {
       throw new Error(`Surge has not discovered ${moduleFile}; run: shine app install surge`);
     }
   }
