@@ -206,6 +206,11 @@ bugs. Check this list before changing the modules named in each entry.
   target fields must belong to the generated Plan's canonical allow-list. Neither serialized
   operation state nor progress events authorize mutation (ADR 0079).
 
+- **Sys profile approval binds preserved integrations.** Profile enable/disable observes the
+  resulting enabled item set; nonempty bootstrap observes the existing enabled set it preserves,
+  in addition to selected receipts. Pure PATH integrations can change composition without changing
+  permissions or code boundaries, so those indirect observations cannot replace this binding.
+
 - **Shared SHA-256 encoding does not unify fingerprint protocols.** `digest.rs` hashes exact bytes
   and encodes 32-byte digests as 64 lowercase hexadecimal characters. Each caller owns its input
   order, framing, normalization, domain separator, prefix, version and validation. Plan/snapshot
@@ -903,6 +908,12 @@ bugs. Check this list before changing the modules named in each entry.
   changes.
 
 ## Shell profile editing
+
+- **Independent Sys initialization never manufactures software state.** `sys-init` observes the
+  complete run manifest, preserves the enabled set and reuses profile composition without
+  detection or receipt writes. External base needs `sys/profile/<os>` authorization even when
+  no item is enabled; every enabled integration retains its own check before publication.
+  Delivery remains non-transactional and cannot be recovered as a managed Sys action (ADR 0172).
 
 - **Literal encoding does not select shell semantics.** Shared POSIX and PowerShell encoders retain
   exact output bytes. Callers still own Fish escaping, path normalization, `$HOME` expansion,

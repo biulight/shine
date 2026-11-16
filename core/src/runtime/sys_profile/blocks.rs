@@ -48,14 +48,16 @@ async fn update_linux_shell_profile(
 ) -> Result<SysShellProfileUpdate> {
     match config.shell_type {
         ShellType::Bash => {
-            let updated = update_sys_shell_profile_blocks_with_host(
+            let mut updated = update_sys_shell_profile_blocks_with_host(
                 host,
                 &config.home_dir.join(".bashrc"),
                 os_id,
                 Some("bash"),
             )
             .await?;
-            remove_sys_shell_profile_blocks(host, &config.home_dir.join(".zshrc"), os_id).await?;
+            updated |=
+                remove_sys_shell_profile_blocks(host, &config.home_dir.join(".zshrc"), os_id)
+                    .await?;
             Ok(SysShellProfileUpdate {
                 updated,
                 unsupported_shell: false,
@@ -63,14 +65,16 @@ async fn update_linux_shell_profile(
             })
         }
         ShellType::Zsh => {
-            let updated = update_sys_shell_profile_blocks_with_host(
+            let mut updated = update_sys_shell_profile_blocks_with_host(
                 host,
                 &config.home_dir.join(".zshrc"),
                 os_id,
                 Some("zsh"),
             )
             .await?;
-            remove_sys_shell_profile_blocks(host, &config.home_dir.join(".bashrc"), os_id).await?;
+            updated |=
+                remove_sys_shell_profile_blocks(host, &config.home_dir.join(".bashrc"), os_id)
+                    .await?;
             Ok(SysShellProfileUpdate {
                 updated,
                 unsupported_shell: false,
@@ -132,9 +136,7 @@ async fn update_sys_shell_profile_blocks_with_host(
         return Ok(false);
     }
 
-    host.write_atomic(path, updated.as_bytes())
-        .await
-        .map_err(|error| error.into_anyhow("writing sys shell profile"))?;
+    super::reconcile::write_if_changed(host, path, updated.as_bytes()).await?;
     Ok(true)
 }
 
@@ -444,9 +446,7 @@ async fn remove_shell_profile_block(
     if updated == content {
         return Ok(false);
     }
-    host.write_atomic(path, updated.as_bytes())
-        .await
-        .map_err(|error| error.into_anyhow("writing sys shell profile"))?;
+    super::reconcile::write_if_changed(host, path, updated.as_bytes()).await?;
     Ok(true)
 }
 

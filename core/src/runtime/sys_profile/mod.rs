@@ -74,6 +74,17 @@ pub struct SysProfileStateReport {
     pub outcome: Option<SysItemOutcome>,
 }
 
+impl<H> CoreRuntime<H> {
+    pub(in crate::runtime) fn enabled_sys_profile_items(
+        &self,
+        manifest: &crate::runtime::SysManifest,
+        entries: &[SysRunEntry],
+        os_id: &str,
+    ) -> std::collections::BTreeSet<String> {
+        compose::enabled_profile_items(manifest, entries, os_id)
+    }
+}
+
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
     fn sys_profile_config(&self, external_code_trusted: bool) -> SysProfileRuntimeConfig {
         SysProfileRuntimeConfig {
@@ -111,13 +122,38 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         .await
     }
 
-    pub(in crate::runtime) fn enabled_sys_profile_items(
+    pub async fn init_sys_profile_approved(
         &self,
-        manifest: &crate::runtime::SysManifest,
-        entries: &[SysRunEntry],
-        os_id: &str,
-    ) -> std::collections::BTreeSet<String> {
-        compose::enabled_profile_items(manifest, entries, os_id)
+        request: crate::runtime::SysInitPlanRequest,
+        approval: &crate::plan::PlanApprovalV1,
+    ) -> Result<SysItemOutcome> {
+        let _guard = self.acquire_sys_lifecycle_operation().await?;
+        approval.validate(&self.plan_sys_init(request.clone()).await?)?;
+        for requirement in self.sys_base_profile_requirements(&request.os_id)? {
+            if !self.trust_decision(&requirement).is_trusted() {
+                bail!(
+                    "external base profile requires trust: {}",
+                    requirement.target
+                );
+            }
+        }
+        let loaded = self.load_sys_preset(&request.os_id).await?;
+        let manifest =
+            crate::runtime::sys::load_manifest_with_host(self.host(), &self.context().shine_dir)
+                .await?;
+        let enabled =
+            self.enabled_sys_profile_items(&loaded.manifest, &manifest.entries, &request.os_id);
+        let shell: &'static str = self.context().shell.into();
+        // The shared installer authorizes integrations and composes both phases before writing.
+        self.install_composed_sys_profile(
+            &request.os_id,
+            &loaded,
+            &enabled,
+            shell,
+            request.force_profile,
+        )
+        .await
+        .context("Sys initialization refresh failed; some profile files may already have changed. Review and rerun sys init to reconcile")
     }
 
     pub(in crate::runtime) async fn preflight_composed_sys_profile(

@@ -8,6 +8,21 @@ sidebar_position: 3
 使用系统预设，可以在 macOS、Ubuntu、Arch Linux 或 Windows 上安装选定的开发工具，并启用相应的 Shell
 集成。Shine 也能单独管理私有 DNS 等系统设置，第三方软件的日常更新仍由包管理器或上游工具负责。
 
+## 单独刷新初始化配置 {#refresh-initialization}
+
+修改系统预设的启动配置后，运行以下命令更新配置，保留已启用的软件集成：
+
+```bash
+shine sys init --dry-run
+shine sys init
+```
+
+检查预览中的目标 Shell 和改动，确认后打开新的 Shell；此后每次启动 Shell 都会加载这些配置。
+再次修改预设后，需重新运行 `shine sys init`。
+
+在 Linux 上切换 Bash/Zsh 时，此命令会将 Shine 的 Sys 配置加载入口切换到当前 Shell。
+使用外部预设时，按[代码授权说明](./custom-presets.md#声明权限)审阅代码后再应用。
+
 ## 先查看，再预览 {#先查看再执行}
 
 列出当前系统可用的项目，并查看安装要求：
@@ -131,8 +146,10 @@ Shell 集成用于让终端找到工具，或启用提示符、历史搜索等�
 - **受管操作中断：** Shine 提示需要恢复时，运行 `shine sys recover` 并审阅计划。只有相关状态
   未发生变化时，才会完成或回退原操作；修改过的资源和无关的 Shell 内容会保留。
 - **另一项系统操作仍在运行：** 等待它结束。如果 Shine 提示状态发生变化，请重新审阅计划后重试。
-- **Shell 配置冲突：** 检查 Shine 指出的文件。只有希望备份并替换冲突配置，而非保留和合并自己的
-  修改时，才使用 `shine sys bootstrap --force-profile`。
+- **Shell 配置冲突：** 结果显示 `needs action` 时，检查输出指出的文件；当前配置会保留，其他文件
+  可能已经更新。只有希望备份并替换冲突配置，而非保留和合并自己的修改时，才使用
+  `shine sys init --force-profile`。
+- **初始化配置刷新中断：** 重新预览并运行 `shine sys init`；`sys recover` 不能回滚这次刷新。
 
 ## 支持的 Shell {#平台说明}
 

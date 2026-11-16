@@ -17,6 +17,20 @@ pub(crate) async fn load_store(config: &Config) -> Result<TrustStoreV1> {
     load_store_path(&trust_store_path(config)).await
 }
 
+async fn external_code_requirements(
+    runtime: &shine_core::runtime::CoreRuntime<RealHost>,
+    target: &str,
+) -> Result<shine_core::runtime::ExternalCodeRequirementReport> {
+    if target == "preset" || (target.starts_with("sys/") && !target.starts_with("sys/profile/")) {
+        let os_id = crate::sys::detect_os_id().await?;
+        runtime
+            .external_code_requirements_for_os(target, &os_id)
+            .await
+    } else {
+        runtime.external_code_requirements(target).await
+    }
+}
+
 pub async fn handle_list(config: &Config, verbose: bool) -> Result<()> {
     let store = load_store(config).await?;
     if store.grants.is_empty() {
@@ -35,7 +49,7 @@ pub async fn handle_list(config: &Config, verbose: bool) -> Result<()> {
         .map(|target| (target.clone(), runtime.as_ref().map(|_| Vec::new())))
         .collect::<BTreeMap<_, _>>();
     if let Some(runtime) = &runtime {
-        if let Ok(report) = runtime.external_code_requirements("preset").await {
+        if let Ok(report) = external_code_requirements(runtime, "preset").await {
             for requirement in report.requirements {
                 if let Some(Some(requirements)) = current.get_mut(&requirement.target) {
                     requirements.push(requirement);
@@ -46,6 +60,22 @@ pub async fn handle_list(config: &Config, verbose: bool) -> Result<()> {
         }
     }
 
+    // Whole-profile identities name their OS explicitly, including grants for another OS.
+    if let Some(runtime) = &runtime {
+        for target in targets
+            .iter()
+            .filter(|target| target.starts_with("sys/profile/"))
+        {
+            current.insert(
+                target.clone(),
+                runtime
+                    .external_code_requirements(target)
+                    .await
+                    .ok()
+                    .map(|report| report.requirements),
+            );
+        }
+    }
     let groups = build_list_groups(&store.grants, &current);
     println!(
         "{}",
@@ -327,7 +357,7 @@ fn styled_list_status(status: &str) -> String {
 
 pub async fn handle_inspect(config: &Config, target: &str) -> Result<()> {
     let runtime = core_runtime::from_config(config).await?;
-    let report = runtime.external_code_requirements(target).await?;
+    let report = external_code_requirements(&runtime, target).await?;
     if report.requirements.is_empty() {
         println!(
             "{} has no external executable-code requirements.",
@@ -394,7 +424,7 @@ pub async fn handle_grant(
     development: bool,
 ) -> Result<()> {
     let runtime = core_runtime::from_config(config).await?;
-    let report = runtime.external_code_requirements(target).await?;
+    let report = external_code_requirements(&runtime, target).await?;
     if report.requirements.is_empty() {
         bail!(
             "{} has no external executable code to trust",
@@ -570,6 +600,7 @@ fn validate_target(target: &str) -> Result<()> {
     let parts = target.split('/').collect::<Vec<_>>();
     let valid = match parts.as_slice() {
         ["app" | "sys", name] => valid_target_segment(name),
+        ["sys", "profile", "macos" | "ubuntu" | "arch" | "windows"] => true,
         ["shell", category, command] => {
             valid_target_segment(category) && valid_target_segment(command)
         }
@@ -577,7 +608,7 @@ fn validate_target(target: &str) -> Result<()> {
     };
     if !valid {
         bail!(
-            "trust target must be preset, app/<category>, shell/<category>/<command>, or sys/<item>: {}",
+            "trust target must be preset, app/<category>, shell/<category>/<command>, sys/<item>, or sys/profile/<os>: {}",
             escape_controls(target)
         );
     }
@@ -963,6 +994,11 @@ mod tests {
         assert!(validate_target("app/demo").is_ok());
         assert!(validate_target("shell/demo/tool").is_ok());
         assert!(validate_target("sys/mise").is_ok());
+        for os in ["macos", "ubuntu", "arch", "windows"] {
+            assert!(validate_target(&format!("sys/profile/{os}")).is_ok());
+        }
+        assert!(validate_target("sys/profile/unknown").is_err());
+        assert!(validate_target("sys/profile/ubuntu/bash").is_err());
         assert!(validate_target("demo").is_err());
         assert!(validate_target("app/demo/other").is_err());
         assert!(validate_target("shell/demo").is_err());

@@ -141,6 +141,12 @@ pub struct AppArtifactPlanRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SysInitPlanRequest {
+    pub os_id: String,
+    pub force_profile: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SysProfilePlanRequest {
     pub os_id: String,
     pub item_id: String,

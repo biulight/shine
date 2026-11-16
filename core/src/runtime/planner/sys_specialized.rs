@@ -98,6 +98,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         } else {
             enabled.remove(&request.item_id);
         }
+        state.public("profile-enabled-items", serde_json::to_vec(&enabled)?)?;
         for enabled_item in loaded
             .manifest
             .items
@@ -129,6 +130,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             self,
             &request.os_id,
             sys_shell,
+            false,
             &mut state,
             &mut permissions,
         )
@@ -405,6 +407,16 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         }
 
         if !selected.is_empty() {
+            // Composition preserves integrations outside this batch. Their PATH-only
+            // changes need not affect permissions or executable-code boundaries.
+            state.public(
+                "profile-enabled-items",
+                serde_json::to_vec(&self.enabled_sys_profile_items(
+                    &loaded.manifest,
+                    &run_manifest.entries,
+                    &request.os_id,
+                ))?,
+            )?;
             let mut profile_permissions = PermissionAccumulator::default();
             add_shine_write_permission(
                 self.context(),
@@ -417,21 +429,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 self,
                 &request.os_id,
                 &request.sys_shell,
+                request.force_profile,
                 &mut state,
                 &mut profile_permissions,
             )
             .await?;
-            if request.force_profile {
-                // Force replacement creates uniquely named backups under this directory.
-                // Random backup names must not enter the review fingerprint.
-                add_shine_write_permission(
-                    self.context(),
-                    &mut profile_permissions,
-                    &self.context().home_dir.join(".shine/profile"),
-                    FilesystemPurposeV1::Recovery,
-                    "sys/profile",
-                );
-            }
             let mut profile = PlanStepV1::new(
                 "sys/profile",
                 Some(request.sys_shell.clone()),
@@ -490,6 +492,144 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 &loaded.manifest,
                 &affected,
             )?;
+        }
+        Ok(plan)
+    }
+}
+
+impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    pub async fn plan_sys_init(&self, request: SysInitPlanRequest) -> Result<PlanV1> {
+        let shell: &'static str = self.context().shell.into();
+        let supported = matches!(
+            (self.context().platform, request.os_id.as_str(), shell),
+            (crate::runtime::RuntimePlatform::Macos, "macos", "zsh")
+                | (
+                    crate::runtime::RuntimePlatform::Linux,
+                    "ubuntu" | "arch",
+                    "bash" | "zsh"
+                )
+                | (
+                    crate::runtime::RuntimePlatform::Windows,
+                    "windows",
+                    "powershell"
+                )
+        );
+        if !supported {
+            bail!(
+                "unsupported Sys init OS/shell combination: {}/{shell}",
+                request.os_id
+            );
+        }
+        let loaded = self.load_sys_preset(&request.os_id).await?;
+        let operation = PlanOperationV1::SysInit;
+        let mut state = StateCapture::new("sys-init", operation)?;
+        capture_context(&mut state, self.context())?;
+        state.public("os-id", &request.os_id)?;
+        state.public("sys-shell", shell)?;
+        state.public("force-profile", request.force_profile.to_string())?;
+        if let Some(bytes) = self.sys_operation_journal_bytes().await? {
+            state.bytes("journal:sys-operation", Some(&bytes))?;
+            return finish_specialized_plan(
+                self,
+                operation,
+                state,
+                PermissionAccumulator::default(),
+                vec![
+                    PlanStepV1::new("sys", Some("operation-journal"), PlanActionV1::Blocked)
+                        .with_diagnostic_code("sys_recovery_required"),
+                ],
+            );
+        }
+        let (manifest, bytes) = load_sys_manifest(self.host(), &self.context().shine_dir).await?;
+        state.bytes("manifest:sys-init", bytes.as_deref())?;
+        let enabled =
+            self.enabled_sys_profile_items(&loaded.manifest, &manifest.entries, &request.os_id);
+        let mut permissions = PermissionAccumulator::default();
+        for item in loaded
+            .manifest
+            .items
+            .iter()
+            .filter(|item| enabled.contains(&item.id))
+        {
+            permissions.declaration_without_opaque_code(
+                item.permissions.as_ref(),
+                "sys_profile_permission_declaration_missing",
+            );
+        }
+        capture_sys_profile_state(
+            self,
+            &request.os_id,
+            shell,
+            request.force_profile,
+            &mut state,
+            &mut permissions,
+        )
+        .await?;
+        let requirements = self.sys_base_profile_requirements(&request.os_id)?;
+        let blocked = requirements
+            .iter()
+            .any(|requirement| !self.trust_decision(requirement).is_trusted())
+            || sys_profile_code_blocked_for_enabled(
+                self,
+                &request.os_id,
+                &loaded.manifest,
+                &enabled,
+            )?;
+        let mut step = PlanStepV1::new(
+            "sys/profile",
+            Some(shell),
+            if blocked {
+                PlanActionV1::Blocked
+            } else {
+                PlanActionV1::Update
+            },
+        )
+        .with_diagnostic_code("sys_bootstrap_profile_recovery_unsupported");
+        if blocked {
+            step = step.with_diagnostic_code("sys_external_code_not_allowed");
+        }
+        let mut steps = vec![step];
+        steps.extend(enabled.iter().map(|item| {
+            PlanStepV1::new(
+                format!("sys/{item}"),
+                Some("preserved-integration"),
+                PlanActionV1::None,
+            )
+        }));
+        let mut plan = finish_specialized_plan(self, operation, state, permissions, steps)?;
+        attach_sys_profile_boundaries(self, &mut plan, &request.os_id, &loaded.manifest, &enabled)?;
+        if sys_profile_base_code_present(self, &request.os_id) {
+            let (source, trust) = if let Some(requirement) = requirements.first() {
+                let trust = if self
+                    .operation_code_grants
+                    .iter()
+                    .any(|grant| grant.matches(requirement))
+                {
+                    CodeTrustStateV2::OperationConfirmation
+                } else {
+                    match self.trust_decision(requirement) {
+                        TrustDecisionV1::Trusted => CodeTrustStateV2::SnapshotTrusted,
+                        TrustDecisionV1::DevelopmentTrusted => CodeTrustStateV2::DevelopmentTrusted,
+                        _ => CodeTrustStateV2::MissingOrStale,
+                    }
+                };
+                (CodeSourceV2::ExternalOrOverlay, trust)
+            } else {
+                (
+                    CodeSourceV2::ShineDistribution,
+                    CodeTrustStateV2::Distribution,
+                )
+            };
+            plan.code_boundaries.push(CodeBoundaryV2 {
+                target: format!("sys/profile/{}", request.os_id),
+                entry_kind: CodeEntryKindV2::SysProfileCode,
+                timing: CodeTimingV2::DeliverForLater,
+                source,
+                trust,
+                unisolated: true,
+                target_role: CodeTargetRoleV2::Selected,
+                shared_resource: Some(format!("sys/{}/profile", request.os_id)),
+            });
         }
         Ok(plan)
     }

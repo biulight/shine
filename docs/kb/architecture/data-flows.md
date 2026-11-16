@@ -1195,7 +1195,7 @@ invocation, then executes or sources the atomically refreshed file under `render
 
 ## Managed Sys apply and recovery
 
-Approved managed operations, bootstrap, profile changes, and recovery acquire `sys-lifecycle.lock`
+Approved managed operations, bootstrap, independent initialization, profile changes, and recovery acquire `sys-lifecycle.lock`
 before fresh approval validation, retaining it through shared manifest persistence and cleanup.
 Profile synchronization uses the same lock. Managed-file roundtrip tests enter through
 `plan_managed_sys` and `run_managed_sys_approved`; the former test-only standalone mutation path
@@ -1229,6 +1229,12 @@ Profile active/base/new/merge file reconciliation retains the established three-
 marked non-transactional in its Plan. Bootstrap profile composition, package/provider calls, and
 bootstrap scripts are likewise outside managed Sys recovery and retain their explicit opaque or
 unsupported-rollback classification.
+
+`sys init` independently refreshes the same profile using the recorded enabled set without
+detection or receipt writes. Its `sys-init` Plan observes the full manifest and profile inputs;
+external base code uses `sys/profile/<os>` trust separately from enabled item code. All code and
+composition preflight precedes publication. Both files and loading blocks use bootstrap's
+non-transactional boundary, with fresh review/retry after interruption (ADR 0172).
 
 ## Workspace environment export
 

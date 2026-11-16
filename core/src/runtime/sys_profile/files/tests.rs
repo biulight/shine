@@ -153,7 +153,10 @@ async fn profile_git_failure_falls_back_and_conflicts_preserve_active_and_base()
                 })
                 .collect::<Vec<_>>(),
             [
+                // Empty preparation precedes permission setup and content publication.
                 PathBuf::from("/profile/linux-sys.pre.new.sh"),
+                PathBuf::from("/profile/linux-sys.pre.new.sh"),
+                PathBuf::from("/profile/linux-sys.pre.merge.sh"),
                 PathBuf::from("/profile/linux-sys.pre.merge.sh")
             ]
         );
@@ -289,7 +292,10 @@ async fn profile_git_results_keep_clean_conflict_and_spawn_error_write_boundarie
                 assert_eq!(
                     writes,
                     [
+                        // Empty preparation precedes permission setup and content publication.
                         PathBuf::from("/profile/linux-sys.pre.new.sh"),
+                        PathBuf::from("/profile/linux-sys.pre.new.sh"),
+                        PathBuf::from("/profile/linux-sys.pre.merge.sh"),
                         PathBuf::from("/profile/linux-sys.pre.merge.sh")
                     ]
                 );

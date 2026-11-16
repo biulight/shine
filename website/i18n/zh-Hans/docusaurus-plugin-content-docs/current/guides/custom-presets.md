@@ -351,6 +351,11 @@ pacman 数据库；bootstrap 前应先完成全系统更新，见 [Arch Linux �
 `shine sys list` 和 `shine sys info <ITEM>` 检查，再用 `shine sys bootstrap <ITEM> --dry-run`
 预览后决定是否应用。
 
+只提供初始化配置时，`sys/<os>/shine.toml` 中声明 `version = 2`，无需添加 items。
+将启动配置写入 `profile/base.pre.sh`（用户启动配置之前加载）或 `profile/base.post.sh`
+（之后加载）；Windows 使用 `.ps1`。按[初始化配置刷新步骤](./system-init.md#refresh-initialization)
+预览并应用。
+
 ## App 构建脚本运行时
 
 App 类别的 `[artifact]` 也可选择 Bun，使 `build` 与 `unbuild` 脚本跨平台运行：
@@ -427,7 +432,8 @@ network = [{ scope = "host", host = "api.example.com" }]
 | 查看授权 | `shine trust list` |
 | 撤销授权 | `shine trust revoke <TARGET>` |
 
-目标写作 `app/<CATEGORY>`、`shell/<CATEGORY>/<COMMAND>` 或 `sys/<ITEM>`。
+目标写作 `app/<CATEGORY>`、`shell/<CATEGORY>/<COMMAND>`、`sys/<ITEM>`，
+或用于系统公共启动配置的 `sys/profile/<os>`（`macos`、`ubuntu`、`arch`、`windows`）。
 `preset` 代表当前预设中的所有可执行目标；
 `shine trust revoke preset` 会清除所有已保存的预设信任授权。
 

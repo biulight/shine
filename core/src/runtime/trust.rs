@@ -19,6 +19,20 @@ impl<H> CoreRuntime<H> {
         &self,
         target: &str,
     ) -> Result<ExternalCodeRequirementReport> {
+        let os_id = match self.context().platform {
+            super::RuntimePlatform::Macos => "macos",
+            super::RuntimePlatform::Linux => "ubuntu",
+            super::RuntimePlatform::Windows => "windows",
+        };
+        self.external_code_requirements_for_os(target, os_id).await
+    }
+
+    /// Query Sys item identities for an explicitly captured OS. Profile targets carry their own OS.
+    pub async fn external_code_requirements_for_os(
+        &self,
+        target: &str,
+        os_id: &str,
+    ) -> Result<ExternalCodeRequirementReport> {
         if target == "preset" {
             let mut requirements = Vec::new();
             for category in self.app_categories(None)? {
@@ -29,12 +43,8 @@ impl<H> CoreRuntime<H> {
                     requirements.extend(self.shell_external_code_requirements(&category, file)?);
                 }
             }
-            let os_id = match self.context().platform {
-                super::RuntimePlatform::Macos => "macos",
-                super::RuntimePlatform::Linux => "ubuntu",
-                super::RuntimePlatform::Windows => "windows",
-            };
             if let Ok(loaded) = self.load_sys_preset(os_id).await {
+                requirements.extend(self.sys_base_profile_requirements(os_id)?);
                 for item in &loaded.manifest.items {
                     requirements.extend(self.sys_external_code_requirements(os_id, item)?);
                 }
@@ -73,12 +83,16 @@ impl<H> CoreRuntime<H> {
                 requirements: self.shell_external_code_requirements(&category, file)?,
             });
         }
+        if let Some(os_id) = target.strip_prefix("sys/profile/") {
+            if !matches!(os_id, "macos" | "ubuntu" | "arch" | "windows") {
+                bail!("invalid Sys profile OS: {os_id}");
+            }
+            self.load_sys_preset(os_id).await?;
+            return Ok(ExternalCodeRequirementReport {
+                requirements: self.sys_base_profile_requirements(os_id)?,
+            });
+        }
         if let Some(item_id) = target.strip_prefix("sys/") {
-            let os_id = match self.context().platform {
-                super::RuntimePlatform::Macos => "macos",
-                super::RuntimePlatform::Linux => "ubuntu",
-                super::RuntimePlatform::Windows => "windows",
-            };
             let loaded = self.load_sys_preset(os_id).await?;
             let item = loaded
                 .manifest
@@ -91,7 +105,7 @@ impl<H> CoreRuntime<H> {
             });
         }
         bail!(
-            "trust target must be preset, app/<category>, shell/<category>/<command>, or sys/<item>: {target}"
+            "trust target must be preset, app/<category>, shell/<category>/<command>, sys/<item>, or sys/profile/<os>: {target}"
         )
     }
 
@@ -150,6 +164,22 @@ impl<H> CoreRuntime<H> {
             )?);
         }
         Ok(output)
+    }
+
+    pub(crate) fn sys_base_profile_requirements(
+        &self,
+        os_id: &str,
+    ) -> Result<Vec<TrustRequirementV1>> {
+        if !external_profile_base(self, os_id) {
+            return Ok(Vec::new());
+        }
+        Ok(vec![self.requirement(
+            &format!("sys/profile/{os_id}"),
+            TrustCapabilityV1::SysProfileCode,
+            category_paths(self, &format!("sys/{os_id}/")),
+            false,
+            PermissionSetV1::default(),
+        )?])
     }
 
     pub(crate) fn sys_external_code_requirements(

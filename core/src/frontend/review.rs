@@ -4,8 +4,8 @@ use super::{FrontendService, FrontendServiceError};
 use crate::plan::PlanV1;
 use crate::runtime::{
     AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest, FileSystemObservationHost,
-    ShellPlanRequest, SplitDnsObservationHost, SysBootstrapPlanRequest, SysManagedPlanRequest,
-    SysProfilePlanRequest,
+    ShellPlanRequest, SplitDnsObservationHost, SysBootstrapPlanRequest, SysInitPlanRequest,
+    SysManagedPlanRequest, SysProfilePlanRequest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,7 @@ pub enum ReviewRequest {
     ShellRecovery,
     Sys(SysManagedPlanRequest),
     SysRecovery,
+    SysInit(SysInitPlanRequest),
     SysProfile(SysProfilePlanRequest),
     SysBootstrap(SysBootstrapPlanRequest),
 }
@@ -49,6 +50,7 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> FrontendService<H> 
             ReviewRequest::ShellRecovery => runtime.plan_shell_operation_recovery().await,
             ReviewRequest::Sys(request) => runtime.plan_managed_sys(request.clone()).await,
             ReviewRequest::SysRecovery => runtime.plan_sys_operation_recovery().await,
+            ReviewRequest::SysInit(request) => runtime.plan_sys_init(request.clone()).await,
             ReviewRequest::SysProfile(request) => runtime.plan_sys_profile(request.clone()).await,
             ReviewRequest::SysBootstrap(request) => {
                 runtime.plan_sys_bootstrap(request.clone()).await

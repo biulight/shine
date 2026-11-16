@@ -32,6 +32,21 @@ pub enum SysProfileCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum SysCommands {
+    /// Refresh shell initialization without installing software
+    Init {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
+        /// Preview without changing profiles or executing initialization code
+        #[arg(long)]
+        dry_run: bool,
+        /// Back up and replace generated profiles instead of merging user edits
+        #[arg(long)]
+        force_profile: bool,
+        /// Approve the security Plan; matching external-code trust is still required
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
+    },
     /// Review and recover an interrupted managed system operation
     Recover {
         /// Show all security Plan paths, identities, and diagnostics

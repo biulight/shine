@@ -615,5 +615,6 @@ mod shell_recovery;
 mod shell_transactions;
 
 mod sys;
+mod sys_init;
 
 mod app_action_factory;

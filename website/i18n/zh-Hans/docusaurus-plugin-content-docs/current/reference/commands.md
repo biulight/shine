@@ -134,10 +134,10 @@ shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-g
 shine upgrade [TARGET] [--pull] [--verbose] [--full-plan] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine state check
-shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
-shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
+shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM|sys/profile/OS>
+shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM|sys/profile/OS> [--development] [--yes]
 shine trust list [--verbose]
-shine trust revoke <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
+shine trust revoke <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM|sys/profile/OS>
 shine completions install
 shine completions <bash|zsh|powershell>
 ```
@@ -192,6 +192,7 @@ shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
 shine sys recover [--yes] [--verbose]
+shine sys init [--dry-run] [--force-profile] [--yes] [--verbose]
 shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes] [--verbose]
 shine sys profile enable <ITEM> [--dry-run] [--yes] [--verbose]
 shine sys profile disable <ITEM> [--dry-run] [--yes] [--verbose]
@@ -199,13 +200,15 @@ shine sys apply [ITEM] [--dry-run] [--yes] [--verbose]
 shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
 
+`sys init` 刷新当前系统预设的启动配置，保留已启用的软件集成，无需安装软件。
+
 `sys list --all` 将其他操作系统标记为 `catalog only`（仅供浏览），只为当前系统显示 apply 提示。
 `sys info`、`bootstrap`、`apply` 和 `uninstall` 始终按当前系统查找项目；其他系统存在同名项目时
 也不会切换查找范围。
 
 使用 `bootstrap` 确保选中的软件和 Shell 集成存在；使用 `apply` 与 `uninstall` 管理可撤销的系统配置。
-这些操作可能在计划获批后请求管理员权限。`--force-profile` 可能替换冲突的配置文件内容，请先查看
-dry run。
+这些操作可能在计划获批后请求管理员权限。`init` 与 `bootstrap` 的 `--force-profile` 会备份并替换
+生成的配置文件，请先查看 dry run。
 
 应用或删除系统配置前，可用 `--dry-run` 预览变更。它不能与 `--yes` 同时使用。
 `--yes` 用于非交互确认，只跳过提示，不会跳过计划展示、权限检查或执行前复核。

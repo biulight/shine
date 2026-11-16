@@ -382,6 +382,11 @@ External Sys installation scripts and executable shell configuration need
 [code authorization](#declare-permissions). After linking your source, inspect it with `shine sys list`
 and `shine sys info <ITEM>`, then preview with `shine sys bootstrap <ITEM> --dry-run` before applying.
 
+For initialization alone, declare `version = 2` in `sys/<os>/shine.toml` without adding items.
+Write startup configuration in `profile/base.pre.sh` (loaded before user startup configuration)
+or `profile/base.post.sh` (loaded afterwards); use `.ps1` on Windows. Follow the
+[initialization refresh steps](./system-init.md#refresh-initialization) to preview and apply.
+
 ## Application artifact runtimes
 
 An application's `[artifact]` can also use Bun for cross-platform apply and teardown scripts:
@@ -463,8 +468,9 @@ For persistent authorization, inspect the target, then choose the scope you need
 | List grants | `shine trust list` |
 | Revoke a grant | `shine trust revoke <TARGET>` |
 
-Targets are `app/<CATEGORY>`, `shell/<CATEGORY>/<COMMAND>`, or `sys/<ITEM>`. `preset` selects all executable
-targets in the active presets; `shine trust revoke preset` clears all stored preset grants.
+Targets are `app/<CATEGORY>`, `shell/<CATEGORY>/<COMMAND>`, `sys/<ITEM>`, or
+`sys/profile/<os>` for shared system startup configuration (`macos`, `ubuntu`, `arch`, `windows`).
+`preset` selects all executable targets in the active presets; `shine trust revoke preset` clears all stored preset grants.
 
 Snapshot trust requires renewed review when category files, metadata, source layers, or executable
 permissions change. It does not verify external dependencies, interpreters, tools, or downloads.

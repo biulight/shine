@@ -8,7 +8,7 @@
 #[cfg(windows)]
 mod windows_profile;
 #[cfg(windows)]
-pub use windows_profile::write_profile_like;
+pub use windows_profile::{replace_profile_like, write_profile_like};
 
 use anyhow::{Context, Result};
 use std::path::Path;
