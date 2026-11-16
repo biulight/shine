@@ -35,6 +35,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 self.context(),
                 &request.input_versions,
                 category.permissions.as_ref(),
+                request.operation,
                 state,
                 permissions,
             )?;
@@ -199,6 +200,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         };
         let update_destination_regular = if action == PlanActionV1::Update
             && entry.is_some_and(|entry| entry.destination == destination)
+            && current.is_some()
         {
             self.host()
                 .metadata(&destination)
@@ -308,7 +310,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             && action == PlanActionV1::Create
             && file.install_strategy == crate::install::AppInstallStrategy::Copy
         {
-            add_app_journal_permissions(self.context(), permissions);
+            // A generator-backed fallback still uses the existing direct installer.
+            if file.generator.is_none() {
+                add_app_journal_permissions(self.context(), permissions);
+            }
             if let Some(backup) = &backup {
                 add_app_backup_creation_permissions(
                     self.context(),

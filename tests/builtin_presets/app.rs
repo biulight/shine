@@ -2,6 +2,100 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 
+#[tokio::test]
+async fn surge_install_plan_binds_only_enabled_subscription_generators() {
+    use shine_core::lifecycle::LifecycleOperation;
+    use shine_core::plan::{EnvironmentSensitivityV1, PermissionV1, PlanActionV1, PlanApprovalV1};
+    use shine_core::runtime::{
+        AppPlanRequest, CoreRuntime, InMemoryHost, OpaqueSecretVersion, PlanningInputVersions,
+        RuntimePlatform,
+    };
+
+    let main = "SURGE_SUBSCRIPTION_URL";
+    let secondary = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL";
+    let embedded = super::support::runtime(RuntimePlatform::Macos);
+    let mut context = embedded.context().clone();
+    context
+        .env
+        .insert(main.into(), "https://example.invalid/main".into());
+    let host = InMemoryHost::new();
+    let runtime = CoreRuntime::new(host.clone(), context.clone(), embedded.presets().clone());
+    let mut request = AppPlanRequest {
+        operation: LifecycleOperation::Install,
+        target: Some("surge".into()),
+        force: false,
+        purge: false,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
+    };
+
+    let missing_identity = runtime.plan_apps(request.clone()).await.unwrap();
+    assert!(
+        missing_identity
+            .permissions
+            .uncomputable_codes
+            .contains("secret_input_identity_unavailable")
+    );
+    assert!(PlanApprovalV1::for_reviewed_plan(&missing_identity).is_err());
+
+    request
+        .input_versions
+        .insert_secret_version(main, OpaqueSecretVersion::new("main-version"));
+    let main_only = runtime.plan_apps(request.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&main_only).unwrap_or_else(|err| {
+        panic!("main-only Surge install should be approvable: {err}");
+    });
+    assert!(main_only.steps.iter().any(|step| {
+        step.resource.as_deref() == Some("generator:subscription-proxies.conf")
+            && step.action == PlanActionV1::Execute
+    }));
+    assert!(main_only.steps.iter().any(|step| {
+        step.resource.as_deref() == Some("sub/wget-cloud-proxies.conf")
+            && step.action == PlanActionV1::Create
+            && step.diagnostic_codes.is_empty()
+    }));
+    assert!(
+        !main_only.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("generator:sub/wget-cloud-proxies.conf")
+        })
+    );
+    assert_eq!(
+        main_only
+            .steps
+            .iter()
+            .filter(|step| {
+                step.resource.as_deref() == Some("generator-runtime:generate-subscription.ts")
+            })
+            .count(),
+        1
+    );
+    assert!(
+        !main_only
+            .permissions
+            .required
+            .contains(&PermissionV1::Environment {
+                name: secondary.into(),
+                sensitivity: EnvironmentSensitivityV1::Secret,
+            })
+    );
+
+    context
+        .env
+        .insert(secondary.into(), "https://example.invalid/secondary".into());
+    let runtime = CoreRuntime::new(host, context, embedded.presets().clone());
+    request
+        .input_versions
+        .insert_secret_version(secondary, OpaqueSecretVersion::new("secondary-version"));
+    let both = runtime.plan_apps(request).await.unwrap();
+    assert!(both.is_ready());
+    assert!(both.steps.iter().any(|step| {
+        step.resource.as_deref() == Some("generator:sub/wget-cloud-proxies.conf")
+            && step.action == PlanActionV1::Execute
+    }));
+    assert_ne!(main_only.inputs.state, both.inputs.state);
+    assert!(approval.validate(&both).is_err());
+}
+
 #[test]
 fn surge_deploys_an_inert_general_module_to_its_native_profiles_directory() {
     let runtime = super::support::runtime(shine_core::runtime::RuntimePlatform::Macos);

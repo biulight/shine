@@ -674,6 +674,16 @@ pub(crate) async fn execute_reviewed(
     observer: &mut impl shine_core::runtime::RuntimeObserver,
     interaction: &mut impl shine_core::runtime::RuntimeInteraction,
 ) -> Result<shine_core::frontend::OperationDetails> {
+    if matches!(
+        &reviewed.request,
+        LifecyclePlanRequest::App(request)
+            if request.operation == shine_core::lifecycle::LifecycleOperation::Install
+    ) {
+        // The runtime holds the resolved environment, including files outside config.toml.
+        for input in &config.config_inputs {
+            input.verify().await?;
+        }
+    }
     let trusted = shine_core::frontend::FrontendService::new(runtime)
         .with_configuration_revision(Some(active_config_digest(config).await?))
         .into_trusted();
@@ -742,6 +752,71 @@ mod tests {
         NetworkScopeV1, PermissionV1,
     };
     use shine_core::plan::{PermissionSetV1, PlanInputsV1, PlanStepV1, SnapshotDigestV1};
+
+    #[tokio::test]
+    async fn approved_app_install_rejects_a_new_subscription_in_an_env_file() {
+        let root = crate::test_support::make_temp_dir("shine-app-install-env-review").await;
+        let mut config = Config::new_for_test(&root);
+        config.is_external_presets = true;
+        let preset = root.join("presets/app/demo");
+        std::fs::create_dir_all(&preset).unwrap();
+        std::fs::write(
+            preset.join("shine.toml"),
+            r#"dest = '~/.config/demo'
+[[files]]
+source = 'subscription.conf'
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTION_URL', sensitivity = 'secret' }], when_env = 'SUBSCRIPTION_URL' }
+"#,
+        )
+        .unwrap();
+        std::fs::write(preset.join("subscription.conf"), "fallback").unwrap();
+        std::fs::write(preset.join("gen.ts"), "throw new Error('must not run');").unwrap();
+        let env_file = root.join("shine.env.toml");
+        config.config_inputs.push(
+            crate::config::ConfigInput::capture(&env_file)
+                .await
+                .unwrap(),
+        );
+        let request = LifecyclePlanRequest::app(
+            AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: Some("demo".into()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            &config,
+        );
+        let reviewed = review_plans(&config, [request], true)
+            .await
+            .unwrap()
+            .remove(0);
+        let runtime = prepare_runtime(&config, &reviewed).await.unwrap();
+        std::fs::write(
+            &env_file,
+            "SUBSCRIPTION_URL = 'https://example.invalid/sub'\n",
+        )
+        .unwrap();
+        let error = execute_reviewed(
+            &config,
+            runtime,
+            reviewed,
+            Default::default(),
+            &mut shine_core::runtime::NullObserver,
+            &mut crate::presentation::TerminalInteraction,
+        )
+        .await
+        .err()
+        .expect("the approved install used a stale environment");
+        assert!(
+            error.to_string().contains("configuration changed"),
+            "{error:#}"
+        );
+        assert!(!root.join(".config/demo/subscription.conf").exists());
+        assert!(!root.join("app-manifest.toml").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn digest(label: &str) -> shine_core::plan::SnapshotDigestV1 {
         let mut builder = SnapshotDigestV1::builder("test");

@@ -65,6 +65,7 @@ pub(super) fn capture_declared_env_inputs(
     context: &crate::runtime::RuntimeContext,
     versions: &PlanningInputVersions,
     declaration: Option<&PermissionDeclarationV1>,
+    operation: LifecycleOperation,
     state: &mut StateCapture,
     permissions: &mut PermissionAccumulator,
 ) -> Result<()> {
@@ -72,6 +73,14 @@ pub(super) fn capture_declared_env_inputs(
         .into_iter()
         .flat_map(|declaration| &declaration.environment)
     {
+        // Category declarations include inputs for unrelated executable entries.
+        // A template that actually references a missing input fails during transform.
+        if operation == LifecycleOperation::Install
+            && entry.sensitivity == EnvironmentSensitivityV1::Secret
+            && !context.env.contains_key(&entry.name)
+        {
+            continue;
+        }
         capture_env_identity(
             context,
             versions,
