@@ -56,9 +56,9 @@ pub enum SysCommands {
         #[arg(long)]
         yes: bool,
     },
-    /// List available system items
+    /// List system items for the current OS and shell
     List {
-        /// Show items for every supported operating system
+        /// Show all items across operating systems and shell integration ranges
         #[arg(long)]
         all: bool,
     },
@@ -81,7 +81,7 @@ pub enum SysCommands {
         /// Bootstrap one exact system item; repeat to preserve an explicit order
         #[arg(long = "item", value_name = "ITEM", action = clap::ArgAction::Append, conflicts_with_all = ["items", "preset"])]
         exact_items: Vec<String>,
-        /// Apply a named profile without showing interactive selection
+        /// Select a named profile, filtered for the current shell
         #[arg(long, value_name = "PROFILE", conflicts_with = "items")]
         preset: Option<String>,
         /// Print what would run without executing

@@ -605,6 +605,19 @@ where
     ) -> Result<SysBootstrapBatchReport> {
         let _lifecycle_guard = self.acquire_sys_lifecycle_operation().await?;
         approval.validate(&self.plan_sys_bootstrap(request.clone()).await?)?;
+        // Empty exact IDs mean no work. The batch selector interprets an empty
+        // request as implicit profile selection, which must never happen after review.
+        if request.item_ids.is_empty() {
+            return Ok(SysBootstrapBatchReport {
+                loaded: self.load_sys_preset(&request.os_id).await?,
+                selection: crate::runtime::ResolvedSelection {
+                    item_ids: Vec::new(),
+                    source: crate::runtime::SelectionSource::Items,
+                },
+                previews: Vec::new(),
+                outcomes: Vec::new(),
+            });
+        }
         self.run_sys_bootstrap_batch(
             SysBootstrapBatchRequest {
                 os_id: request.os_id,

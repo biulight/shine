@@ -1,5 +1,77 @@
 use shine_core::runtime::{PlanningInputVersions, RuntimePlatform, SysBootstrapPlanRequest};
 
+#[tokio::test]
+async fn builtin_bootstrap_shell_selection_preserves_platform_profiles() {
+    use shine_core::runtime::{NullObserver, SelectionSource, SysBootstrapBatchRequest};
+    for (os, platform, shell, excluded) in [
+        (
+            "ubuntu",
+            RuntimePlatform::Linux,
+            "bash",
+            vec!["zsh-vi-mode"],
+        ),
+        ("ubuntu", RuntimePlatform::Linux, "zsh", vec![]),
+        ("arch", RuntimePlatform::Linux, "bash", vec![]),
+        ("arch", RuntimePlatform::Linux, "zsh", vec![]),
+        ("macos", RuntimePlatform::Macos, "zsh", vec![]),
+        (
+            "macos",
+            RuntimePlatform::Macos,
+            "bash",
+            vec![
+                "homebrew",
+                "yazi",
+                "zsh-autosuggestions",
+                "zsh-syntax-highlighting",
+                "zsh-vi-mode",
+                "nvm",
+                "bun",
+                "pnpm",
+            ],
+        ),
+        ("windows", RuntimePlatform::Windows, "powershell", vec![]),
+    ] {
+        let runtime = super::support::runtime(platform);
+        let loaded = runtime.load_sys_preset(os).await.unwrap();
+        for (profile, declared) in &loaded.manifest.profiles {
+            let expected = declared
+                .items
+                .iter()
+                .filter(|id| !excluded.contains(&id.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            let report = runtime
+                .preview_sys_bootstrap(
+                    SysBootstrapBatchRequest {
+                        os_id: os.into(),
+                        requested: vec![],
+                        preset: Some(profile.clone()),
+                        interactive: false,
+                        sys_shell: shell.into(),
+                        dry_run: true,
+                        force_profile: false,
+                    },
+                    &mut NoBootstrapInteraction,
+                    &mut NullObserver,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                report.selection.item_ids, expected,
+                "{os}/{shell}/{profile}"
+            );
+            assert_eq!(
+                report.selection.source,
+                SelectionSource::Profile(profile.clone())
+            );
+            assert_eq!(
+                report.loaded.manifest.items.len(),
+                loaded.manifest.items.len()
+            );
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn docker_apt_installer_removes_conflicts_and_stops_on_failure() {

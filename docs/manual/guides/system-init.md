@@ -35,7 +35,9 @@ shine sys list
 shine sys info neovim
 ```
 
-Use `shine sys list --all` to browse other platforms. Available items and named selections
+The default list hides installation items whose declared shell integrations do not match Shine's
+current target shell. Use `shine sys list --all` to see the complete catalog and integration ranges;
+`shine sys info <ITEM>` also explains whether an item matches. Available items and named selections
 (profiles) are listed in [Built-in presets](../built-in-presets/index.md#system-presets).
 
 Preview the items you want to install:
@@ -57,6 +59,11 @@ Choose one method:
 | Install only fzf | `shine sys bootstrap fzf` |
 | Install Neovim, then fzf | `shine sys bootstrap neovim fzf` |
 | Use a named selection | `shine sys bootstrap --preset <PROFILE>` |
+
+Interactive choices and profile selections include only items matching the current shell, plus
+items without declared shell integrations. Explicit IDs, including `--item`, bypass this filter;
+installation can proceed even when no integration is declared for the current shell. Preview with
+`--dry-run` to check the resulting selection.
 
 Before changing the system, Shine shows a plan and asks for confirmation; the default is No.
 Review the changes, permissions, and recovery limits. Add `--verbose` if you need more detail.

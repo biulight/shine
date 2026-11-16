@@ -1,5 +1,25 @@
 # Lessons Learned
 
+## 2026-11-16 — Empty reviewed bootstrap IDs cannot mean implicit selection
+
+- **Symptom**: Core accepted an empty bootstrap Plan, then executed default-profile items because
+  the batch selector interpreted empty `requested` IDs as an implicit selection. CLI's empty
+  early return hid the issue, but other approved-API callers could reach it.
+- **Fix**: after approval revalidation, return an empty report for empty exact IDs. Regression
+  tests cover defaults present/absent, changed IDs/shell approval rejection, and no business effects.
+- **Related display boundary**: filtered-empty CLI results must escape profile names like normal
+  headers; process tests cover control characters in named and default profiles, preview and execute.
+
+## 2026-11-16 — Preserve bootstrap selection origin in CLI display
+
+- **Symptom**: approved profile/interactive runs displayed `explicit items`, while dry-run kept
+  the original source.
+- **Cause**: approved execution correctly passes exact reviewed IDs back through selection, which
+  resolves them as `Items`; the CLI displayed this execution source without its original context.
+- **Rule**: retain the original source in the CLI observer. Never re-expand a profile after approval
+  or add display-only metadata to Plan identity. Process regressions compare preview and approved
+  execution for named/default profiles and both explicit-item spellings (ADR 0173).
+
 ## 2026-11-16 — Bind unselected PATH integrations to Sys approval
 
 - **Symptom**: toggling an unselected PATH-only item's `profile_enabled` after review left

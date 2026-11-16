@@ -220,7 +220,8 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 `sys init` refreshes startup configuration from the current system preset, preserving enabled
 software integrations without installing software.
 
-`sys list --all` marks other operating systems as `catalog only` and shows apply hints only for
+`sys list` filters installation items by the current shell; `sys list --all` shows the full catalog
+with shell integration ranges. It marks other operating systems as `catalog only` and shows apply hints only for
 the current OS. `sys info`, `bootstrap`, `apply`, and `uninstall` always resolve items for the
 current OS, including when another OS has an item with the same name.
 Use `bootstrap` to ensure selected software and shell integration are present. Use `apply` and
@@ -237,7 +238,10 @@ an existing [trust grant](../guides/custom-presets.md).
 Positional `bootstrap` IDs select items in order and ignore duplicates. Repeated `--item` is an
 equivalent option, for example `shine sys bootstrap --item rust --item mise --yes`.
 Positional IDs, `--item`, and `--preset` cannot be combined. Non-interactive runs without explicit
-items or a profile use the preset's default profile. For IDs beginning with `-`, put options
+items or a profile use the preset's default profile. Interactive candidates and named/default profiles
+exclude items with no declared integration matching the current shell; items without integrations
+remain eligible. Explicit IDs and `--item` bypass this filter. A valid selection that becomes empty
+finishes without installing anything. For IDs beginning with `-`, put options
 before `--` and the ID after it, for example `shine sys apply --dry-run -- -custom`.
 
 For managed system settings, `shine update` compares the desired configuration with installation

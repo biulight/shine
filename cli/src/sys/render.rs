@@ -11,6 +11,51 @@ pub(crate) const PACMAN_PREPARATION: [&str; 3] = [
     "Native pacman installation does not refresh databases or upgrade the system; do not use pacman -Sy alone.",
 ];
 
+pub(super) fn shell_scope(item: &SysItem) -> String {
+    if item.shell.is_empty() {
+        return "unrestricted (no integration declared)".into();
+    }
+    item.shell
+        .iter()
+        .flat_map(|integration| &integration.shells)
+        .map(|shell| shell.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub(super) fn print_shell_mismatch(
+    loaded: &LoadedSysPreset,
+    selection: &ResolvedSelection,
+    sys_shell: &str,
+) {
+    if selection.source != shine_core::runtime::SelectionSource::Items {
+        return;
+    }
+    let mismatched = selection
+        .item_ids
+        .iter()
+        .filter(|id| {
+            loaded
+                .manifest
+                .items
+                .iter()
+                .any(|item| item.id == **id && !item.matches_shell(sys_shell))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !mismatched.is_empty() {
+        println!(
+            "  {}",
+            colors::dim(&format!(
+                "Explicit installation continues for {}; no shell integration is declared for {sys_shell}.",
+                escape_controls(&mismatched.join(", "))
+            ))
+        );
+    }
+}
+
 fn preview_pacman_preparation(
     loaded: &LoadedSysPreset,
     selection: &ResolvedSelection,
@@ -81,6 +126,7 @@ pub(in crate::sys) async fn print_dry_run(
     println!("{}", colors::dim("[dry-run] System init preview"));
     println!("  OS: {os_id}");
     println!("  Shell: {sys_shell}");
+    print_shell_mismatch(loaded, selection, sys_shell);
     println!(
         "  Selection: {}",
         escape_controls(&selection.source.describe())

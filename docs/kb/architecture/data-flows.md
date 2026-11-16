@@ -1280,6 +1280,12 @@ profile retain their separate typed domain reports.
 Core selection resolves explicit ordered items, a named selection profile, or the existing
 interactive/default path through the interaction port. Explicit items accept only `mode = "init"`,
 deduplicate by first occurrence, and never widen to sibling items.
+After complete manifest validation, automatic selection and default Sys lists use
+`SysItem::matches_shell` against the captured target shell. No integration means unrestricted;
+otherwise any integration's `shells` may match. Explicit items bypass this projection. Named/default
+profiles preserve order and source, including a valid empty result; filtering cannot hide missing
+default profiles or invalid names. The CLI retains the initial selection source for display while
+approved execution still receives only exact reviewed IDs (ADR 0173).
 `sys_bootstrap.rs` retains the batch/item coordinator. Private `selection.rs`, `provider.rs`,
 `detection.rs` and `execution.rs` own selection, named fixed provider invocations, presence probes and
 bounded installer/result handling. Provider preview and administrator requirements use the same

@@ -280,6 +280,10 @@ Shell 类别不使用 App 的 `metadata_schema_version` 或 Sys 的 `version` �
 
 ### Shell 集成：`[[items.shell]]` {#sys-shell}
 
+`shells` 也决定默认列表是否显示项目，以及自动 bootstrap 是否选择项目：任一集成匹配目标 Shell
+即可纳入，未声明集成的项目不受限制。显式安装项目会跳过此筛选；`when_command`、phase 和
+安装检测不影响选择。这些声明不会扩展平台[支持的 Shell 范围](../guides/system-init.md#平台说明)。
+
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `shells` | 必填非空数组 | `bash`、`zsh` 或 `powershell`。 |

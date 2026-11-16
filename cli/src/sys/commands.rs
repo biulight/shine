@@ -11,7 +11,10 @@ use super::execution::{
     print_sys_summary, status_text, sys_item_label_width,
 };
 use super::managed::managed_updates;
-use super::render::{driver_name, item_mode_name, print_available_item, print_dry_run};
+use super::render::{
+    driver_name, item_mode_name, print_available_item, print_dry_run, print_shell_mismatch,
+    shell_scope,
+};
 use super::run_manifest::SysRunEntry;
 use super::{
     SysDetection, SysDetectionProbe, SysInstall, SysItemMode, SysItemOutcome, SysItemStatus,
@@ -40,6 +43,7 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     }
 
     let run_manifest = runtime.inspect_sys_run_manifest().await?;
+    let sys_shell: &str = config.shell_type.into();
     println!("{}\n", colors::bold("System Items"));
     for (index, (os_id, manifest)) in presets.iter().enumerate() {
         if index > 0 {
@@ -58,15 +62,23 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
                 colors::dim(&escape_controls(&manifest.description))
             );
         }
-        if manifest.items.is_empty() {
+        let visible = manifest
+            .items
+            .iter()
+            .filter(|item| all || item.matches_shell(sys_shell))
+            .collect::<Vec<_>>();
+        if visible.is_empty() {
             println!("    {}", colors::dim("No items available."));
         }
-        for item in &manifest.items {
+        for item in visible {
             let entry = run_manifest
                 .entries
                 .iter()
                 .find(|entry| entry.os_id == *os_id && entry.item_id == item.id);
             print_available_item(item, entry);
+            if all && item.mode == SysItemMode::Init {
+                println!("      Shell integration: {}", shell_scope(item));
+            }
             if is_current && item.mode == SysItemMode::Managed {
                 println!(
                     "      {}",
@@ -98,7 +110,7 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     if !all {
         println!(
             "{}",
-            colors::dim("Use `shine sys list --all` to show every OS.")
+            colors::dim("Use `shine sys list --all` to show every OS and shell integration range.")
         );
     }
     Ok(())
@@ -167,6 +179,18 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
                 format!("enabled ({} declaration(s))", item.shell.len())
             } else {
                 format!("disabled ({} declaration(s))", item.shell.len())
+            }
+        );
+        let sys_shell: &str = config.shell_type.into();
+        println!("  {:<14} {}", "Shells", shell_scope(item));
+        println!(
+            "  {:<14} {} ({})",
+            "Current shell",
+            sys_shell,
+            if item.matches_shell(sys_shell) {
+                "included in automatic selection"
+            } else {
+                "excluded from automatic selection; explicit installation allowed"
             }
         );
     }
@@ -434,11 +458,16 @@ async fn handle_init_for_os(
             colors::dim(&format!(
                 "No sys bootstrap items selected for {} ({}).",
                 os_id,
-                selection.source.describe()
+                escape_controls(&selection.source.describe())
             ))
         );
         return Ok(());
     }
+    if selection.source == shine_core::runtime::SelectionSource::Items {
+        let loaded = runtime.load_sys_preset(os_id).await?;
+        print_shell_mismatch(&loaded, &selection, sys_shell);
+    }
+    observer.selection_source = Some(selection.source);
     let plan_request = shine_core::runtime::SysBootstrapPlanRequest {
         os_id: os_id.to_string(),
         item_ids: selection.item_ids,
@@ -490,6 +519,8 @@ async fn handle_init_for_os(
 
 #[derive(Default)]
 struct BatchBootstrapObserver {
+    // Execution receives exact reviewed IDs; retain how the user chose them only for display.
+    selection_source: Option<shine_core::runtime::SelectionSource>,
     label_width: usize,
     separate_next_install: bool,
     logs: super::log_output::InstallerOutput,
@@ -503,7 +534,10 @@ impl shine_core::runtime::RuntimeObserver for BatchBootstrapObserver {
                 target,
             } => {
                 if !target.is_empty() {
-                    println!("{}", colors::dim(&format!("Default profile: {target}")));
+                    println!(
+                        "{}",
+                        colors::dim(&format!("Default profile: {}", escape_controls(&target)))
+                    );
                 }
                 println!("{}", colors::dim("Use Space to toggle, Enter to confirm."));
                 println!();
@@ -515,7 +549,10 @@ impl shine_core::runtime::RuntimeObserver for BatchBootstrapObserver {
                 item_labels,
                 source,
             } => {
-                let selection = super::ResolvedSelection { item_ids, source };
+                let selection = super::ResolvedSelection {
+                    item_ids,
+                    source: self.selection_source.clone().unwrap_or(source),
+                };
                 let labels = item_labels
                     .iter()
                     .map(|(id, label)| (id.as_str(), label.clone()))
