@@ -6,8 +6,10 @@ import { runProfileArtifact } from "./profile-artifact";
 import { generalModuleState, moduleFile, moduleName, validateGeneralModule } from "./surge-module";
 
 const original = "[General]\r\nskip-proxy = localhost\r\n[Proxy]\r\n#!include proxies.conf\r\n[Proxy Group]\r\n#!include groups.conf\r\n[Rule]\r\n#!include rules.conf\r\n";
+const moduleList = "--raw module list";
+const inventoryShapes = ["without modules", "with modules"] as const;
 
-async function fixture() {
+async function fixture(shape: typeof inventoryShapes[number] = "with modules") {
   const dir = await mkdtemp(join(tmpdir(), "shine-surge-module-"));
   const profile = join(dir, "Profile.conf");
   const installedModule = join(dir, moduleFile);
@@ -25,7 +27,15 @@ async function fixture() {
     const operation = args.join(" ");
     calls.push(operation);
     if (operation === fail) throw new Error("simulated Surge failure");
-    if (operation === "module list") return `Modules:\n  [on] unrelated-module\n${enabled === undefined ? "" : `  [${enabled ? "on" : "off"}] ${moduleName}\n`}`;
+    if (operation === moduleList) {
+      const modules = [{ name: `${moduleName}-other`, enabled: true }];
+      if (enabled !== undefined) modules.push({ name: moduleName, enabled });
+      return JSON.stringify({
+        available: modules.map(({ name }) => name),
+        enabled: modules.filter((module) => module.enabled).map(({ name }) => name),
+        ...(shape === "with modules" ? { modules } : {}),
+      });
+    }
     if (args[0] === "module" && !ignoreMutation) enabled = args[1] === "enable";
     if (operation === failAfter) throw new Error("interrupted after native state change");
     return "OK";
@@ -41,14 +51,69 @@ async function fixture() {
 }
 
 describe("Surge native General module", () => {
-  test("module inventory is exact and fails closed on malformed or duplicate output", () => {
-    expect(generalModuleState("Modules:\n  [off] shine-general\n")).toBe(false);
-    expect(generalModuleState("Modules:\n  [on] shine-general\n")).toBe(true);
-    expect(generalModuleState("Modules:\n  [on] shine-general-other\n")).toBeUndefined();
-    for (const text of ["", "Surge is not running", "Modules:\n  [unknown] shine-general\n", "Modules:\n  [on] shine-general\n  [off] shine-general\n"]) {
-      expect(() => generalModuleState(text)).toThrow();
+  test("raw inventory matches the exact name in summary and detailed responses", () => {
+    const other = "shine-general-other";
+    expect(generalModuleState(JSON.stringify({ available: [other], enabled: [other] }))).toBeUndefined();
+    expect(generalModuleState(JSON.stringify({ available: [other, moduleName], enabled: [other] }))).toBe(false);
+    expect(generalModuleState(JSON.stringify({
+      available: [other, moduleName],
+      enabled: [moduleName],
+      modules: [
+        { name: other, enabled: false, type: "installed" },
+        { name: moduleName, enabled: true, futureMetadata: { labels: ["extra"] } },
+      ],
+      futureField: true,
+    }, null, 2))).toBe(true);
+  });
+
+  test("raw inventory refuses duplicate target identities even when summaries are unique", () => {
+    const enabled = { name: moduleName, enabled: true };
+    for (const inventory of [
+      { available: [moduleName, moduleName], enabled: [] },
+      { available: [moduleName], enabled: [moduleName, moduleName] },
+      { available: [moduleName], enabled: [moduleName], modules: [enabled, { ...enabled, enabled: false }] },
+    ]) {
+      expect(() => generalModuleState(JSON.stringify(inventory))).toThrow(`Duplicate Surge module identity: ${moduleName}`);
     }
   });
+
+  test("raw inventory refuses malformed or inconsistent state", () => {
+    for (const output of [
+      "Modules:\n  [on] shine-general\n",
+      "null",
+      "{}",
+      '{"available":[1],"enabled":[]}',
+      '{"available":[],"enabled":[],"modules":null}',
+      '{"available":[],"enabled":[],"modules":[{"name":"shine-general","enabled":"true"}]}',
+    ]) {
+      expect(() => generalModuleState(output)).toThrow("Unrecognized Surge module inventory JSON");
+    }
+    for (const inventory of [
+      { available: [], enabled: [moduleName] },
+      { available: [moduleName], enabled: [], modules: [{ name: moduleName, enabled: true }] },
+      { available: [moduleName], enabled: [], modules: [] },
+    ]) {
+      expect(() => generalModuleState(JSON.stringify(inventory))).toThrow("Inconsistent Surge module inventory");
+    }
+  });
+
+  for (const shape of inventoryShapes) {
+    test(`apply and remove use raw inventory ${shape} at every native state check`, async () => {
+      const f = await fixture(shape);
+      try {
+        await f.run("build");
+        expect(f.enabled()).toBe(true);
+        expect(await readFile(f.profile, "utf8")).toContain("#!include local-rules.conf, rules.conf");
+        expect(f.calls).toEqual([moduleList, moduleList, "module enable shine-general", moduleList, "reload"]);
+
+        f.calls.length = 0;
+        await f.run("unbuild");
+        expect(f.enabled()).toBe(false);
+        expect(await readFile(f.profile, "utf8")).toBe(original);
+        expect(f.calls).toEqual([moduleList, "module disable shine-general", moduleList, "reload", "reload"]);
+      } finally { await rm(f.dir, { recursive: true, force: true }); }
+    });
+  }
 
   test("apply preserves General, patches includes, enables only its module and repeats safely", async () => {
     const f = await fixture();
@@ -104,7 +169,7 @@ describe("Surge native General module", () => {
         if (problem === "modified") await writeFile(f.installedModule, "#!name=someone-else\n");
         if (problem === "symlink") { await rm(f.installedModule); await symlink(join(import.meta.dir, moduleFile), f.installedModule); }
         if (problem === "undiscovered") f.setEnabled(undefined);
-        if (problem === "offline") f.failAt("module list");
+        if (problem === "offline") f.failAt(moduleList);
         if (problem === "invalid-profile") await writeFile(f.profile, "[Rule]\nFINAL,DIRECT\n");
         const before = await readFile(f.profile, "utf8");
         await expect(f.run("build")).rejects.toThrow();
@@ -157,13 +222,19 @@ describe("Surge native General module", () => {
     });
   }
 
-  test("an acknowledged but ineffective state change fails verification", async () => {
-    const f = await fixture();
-    try {
-      f.ignoreMutation();
-      await expect(f.run("build")).rejects.toThrow("did not become enabled");
-    } finally { await rm(f.dir, { recursive: true, force: true }); }
-  });
+  for (const shape of inventoryShapes) {
+    for (const action of ["build", "unbuild"] as const) {
+      test(`an acknowledged but ineffective ${action} fails verification for inventory ${shape}`, async () => {
+        const f = await fixture(shape);
+        try {
+          f.setEnabled(action === "unbuild");
+          f.ignoreMutation();
+          await expect(f.run(action)).rejects.toThrow(`did not become ${action === "build" ? "enabled" : "disabled"}`);
+          expect(f.calls).not.toContain("reload");
+        } finally { await rm(f.dir, { recursive: true, force: true }); }
+      });
+    }
+  }
 
   for (const action of ["build", "unbuild"] as const) {
     test(`retry observes native state after interrupted ${action}`, async () => {
@@ -218,7 +289,7 @@ describe("Surge native General module", () => {
         let edited = false;
         const command = async (args: readonly string[]) => {
           const result = await f.command(args);
-          if (!edited && args.join(" ") === "module list") {
+          if (!edited && args.join(" ") === moduleList) {
             const path = target === "profile" ? f.profile : f.installedModule;
             await writeFile(path, await readFile(path, "utf8") + "# concurrent edit\n");
             edited = true;
