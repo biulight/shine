@@ -23,7 +23,6 @@
     },
     "printRemaining": true,
     "preserveAspectRatio": false,
-    "recache": false,
     "position": "left",
     "chafa": {
       "fgOnly": false,
@@ -298,20 +297,20 @@
       "type": "locale",
       "keyIcon": ""
     },
-    "break",
-    // {
-    //   "type": "colors",
-    //   "key": " ",
-    //   "keyIcon": "",
-    //   "symbol": "block",
-    //   "paddingLeft": 0,
-    //   "block": {
-    //     "width": 3,
-    //     "range": [
-    //       0,
-    //       15
-    //     ]
-    //   }
-    // }
+    "break"
+//     {
+//       "type": "colors",
+//       "key": " ",
+//       "keyIcon": "",
+//       "symbol": "block",
+//       "paddingLeft": 0,
+//       "block": {
+//         "width": 3,
+//         "range": [
+//           0,
+//           15
+//         ]
+//       }
+//     }
   ]
 }
