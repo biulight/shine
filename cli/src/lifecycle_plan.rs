@@ -15,7 +15,7 @@ use shine_core::plan::{CodeSourceV2, PlanActionV1, PlanV1};
 use shine_core::runtime::{
     AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest, CoreRuntime,
     OpaqueSecretVersion, PlanningInputVersions, RealHost, ShellPlanRequest,
-    SysBootstrapPlanRequest, SysManagedPlanRequest, SysProfilePlanRequest,
+    SysBootstrapPlanRequest, SysInitPlanRequest, SysManagedPlanRequest, SysProfilePlanRequest,
 };
 use std::io::IsTerminal;
 
@@ -29,6 +29,7 @@ pub(crate) enum LifecyclePlanRequest {
     ShellRecovery,
     Sys(SysManagedPlanRequest),
     SysRecovery,
+    SysInit(SysInitPlanRequest),
     SysProfile(SysProfilePlanRequest),
     SysBootstrap {
         request: SysBootstrapPlanRequest,
@@ -118,6 +119,7 @@ impl LifecyclePlanRequest {
             Self::ShellRecovery => ReviewRequest::ShellRecovery,
             Self::Sys(request) => ReviewRequest::Sys(request.clone()),
             Self::SysRecovery => ReviewRequest::SysRecovery,
+            Self::SysInit(request) => ReviewRequest::SysInit(request.clone()),
             Self::SysProfile(request) => ReviewRequest::SysProfile(request.clone()),
             Self::SysBootstrap { request, .. } => ReviewRequest::SysBootstrap(request.clone()),
         }
@@ -133,6 +135,7 @@ impl LifecyclePlanRequest {
             Self::ShellRecovery => "Shell Recovery",
             Self::Sys(_) => "System Configs",
             Self::SysRecovery => "System Recovery",
+            Self::SysInit(_) => "System Initialization",
             Self::SysProfile(_) => "System Profile",
             Self::SysBootstrap { .. } => "System Bootstrap",
         }
@@ -720,6 +723,13 @@ fn planning_input_versions(config: &Config) -> PlanningInputVersions {
         }
     }
     versions
+}
+
+pub(crate) fn print_sys_init_preview(plan: &PlanV1) -> Result<()> {
+    for line in render_plan_lines(plan, "preview")? {
+        println!("{line}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

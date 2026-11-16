@@ -13,19 +13,22 @@ pub(super) async fn apply_force_profile(
     ext: &str,
     template: &[u8],
 ) -> Result<SysProfileFileUpdate> {
-    let backup = if let Ok(active) = host.read(active_path).await
+    let active = read_optional_profile(host, active_path).await?;
+    // A bad baseline must fail before backing up or replacing this phase's active file.
+    read_optional_profile(host, base_path).await?;
+    let backup = if let Some(active) = active
         && !eol_eq(&active, template)
     {
         let backup_path = profile_backup_path(active_path, ext);
-        host.write_atomic(&backup_path, &active)
-            .await
-            .map_err(|error| error.into_anyhow("backing up sys profile"))?;
+        write_profile_artifact(host, &backup_path, &active, active_path).await?;
         Some(backup_path)
     } else {
         None
     };
     write_if_changed(host, active_path, template).await?;
-    write_if_changed(host, base_path, template).await?;
+    write_if_changed(host, base_path, template)
+        .await
+        .context("writing sys profile merge base")?;
     remove_if_exists(host, new_path).await?;
     remove_if_exists(host, merge_path).await?;
     let detail = backup
@@ -52,12 +55,10 @@ pub(super) async fn handle_fresh_install(
     merge_path: &Path,
     template: &[u8],
 ) -> Result<SysProfileFileUpdate> {
-    host.write_atomic(active_path, template)
+    write_if_changed(host, active_path, template).await?;
+    write_if_changed(host, base_path, template)
         .await
-        .map_err(|error| error.into_anyhow("writing active sys profile"))?;
-    host.write_atomic(base_path, template)
-        .await
-        .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+        .context("writing sys profile merge base")?;
     remove_if_exists(host, new_path).await?;
     remove_if_exists(host, merge_path).await?;
     Ok(SysProfileFileUpdate {
@@ -77,9 +78,9 @@ pub(super) async fn handle_missing_base(
     active: &[u8],
 ) -> Result<SysProfileFileUpdate> {
     if active == template {
-        host.write_atomic(base_path, template)
+        write_if_changed(host, base_path, template)
             .await
-            .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+            .context("writing sys profile merge base")?;
         remove_if_exists(host, new_path).await?;
         remove_if_exists(host, merge_path).await?;
         return Ok(SysProfileFileUpdate {
@@ -89,9 +90,9 @@ pub(super) async fn handle_missing_base(
         });
     }
     if is_initial_user_profile_edit(template, active) {
-        host.write_atomic(base_path, template)
+        write_if_changed(host, base_path, template)
             .await
-            .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+            .context("writing sys profile merge base")?;
         remove_if_exists(host, new_path).await?;
         remove_if_exists(host, merge_path).await?;
         return Ok(SysProfileFileUpdate {
@@ -100,9 +101,7 @@ pub(super) async fn handle_missing_base(
             detail: format!("{} initialized with user edits", base_path.display()),
         });
     }
-    host.write_atomic(new_path, template)
-        .await
-        .map_err(|error| error.into_anyhow("writing new sys profile template"))?;
+    write_profile_artifact(host, new_path, template, active_path).await?;
     remove_if_exists(host, merge_path).await?;
     Ok(SysProfileFileUpdate {
         updated: true,
@@ -133,7 +132,9 @@ pub(super) async fn apply_merge_result(
     } = inputs;
 
     if active == template {
-        let updated = write_if_changed(host, base_path, template).await?;
+        let updated = write_if_changed(host, base_path, template)
+            .await
+            .context("writing sys profile merge base")?;
         remove_if_exists(host, new_path).await?;
         remove_if_exists(host, merge_path).await?;
         return Ok(SysProfileFileUpdate {
@@ -152,12 +153,10 @@ pub(super) async fn apply_merge_result(
         });
     }
     if active == base {
-        host.write_atomic(active_path, template)
+        write_if_changed(host, active_path, template).await?;
+        write_if_changed(host, base_path, template)
             .await
-            .map_err(|error| error.into_anyhow("writing active sys profile"))?;
-        host.write_atomic(base_path, template)
-            .await
-            .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+            .context("writing sys profile merge base")?;
         remove_if_exists(host, new_path).await?;
         remove_if_exists(host, merge_path).await?;
         return Ok(SysProfileFileUpdate {
@@ -168,12 +167,10 @@ pub(super) async fn apply_merge_result(
     }
     match merge_sys_profile(host, &merge_inputs).await? {
         ProfileMerge::Clean(merged) => {
-            host.write_atomic(active_path, &merged)
+            write_if_changed(host, active_path, &merged).await?;
+            write_if_changed(host, base_path, template)
                 .await
-                .map_err(|error| error.into_anyhow("writing merged sys profile"))?;
-            host.write_atomic(base_path, template)
-                .await
-                .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+                .context("writing sys profile merge base")?;
             remove_if_exists(host, new_path).await?;
             remove_if_exists(host, merge_path).await?;
             Ok(SysProfileFileUpdate {
@@ -183,12 +180,8 @@ pub(super) async fn apply_merge_result(
             })
         }
         ProfileMerge::Conflict(merged) => {
-            host.write_atomic(new_path, template)
-                .await
-                .map_err(|error| error.into_anyhow("writing new sys profile template"))?;
-            host.write_atomic(merge_path, &merged)
-                .await
-                .map_err(|error| error.into_anyhow("writing sys profile merge conflict"))?;
+            write_profile_artifact(host, new_path, template, active_path).await?;
+            write_profile_artifact(host, merge_path, &merged, active_path).await?;
             Ok(SysProfileFileUpdate {
                 updated: true,
                 needs_action: true,
@@ -203,13 +196,78 @@ pub(super) async fn apply_merge_result(
     }
 }
 
-async fn write_if_changed(host: &impl FileSystemHost, path: &Path, content: &[u8]) -> Result<bool> {
-    if host.read(path).await.ok().as_deref() == Some(content) {
+// Artifacts can contain private user edits. Set security before copying any bytes.
+async fn write_profile_artifact(
+    host: &impl FileSystemHost,
+    path: &Path,
+    content: &[u8],
+    active_path: &Path,
+) -> Result<()> {
+    let previous = host
+        .metadata(active_path)
+        .await
+        .map_err(|error| error.into_anyhow("reading sys profile permissions"))?;
+    if previous.kind != crate::runtime::FileKind::File {
+        bail!(
+            "active sys profile is not a regular file: {}",
+            active_path.display()
+        );
+    }
+    let existing = match host.metadata(path).await {
+        Ok(metadata) if metadata.kind == crate::runtime::FileKind::File => Some(metadata),
+        Ok(_) => bail!(
+            "sys profile artifact is not a regular file: {}",
+            path.display()
+        ),
+        Err(error) if error.is_not_found() => None,
+        Err(error) => return Err(error.into_anyhow("reading sys profile artifact permissions")),
+    };
+    if let Some(mode) = previous.unix_mode {
+        if existing.is_none() {
+            host.write_atomic(path, &[])
+                .await
+                .map_err(|error| error.into_anyhow("preparing sys profile artifact"))?;
+        }
+        let mode = existing
+            .and_then(|metadata| metadata.unix_mode)
+            .map_or(mode, |current| mode & current);
+        host.set_mode(path, mode)
+            .await
+            .map_err(|error| error.into_anyhow("protecting sys profile artifact"))?;
+    }
+    host.replace_profile_like(path, content, active_path)
+        .await
+        .map_err(|error| error.into_anyhow("writing sys profile artifact"))
+}
+
+async fn read_optional_profile(host: &impl FileSystemHost, path: &Path) -> Result<Option<Vec<u8>>> {
+    match host.metadata(path).await {
+        Ok(metadata) if metadata.kind == crate::runtime::FileKind::File => {}
+        Ok(_) => bail!("sys profile is not a regular file: {}", path.display()),
+        Err(error) if error.is_not_found() => return Ok(None),
+        Err(error) => return Err(error.into_anyhow("observing sys profile before replacement")),
+    }
+    host.read(path)
+        .await
+        .map(Some)
+        .map_err(|error| error.into_anyhow("reading sys profile before replacement"))
+}
+
+pub(super) async fn write_if_changed(
+    host: &impl FileSystemHost,
+    path: &Path,
+    content: &[u8],
+) -> Result<bool> {
+    let current = read_optional_profile(host, path).await?;
+    if current.as_deref() == Some(content) {
         return Ok(false);
     }
-    host.write_atomic(path, content)
-        .await
-        .map_err(|error| error.into_anyhow("writing sys profile"))?;
+    if current.is_some() {
+        host.write_profile_like(path, content, path).await
+    } else {
+        host.write_atomic(path, content).await
+    }
+    .map_err(|error| error.into_anyhow("writing sys profile"))?;
     Ok(true)
 }
 

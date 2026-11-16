@@ -391,7 +391,8 @@ impl Commands {
                     | ShellCommands::Recover { verbose, .. },
             } => *verbose,
             Self::Sys { command } => match command {
-                SysCommands::Bootstrap { verbose, .. }
+                SysCommands::Init { verbose, .. }
+                | SysCommands::Bootstrap { verbose, .. }
                 | SysCommands::Apply { verbose, .. }
                 | SysCommands::Uninstall { verbose, .. }
                 | SysCommands::Recover { verbose, .. } => *verbose,

@@ -91,7 +91,7 @@ pub use planner::sys_profile_block_paths;
 pub use planner::{
     AppApprovedUpgradeOptions, AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest,
     OpaqueSecretVersion, PlanningInputVersions, ShellPlanRequest, SysBootstrapPlanRequest,
-    SysManagedPlanRequest, SysProfilePlanRequest,
+    SysInitPlanRequest, SysManagedPlanRequest, SysProfilePlanRequest,
 };
 pub use preset::{
     PresetFile, PresetFileOrigin, PresetSnapshot, PresetSourceKind, PresetValidationIssue,

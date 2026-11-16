@@ -1635,7 +1635,7 @@ fn cli_rejects_removed_pre_1_0_compatibility_commands() {
         &["shine", "app", "init"],
         &["shine", "app", "build", "surge"],
         &["shine", "app", "unbuild", "surge"],
-        &["shine", "sys", "init"],
+        &["shine", "sys", "init", "neovim"],
         &["shine", "env", "encrypt"],
         &["shine", "env", "decrypt", "TOKEN_SECRET"],
         &["shine", "env", "export", "TOKEN"],
@@ -1993,4 +1993,31 @@ fn cli_rejects_removed_presets_subcommands() {
     assert!(Cli::try_parse_from(["shine", "presets", "export"]).is_err());
     assert!(Cli::try_parse_from(["shine", "presets", "link", "/tmp/presets"]).is_err());
     assert!(Cli::try_parse_from(["shine", "presets", "unlink"]).is_err());
+}
+
+#[test]
+fn cli_sys_init_accepts_only_independent_refresh_options() {
+    assert!(
+        Cli::try_parse_from([
+            "shine",
+            "sys",
+            "init",
+            "--dry-run",
+            "--verbose",
+            "--force-profile"
+        ])
+        .is_ok()
+    );
+    for args in [
+        vec!["--yes", "--dry-run"],
+        vec!["tool"],
+        vec!["--shell", "bash"],
+        vec!["--item", "tool"],
+        vec!["--preset", "minimal"],
+        vec!["--proxy"],
+    ] {
+        let mut command = vec!["shine", "sys", "init"];
+        command.extend(args);
+        assert!(Cli::try_parse_from(command).is_err());
+    }
 }

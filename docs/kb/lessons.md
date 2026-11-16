@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-11-16 — Bind unselected PATH integrations to Sys approval
+
+- **Symptom**: toggling an unselected PATH-only item's `profile_enabled` after review left
+  profile enable/disable and bootstrap approvals valid while changing generated profile content.
+- **Cause**: selected receipts were captured, but preserved integrations were only indirectly
+  represented by permissions and code boundaries; pure PATH items can change neither.
+- **Fix**: explicitly capture enabled composition inputs while retaining selected receipt binding.
+  Init continues to capture the complete manifest. The regression exercises both toggle directions,
+  successful fresh approvals and rejection before business writes through each approved entry.
+
 ## 2026-11-16 — Bootstrap Update does not mean software upgrade
 
 - **Symptom**: already-installed items displayed `(update)` and entered the summary of code executing
@@ -4094,3 +4104,31 @@ When cutting a release, always diff against the latest stable `v*` tag
   never use `safe.directory=*`. Source-only builds cannot validate this runner boundary.
 - **Regression**: `scripts/test-release-version.py` simulates a different owner, executes the
   actual workflow trust command, verifies commit/date access, and keeps other repositories denied.
+
+## 2026-11-16 — Independent Sys refresh must retain exact OS and mutation outcomes
+
+- **Symptom**: Arch profile consent queried Ubuntu item metadata; explicit Arch base grants could
+  be listed as missing on another platform. A pending journal also produced a fictitious
+  `sys/profile` code target, hiding recovery guidance behind an item lookup error.
+- **Rule**: use the operation's captured OS for Sys item consent and the CLI's detected OS for
+  enrollment. Profile identities carry their own OS. Recovery-only blockers deliver no code.
+- **Symptom**: removing only the other Linux shell's loader returned `Skipped` because the shared
+  reconciler discarded the removal result. Combine both startup-file mutation results.
+- **Coverage**: approved init tests cover real pending journals, Arch consent, loader-only removal,
+  partial-write retries without new state, and merge/force behavior; CLI tests inspect explicit
+  cross-platform profile grants. Keep native PowerShell validation separate from virtual hosts.
+- **Privacy**: force-profile backups and merge artifacts must inherit the active profile's
+  permissions before any copied bytes are written. Prepare a mode-preserving Unix destination before writing and use the
+  existing profile-like write for Windows ACLs; an ordinary new-file atomic write uses defaults.
+
+- **Windows publication**: the Shell recovery `write_profile_like` operation publishes a new
+  destination when copying from another file. Sys `.new`/`.merge` retries require replacement;
+  use an explicit replacement entry that shares ACL staging, without loosening recovery's
+  create-only publication. Force reconciliation rejects non-regular paths and propagates read
+  errors instead of treating them as missing, including EOL-equivalent symlinks that need no backup.
+
+- **Native Windows finding**: ordinary atomic replacement preserved file bytes but replaced a
+  protected active-profile DACL with inherited permissions. Existing active/base and startup files
+  must use same-path profile-like replacement; new files still use ordinary creation. Native tests
+  exercise repeated conflict artifacts, force/clean updates, ACLs, named streams and failed
+  publication, while keeping the recovery interface's create-only rule independent.

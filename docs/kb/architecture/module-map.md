@@ -236,7 +236,7 @@ execution primitives and transforms live in `core/src/install/`.
 | `cli/src/sys/selection.rs` | Selected-item terminal formatting only |
 | `cli/src/sys/execution.rs` | Bootstrap reporting and proxy environment |
 | `cli/src/sys/render.rs` | System command presentation helpers |
-| `cli/src/sys/profile_commands.rs` | Core profile enable/disable adapter and rendering |
+| `cli/src/sys/profile_commands.rs` | Core independent init and profile enable/disable adapters and rendering |
 | `cli/src/sys/recovery.rs` | Core explicit managed Sys operation recovery Plan/apply adapter |
 
 ## Configuration, presets, and runtime state

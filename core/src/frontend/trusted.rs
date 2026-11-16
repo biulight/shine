@@ -149,6 +149,7 @@ pub enum OperationDetails {
     ShellUpgrade(Box<ShellUpgradeLifecycleReport>),
     ShellUninstall(Box<ShellUninstallReport>),
     SysManaged(Box<SysManagedReport>),
+    SysInit(Box<SysItemOutcome>),
     SysProfile(Box<SysProfileStateReport>),
     SysBootstrap(Box<SysBootstrapBatchReport>),
     AppRecovery(Box<AppRecoveryReportV1>),
@@ -197,12 +198,25 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> TrustedFrontend<H> 
             {
                 continue;
             }
-            let report = self
-                .service
-                .runtime
-                .external_code_requirements(&target)
-                .await
-                .map_err(|error| FrontendServiceError::new("frontend_code_review_failed", error))?;
+            let os_id = match &initial.request {
+                ReviewRequest::SysInit(request) => Some(request.os_id.as_str()),
+                ReviewRequest::SysProfile(request) => Some(request.os_id.as_str()),
+                ReviewRequest::SysBootstrap(request) => Some(request.os_id.as_str()),
+                ReviewRequest::Sys(request) => Some(request.os_id.as_str()),
+                _ => None,
+            };
+            let report = if let Some(os_id) = os_id {
+                self.service
+                    .runtime
+                    .external_code_requirements_for_os(&target, os_id)
+                    .await
+            } else {
+                self.service
+                    .runtime
+                    .external_code_requirements(&target)
+                    .await
+            }
+            .map_err(|error| FrontendServiceError::new("frontend_code_review_failed", error))?;
             for requirement in report.requirements {
                 if !crate::trust::evaluate_trust(
                     &self.service.runtime.context().trust_grants,
@@ -358,6 +372,11 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost + ProcessHost> 
                             .await?,
                     ))
                 }
+                ReviewRequest::SysInit(request) => OperationDetails::SysInit(Box::new(
+                    runtime
+                        .init_sys_profile_approved(request, &approval)
+                        .await?,
+                )),
                 ReviewRequest::SysProfile(request) => OperationDetails::SysProfile(Box::new(
                     runtime.set_sys_profile_approved(request, &approval).await?,
                 )),
@@ -433,6 +452,9 @@ fn project_result(details: &OperationDetails) -> ExecutionResultV1 {
         },
         OperationDetails::AppArtifact(outcome) => ExecutionResultV1::AppSpecialized {
             outcomes: vec![(**outcome).clone()],
+        },
+        OperationDetails::SysInit(outcome) => ExecutionResultV1::SysSpecialized {
+            outcomes: vec![sys_outcome(outcome)],
         },
         OperationDetails::SysProfile(report) => ExecutionResultV1::SysSpecialized {
             outcomes: report.outcome.iter().map(sys_outcome).collect(),

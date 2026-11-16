@@ -9,6 +9,23 @@ Use system presets to install selected development tools on macOS, Ubuntu, Arch 
 and enable their shell integration. Shine can also manage system settings such as private DNS separately.
 Ongoing software updates remain the responsibility of the package manager or upstream tool.
 
+## Refresh initialization {#refresh-initialization}
+
+After editing your system preset's startup configuration, refresh it while preserving enabled
+software integrations:
+
+```bash
+shine sys init --dry-run
+shine sys init
+```
+
+Review the target shell and changes, then open a new shell after applying. Each new shell loads
+the configuration; rerun `shine sys init` whenever you change the preset.
+
+On Linux, switching between Bash and Zsh moves Shine's Sys configuration loading to the current
+shell. For external presets, review the code using the
+[authorization instructions](./custom-presets.md#declare-permissions) before applying.
+
 ## Inspect before installing {#inspect-before-applying}
 
 List the items available for your system and inspect any prerequisites:
@@ -144,9 +161,12 @@ approval. Use `shine sys info split-dns` for details and `shine sys status` for 
   relevant state has not changed. It preserves modified resources and unrelated shell content.
 - **Another system operation is running:** wait for it to finish. If Shine reports that the state
   changed, review the new plan before retrying.
-- **Shell configuration conflicts:** inspect the files identified by Shine. Use
-  `shine sys bootstrap --force-profile` only if you want to back up and replace the conflicting
+- **Shell configuration conflicts:** if the result says `needs action`, inspect the reported
+  files. Shine preserves the conflicting file, but other files may already have changed. Use
+  `shine sys init --force-profile` only if you want to back up and replace the conflicting
   profile instead of preserving and merging your edits.
+- **Initialization refresh interrupted:** preview and rerun `shine sys init`; `sys recover`
+  cannot roll back this refresh.
 
 ## Supported shells {#platform-notes}
 

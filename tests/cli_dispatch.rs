@@ -8785,3 +8785,124 @@ fn top_level_error_colors_follow_stderr_and_preserve_diagnostics() {
     }
     assert_eq!(fs::read_to_string(blocked).unwrap(), "retain");
 }
+
+#[test]
+#[cfg(target_os = "macos")]
+fn sys_init_cli_reviews_trust_and_refreshes_without_executing_or_recording_items() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let presets = state.join("presets");
+    let profile = presets.join("sys/macos/profile");
+    fs::create_dir_all(&profile).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    fs::write(
+        profile.parent().unwrap().join("shine.toml"),
+        "version = 2\n",
+    )
+    .unwrap();
+    let base = profile.join("base.pre.sh");
+    fs::write(
+        &base,
+        "export INIT_VERSION=one\ntouch \"$HOME/should-not-run\"\n",
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("SHELL", "/bin/zsh")
+            .env("SHINE_PRESETS", &presets)
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let preview = run(&["sys", "init", "--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(String::from_utf8_lossy(&preview.stdout).contains("sys/profile/macos"));
+    let active = fixture.0.join("home/.shine/profile/macos-sys.pre.sh");
+    assert!(!active.exists());
+    let denied = run(&["sys", "init", "--yes"]);
+    assert!(!denied.status.success(), "{denied:?}");
+    assert!(!active.exists());
+    let grant = run(&["trust", "grant", "sys/profile/macos", "--yes"]);
+    assert!(grant.status.success(), "{grant:?}");
+    let applied = run(&["sys", "init", "--yes"]);
+    assert!(applied.status.success(), "{applied:?}");
+    assert!(String::from_utf8_lossy(&applied.stdout).contains("current terminal was not reloaded"));
+    assert_eq!(fs::read(&active).unwrap(), fs::read(&base).unwrap());
+    let before = upgrade_tree_state(&fixture.0.join("home"));
+    let again = run(&["sys", "init", "--yes"]);
+    assert!(again.status.success(), "{again:?}");
+    assert!(String::from_utf8_lossy(&again.stdout).contains("already up to date"));
+    assert_eq!(upgrade_tree_state(&fixture.0.join("home")), before);
+    fs::write(&base, "export INIT_VERSION=two\n").unwrap();
+    assert!(
+        String::from_utf8(fs::read(&active).unwrap())
+            .unwrap()
+            .contains("one")
+    );
+    assert!(!run(&["sys", "init", "--yes"]).status.success());
+    assert!(
+        run(&["trust", "grant", "sys/profile/macos", "--yes"])
+            .status
+            .success()
+    );
+    assert!(run(&["sys", "init", "--yes"]).status.success());
+    assert_eq!(fs::read(&active).unwrap(), fs::read(&base).unwrap());
+    assert!(!fixture.0.join("home/should-not-run").exists());
+    assert!(!state.join("sys-manifest.toml").exists());
+    // Force backups must retain private file permissions, including on a real filesystem.
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(&active, "private user configuration\n").unwrap();
+    fs::set_permissions(&active, fs::Permissions::from_mode(0o600)).unwrap();
+    let forced = run(&["sys", "init", "--force-profile", "--yes"]);
+    assert!(forced.status.success(), "{forced:?}");
+    let backups = fs::read_dir(active.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().contains(".bak."))
+        .collect::<Vec<_>>();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        fs::read(&backups[0]).unwrap(),
+        b"private user configuration\n"
+    );
+    assert_eq!(
+        fs::metadata(&backups[0]).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn sys_profile_trust_list_resolves_the_explicit_os_in_the_target() {
+    let fixture = Fixture::new();
+    let presets = fixture.0.join("state/presets");
+    let profile = presets.join("sys/arch/profile");
+    fs::create_dir_all(&profile).unwrap();
+    fs::write(fixture.0.join("state/config.toml"), "schema_version = 2\n").unwrap();
+    fs::write(
+        profile.parent().unwrap().join("shine.toml"),
+        "version = 2\n",
+    )
+    .unwrap();
+    fs::write(profile.join("base.pre.sh"), "export BASE=arch\n").unwrap();
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("SHINE_PRESETS", &presets)
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let grant = run(&["trust", "grant", "sys/profile/arch", "--yes"]);
+    assert!(grant.status.success(), "{grant:?}");
+    let list = run(&["trust", "list"]);
+    assert!(list.status.success(), "{list:?}");
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        stdout.contains("sys/profile/arch") && stdout.contains("current"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("capability missing"), "{stdout}");
+}

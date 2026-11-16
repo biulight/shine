@@ -265,6 +265,7 @@ pub(super) async fn capture_sys_profile_state<H: FileSystemObservationHost>(
     runtime: &CoreRuntime<H>,
     os_id: &str,
     sys_shell: &str,
+    force_profile: bool,
     state: &mut StateCapture,
     permissions: &mut PermissionAccumulator,
 ) -> Result<()> {
@@ -324,6 +325,16 @@ pub(super) async fn capture_sys_profile_state<H: FileSystemObservationHost>(
     permissions.implicit(PermissionV1::Command {
         program: "git".to_string(),
     });
+    if force_profile {
+        // Unique backup names must not enter the review fingerprint.
+        add_shine_write_permission(
+            runtime.context(),
+            permissions,
+            &runtime.context().home_dir.join(".shine/profile"),
+            FilesystemPurposeV1::Recovery,
+            "sys/profile",
+        );
+    }
     Ok(())
 }
 

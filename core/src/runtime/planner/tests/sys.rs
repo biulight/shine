@@ -771,7 +771,7 @@ async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_reco
     assert_eq!(manifest.entries, vec![previous_entry]);
 }
 
-async fn interrupted_split_dns_install() -> (CoreRuntime<InMemoryHost>, PathBuf) {
+pub(super) async fn interrupted_split_dns_install() -> (CoreRuntime<InMemoryHost>, PathBuf) {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "sys/macos/shine.toml",
@@ -1752,6 +1752,273 @@ path = '$HOME/.tool/bin'
             assert!(zsh.contains("# personal zsh"));
             if failure != "none" {
                 assert!(zsh.contains("# later user edit"));
+            }
+        }
+    }
+}
+
+// Both items are detected, permission-free PATH integrations: B must be bound
+// even though it adds neither an external-code boundary nor a permission.
+fn profile_binding_fixture(b_enabled: bool) -> CoreRuntime<InMemoryHost> {
+    let mut source = String::from("version = 2\n");
+    for id in ["a", "b"] {
+        source.push_str(&format!(
+            r#"
+[[items]]
+id = '{id}'
+label = '{id}'
+detect = {{ kind = 'path', path = '$HOME/.present' }}
+install = {{ kind = 'package', provider = 'apt', package = '{id}' }}
+[items.permissions]
+schema_version = 1
+[[items.shell]]
+shells = ['bash']
+phase = 'post'
+path = '$HOME/{id}/bin'
+"#
+        ));
+    }
+    let runtime = runtime(
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("sys/ubuntu/shine.toml", source.into_bytes())
+            .build(),
+    );
+    runtime
+        .host()
+        .put_file(runtime.context().home_dir.join(".present"), vec![]);
+    let manifest = SysRunManifest {
+        schema_version: crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
+        entries: ["a", "b"]
+            .into_iter()
+            .map(|id| SysRunEntry {
+                os_id: "ubuntu".into(),
+                item_id: id.into(),
+                label: id.into(),
+                status: crate::runtime::SysItemStatus::Installed,
+                detail: String::new(),
+                updated_at: "1".into(),
+                managed: false,
+                profile_enabled: id == "a" || b_enabled,
+                receipt: None,
+            })
+            .collect(),
+    };
+    runtime.host().put_file(
+        runtime.context().shine_dir.join("sys-manifest.toml"),
+        toml::to_string(&manifest).unwrap().into_bytes(),
+    );
+    runtime
+}
+
+async fn profile_binding_plan(
+    runtime: &CoreRuntime<InMemoryHost>,
+    operation: PlanOperationV1,
+    force: bool,
+) -> PlanV1 {
+    match operation {
+        PlanOperationV1::SysInit => runtime
+            .plan_sys_init(SysInitPlanRequest {
+                os_id: "ubuntu".into(),
+                force_profile: force,
+            })
+            .await
+            .unwrap(),
+        PlanOperationV1::SysBootstrap => runtime
+            .plan_sys_bootstrap(SysBootstrapPlanRequest {
+                os_id: "ubuntu".into(),
+                item_ids: vec!["a".into()],
+                sys_shell: "bash".into(),
+                force_profile: force,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap(),
+        _ => runtime
+            .plan_sys_profile(SysProfilePlanRequest {
+                os_id: "ubuntu".into(),
+                item_id: "a".into(),
+                enabled: operation == PlanOperationV1::SysProfileEnable,
+            })
+            .await
+            .unwrap(),
+    }
+}
+
+async fn profile_binding_apply(
+    runtime: &CoreRuntime<InMemoryHost>,
+    operation: PlanOperationV1,
+    approval: &PlanApprovalV1,
+) -> Result<()> {
+    match operation {
+        PlanOperationV1::SysInit => {
+            runtime
+                .init_sys_profile_approved(
+                    SysInitPlanRequest {
+                        os_id: "ubuntu".into(),
+                        force_profile: false,
+                    },
+                    approval,
+                )
+                .await?;
+        }
+        PlanOperationV1::SysBootstrap => {
+            runtime
+                .run_sys_bootstrap_approved(
+                    SysBootstrapPlanRequest {
+                        os_id: "ubuntu".into(),
+                        item_ids: vec!["a".into()],
+                        sys_shell: "bash".into(),
+                        force_profile: false,
+                        input_versions: PlanningInputVersions::default(),
+                    },
+                    approval,
+                    &mut Interaction,
+                    &mut crate::runtime::NullObserver,
+                )
+                .await?;
+        }
+        _ => {
+            runtime
+                .set_sys_profile_approved(
+                    SysProfilePlanRequest {
+                        os_id: "ubuntu".into(),
+                        item_id: "a".into(),
+                        enabled: operation == PlanOperationV1::SysProfileEnable,
+                    },
+                    approval,
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sys_profile_approval_binds_unselected_path_integrations() {
+    for operation in [
+        PlanOperationV1::SysProfileEnable,
+        PlanOperationV1::SysProfileDisable,
+        PlanOperationV1::SysBootstrap,
+        PlanOperationV1::SysInit,
+    ] {
+        for before in [false, true] {
+            let runtime = profile_binding_fixture(before);
+            let plan = profile_binding_plan(&runtime, operation, false).await;
+            assert!(plan.is_ready());
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            // Independently execute both reviewed states, proving B changes output
+            // and that detection/permissions do not prevent normal execution.
+            for enabled in [false, true] {
+                let control = profile_binding_fixture(enabled);
+                let current = profile_binding_plan(&control, operation, false).await;
+                profile_binding_apply(
+                    &control,
+                    operation,
+                    &PlanApprovalV1::for_reviewed_plan(&current).unwrap(),
+                )
+                .await
+                .unwrap();
+                let output = control
+                    .host()
+                    .read(
+                        &control
+                            .context()
+                            .home_dir
+                            .join(".shine/profile/ubuntu-sys.post.sh"),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    String::from_utf8(output).unwrap().contains("/b/bin"),
+                    enabled,
+                    "{operation:?}"
+                );
+            }
+            let path = runtime.context().shine_dir.join("sys-manifest.toml");
+            let mut manifest: SysRunManifest = toml::from_str(
+                &String::from_utf8(runtime.host().read(&path).await.unwrap()).unwrap(),
+            )
+            .unwrap();
+            manifest
+                .entries
+                .iter_mut()
+                .find(|entry| entry.item_id == "b")
+                .unwrap()
+                .profile_enabled = !before;
+            let changed = toml::to_string(&manifest).unwrap().into_bytes();
+            runtime.host().put_file(&path, changed.clone());
+            let fresh = profile_binding_plan(&runtime, operation, false).await;
+            assert!(fresh.is_ready());
+            assert_eq!(plan.permissions, fresh.permissions);
+            assert_eq!(plan.code_boundaries, fresh.code_boundaries);
+            let since = runtime.host().operations().len();
+            let result = profile_binding_apply(&runtime, operation, &approval).await;
+            assert_ne!(plan.fingerprint().unwrap(), fresh.fingerprint().unwrap());
+            assert!(
+                matches!(
+                    result
+                        .unwrap_err()
+                        .downcast_ref::<crate::plan::PlanApprovalError>(),
+                    Some(crate::plan::PlanApprovalError::PlanChanged)
+                ),
+                "{operation:?}: {before}"
+            );
+            assert!(
+                runtime.host().operations()[since..]
+                    .iter()
+                    .all(|op| matches!(
+                        op,
+                        HostOperation::Read(_) | HostOperation::AcquireOperationLock(_)
+                    ))
+            );
+            assert_eq!(runtime.host().read(&path).await.unwrap(), changed);
+        }
+    }
+}
+
+#[tokio::test]
+async fn sys_profile_force_backup_permission_is_scoped_to_force_delivery() {
+    for operation in [
+        PlanOperationV1::SysBootstrap,
+        PlanOperationV1::SysInit,
+        PlanOperationV1::SysProfileEnable,
+        PlanOperationV1::SysProfileDisable,
+    ] {
+        for force in [false, true] {
+            if force
+                && matches!(
+                    operation,
+                    PlanOperationV1::SysProfileEnable | PlanOperationV1::SysProfileDisable
+                )
+            {
+                continue;
+            }
+            let runtime = profile_binding_fixture(true);
+            let plan = profile_binding_plan(&runtime, operation, force).await;
+            assert!(plan.is_ready());
+            let backup = PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: review_path(
+                    runtime.context(),
+                    &runtime.context().home_dir.join(".shine/profile"),
+                ),
+            };
+            assert_eq!(plan.permissions.required.contains(&backup), force);
+            assert_eq!(
+                plan.filesystem_review.iter().any(|group| {
+                    group.purpose == FilesystemPurposeV1::Recovery
+                        && group.target == "sys/profile"
+                        && group.permissions.contains(&backup)
+                }),
+                force
+            );
+            if operation == PlanOperationV1::SysBootstrap {
+                for scope in &plan.permission_scopes {
+                    assert_eq!(
+                        scope.permissions.required.contains(&backup),
+                        force && scope.target.as_deref() == Some("sys/profile")
+                    );
+                }
             }
         }
     }

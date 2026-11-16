@@ -143,10 +143,10 @@ shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-g
 shine upgrade [TARGET] [--pull] [--verbose] [--full-plan] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine state check
-shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
-shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
+shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM|sys/profile/OS>
+shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM|sys/profile/OS> [--development] [--yes]
 shine trust list [--verbose]
-shine trust revoke <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
+shine trust revoke <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM|sys/profile/OS>
 shine completions install
 shine completions <bash|zsh|powershell>
 ```
@@ -209,6 +209,7 @@ shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
 shine sys recover [--yes] [--verbose]
+shine sys init [--dry-run] [--force-profile] [--yes] [--verbose]
 shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes] [--verbose]
 shine sys profile enable <ITEM> [--dry-run] [--yes] [--verbose]
 shine sys profile disable <ITEM> [--dry-run] [--yes] [--verbose]
@@ -216,13 +217,16 @@ shine sys apply [ITEM] [--dry-run] [--yes] [--verbose]
 shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
 
+`sys init` refreshes startup configuration from the current system preset, preserving enabled
+software integrations without installing software.
+
 `sys list --all` marks other operating systems as `catalog only` and shows apply hints only for
 the current OS. `sys info`, `bootstrap`, `apply`, and `uninstall` always resolve items for the
 current OS, including when another OS has an item with the same name.
 Use `bootstrap` to ensure selected software and shell integration are present. Use `apply` and
 `uninstall` for reversible managed system configuration. These operations may request administrator
-access after you approve their plan. `--force-profile` may replace conflicting profile content, so
-review a dry run first.
+access after you approve their plan. For `init` and `bootstrap`, `--force-profile` backs up and
+replaces generated profiles; review a dry run first.
 
 Preview changes with `--dry-run` before applying or removing system configuration. It cannot be
 combined with `--yes`. Use `--yes` for non-interactive approval; it skips only the prompt, not the

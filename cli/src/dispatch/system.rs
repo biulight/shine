@@ -3,6 +3,20 @@ use super::*;
 
 pub(super) async fn dispatch(config: &Config, command: SysCommands) -> Result<()> {
     match command {
+        SysCommands::Init {
+            dry_run,
+            force_profile,
+            yes,
+            ..
+        } => {
+            Box::pin(sys::handle_profile_init(
+                config,
+                dry_run,
+                force_profile,
+                yes,
+            ))
+            .await
+        }
         SysCommands::Recover { yes, .. } => {
             Box::pin(sys::handle_recover_approved(config, yes)).await
         }
