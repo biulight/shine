@@ -123,6 +123,24 @@ pub(super) fn generator_failure_detail(stderr: &[u8]) -> Option<String> {
         }
         "no-compatible-nodes" => "response contained no compatible proxy nodes",
         "invalid-subscription" => "subscription response could not be decoded",
+        "invalid-surge-cache-input" => {
+            "set the cache input to a Surge configuration filename or an absolute cache path"
+        }
+        "cache-read-failed" => "local subscription cache could not be read",
+        "cache-too-large" => "local subscription cache exceeded the size limit",
+        "surge-profile-read-failed" => {
+            "the named configuration could not be read in Surge Profiles"
+        }
+        "surge-profile-reference-missing" => {
+            "the Surge configuration has no supported subscription reference in [Proxy] or [Proxy Group]"
+        }
+        "surge-profile-reference-ambiguous" => {
+            "the Surge configuration has more than one subscription reference in [Proxy] or [Proxy Group]"
+        }
+        "surge-profile-cache-missing" => {
+            "no downloaded local subscription cache exists for the named Surge configuration"
+        }
+        "invalid-surge-cache" => "local Surge cache has no valid wGetCloud node selection",
         "generation-failed" => "generation failed; details redacted",
         _ => {
             let status = diagnostic

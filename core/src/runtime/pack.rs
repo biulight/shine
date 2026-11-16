@@ -238,6 +238,7 @@ struct PackAppFile {
 #[derive(Deserialize)]
 struct PackGenerator {
     script: String,
+    fallback: Option<Box<PackGenerator>>,
 }
 
 #[derive(Deserialize)]
@@ -272,6 +273,9 @@ fn declared_executable_paths(kind: &str, bytes: &[u8]) -> BTreeSet<String> {
                 insert_path(&mut paths, file.source);
                 if let Some(generator) = file.generator {
                     insert_path(&mut paths, generator.script);
+                    if let Some(fallback) = generator.fallback {
+                        insert_path(&mut paths, fallback.script);
+                    }
                 }
             }
             collect_permission_executables(&mut paths, manifest.permissions.as_ref());

@@ -135,6 +135,19 @@ pub struct AppGenerator {
     pub env: Vec<EnvVarSpec>,
     pub when_env: String,
     pub auto: bool,
+    pub fallback: Option<Box<AppGenerator>>,
+}
+
+impl AppGenerator {
+    pub(super) fn selected(&self, env: &BTreeMap<String, String>) -> &Self {
+        if !env.contains_key(&self.when_env)
+            && let Some(fallback) = self.fallback.as_deref()
+            && env.contains_key(&fallback.when_env)
+        {
+            return fallback;
+        }
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -729,14 +742,17 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 self.bun_dependency_arg(&format!("app/{}/{}", category.name, artifact.script))?;
             }
             for file in &category.files {
-                if let Some(generator) = &file.generator
-                    && generator.runtime == ArtifactRuntime::Bun
-                {
-                    self.bun_dependency_arg(&format!(
-                        "app/{}/{}",
-                        category.name,
-                        generator.script.display()
-                    ))?;
+                if let Some(generator) = &file.generator {
+                    for generator in std::iter::once(generator).chain(generator.fallback.as_deref())
+                    {
+                        if generator.runtime == ArtifactRuntime::Bun {
+                            self.bun_dependency_arg(&format!(
+                                "app/{}/{}",
+                                category.name,
+                                generator.script.display()
+                            ))?;
+                        }
+                    }
                 }
             }
             for hook in category.post_install.iter().chain(&category.post_upgrade) {

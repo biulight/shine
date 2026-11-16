@@ -1051,8 +1051,10 @@ rollback is introduced (ADR 0130).
 The execution and reporting rules remain:
 
 1. The `shine app install` Plan binds the generator's `when_env` gate to approval.
-   A missing key selects the static fallback and omits the generator's execution steps and
-   input requirements. An enabled generator still requires identities for its secret inputs.
+   When the primary key is absent, install and explicit refresh can select the alternate
+   `generator.fallback` by its own gate. A failed primary execution never selects the alternate.
+   With no enabled generator, install plans the static source without generator execution
+   steps or inputs. Only the selected generator needs secret input identities.
    The CLI verifies the captured environment layers before applying an approved install.
    Install materializes enabled generators before applying files, using the normal manifest hash
    and atomic file installer for the resulting content.

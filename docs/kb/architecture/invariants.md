@@ -1159,6 +1159,10 @@ bugs. Check this list before changing the modules named in each entry.
   preserve the manifest snapshot. Install, `shine app refresh`, or explicit
   `info`/`update --run-generators` evaluation may run it. Evaluation never writes; refresh must
   target manifest-owned files and preserve user modifications unless `--force` is explicit.
+- **Generator choice is bound to fresh approval.** An alternate generator is eligible only when
+  the primary trigger is absent and the alternate trigger is present. Plan and execution select
+  the same branch. Only the selected branch's inputs and code are used for execution, while
+  preset lint checks both. A primary failure preserves last-known-good content.
 - **Refresh shares rules, not captured authority.** Candidate selection and exact source/destination
   receipt admission use `app/refresh_selection.rs`. Planning selects candidates before loading the
   manifest; execution retains its manifest-first preparation order. Both use their own current

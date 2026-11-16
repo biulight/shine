@@ -207,12 +207,22 @@ fn print_generator_errors(
         for (index, group) in generator_groups(failures).into_iter().enumerate() {
             let first = group[0];
             if view != GeneratorView::CompactTarget
-                && let Some(generator) = &first.file.generator
+                && let Some(generator) = first
+                    .code_analysis
+                    .as_ref()
+                    .and_then(|analysis| analysis.script.as_deref().map(std::borrow::Cow::Borrowed))
+                    .or_else(|| {
+                        first
+                            .file
+                            .generator
+                            .as_ref()
+                            .map(|generator| generator.script.to_string_lossy())
+                    })
             {
                 eprintln!(
                     "\n  {}  {}",
                     colors::dim_for_stream("Generator", owo_colors::Stream::Stderr),
-                    output::escape_controls(&generator.script.to_string_lossy())
+                    output::escape_controls(&generator)
                 );
             }
             for (index, file) in group.iter().enumerate() {

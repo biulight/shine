@@ -185,21 +185,10 @@ impl<H> CoreRuntime<H> {
         let mut bindings = Vec::new();
         for file in &category.files {
             if let Some(generator) = &file.generator {
-                let script = generator
-                    .script
-                    .to_str()
-                    .ok_or(TerminalFailure::Analyzer)?
-                    .replace('\\', "/");
-                bindings.push(self.app_analysis_binding(
-                    category,
-                    &format!(
-                        "generator:{}",
-                        file.source_rel.to_str().ok_or(TerminalFailure::Analyzer)?
-                    ),
-                    Some(&script),
-                    generator.runtime,
-                    &generator.env,
-                )?);
+                let source = file.source_rel.to_str().ok_or(TerminalFailure::Analyzer)?;
+                for generator in std::iter::once(generator).chain(generator.fallback.as_deref()) {
+                    bindings.push(self.generator_analysis(category, source, generator)?);
+                }
             }
         }
         for (index, hook) in category

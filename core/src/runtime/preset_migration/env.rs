@@ -143,13 +143,17 @@ pub(super) fn migrate(kind: &str, document: &mut DocumentMut) -> Result<bool> {
                 let Some(generator) = file.get_mut("generator") else {
                     return Ok(false);
                 };
-                convert(
-                    generator
+                let generator = generator
+                    .as_table_like_mut()
+                    .context("expected a generator table")?;
+                let mut changed = convert(generator, &sensitivity, &mut used)?;
+                if let Some(fallback) = generator.get_mut("fallback") {
+                    let fallback = fallback
                         .as_table_like_mut()
-                        .context("expected a generator table")?,
-                    &sensitivity,
-                    &mut used,
-                )
+                        .context("expected a generator fallback table")?;
+                    changed |= convert(fallback, &sensitivity, &mut used)?;
+                }
+                Ok(changed)
             })?;
         }
         // A filtered generator may disappear on another platform, whereas its

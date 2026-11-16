@@ -87,7 +87,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             let generator = file
                 .generator
                 .as_ref()
-                .expect("selected generated App file");
+                .expect("selected generated App file")
+                .selected(&self.context().env);
             let resource = file.source_rel.display().to_string();
             capture_path_state(
                 self.host(),

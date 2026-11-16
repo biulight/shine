@@ -7,7 +7,7 @@ sidebar_position: 2
 
 The Surge preset keeps local proxies, policy groups, and rules in separate files and connects them
 to your Profile with apply. General settings use a native module without rewriting `[General]`.
-It can also convert supported URI subscriptions into proxy files and reload Surge when refreshed
+It can also generate proxy files from URI subscriptions or a local wGetCloud cache and reload Surge when refreshed
 content changes.
 
 ## Prepare local configuration
@@ -71,35 +71,46 @@ bypass, not a `DIRECT` routing rule; Enhanced Mode may still handle that traffic
 The module's enabled state is device-wide, not limited to `SURGE_PROFILE`, and survives deletion
 and reinstallation.
 
-## Optional URI subscriptions {#surge-uri-subscriptions}
+## Optional subscriptions {#surge-uri-subscriptions}
 
 The preset accepts HTTPS Base64 URI subscriptions with compatible `ss://`, `vmess://`, and
 `trojan://` records; Trojan supports TCP and WebSocket. VLESS, unsupported transports or security
 modes, plugins, malformed records, and duplicates are skipped. Diagnostics omit credentials,
-and your `local-proxies.conf` is preserved. Complete Surge profiles are not supported; use the
-provider's URI/Base64 subscription URL instead.
+and your `local-proxies.conf` is preserved. For an HTTPS input, use the provider's URI/Base64 URL.
 
 Set the variable for each subscription you use:
 
 | Source path for refresh | Installed filename | Environment variable |
 | --- | --- | --- |
 | `subscription-proxies.conf` | `subscription-proxies.conf` | `SURGE_SUBSCRIPTION_URL` |
-| `sub/wget-cloud-proxies.conf` | `wget-cloud-proxies.conf` | `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` |
+| `sub/wget-cloud-proxies.conf` | `wget-cloud-proxies.conf` | `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` or `W_GET_CLOUD_SURGE_CACHE_SOURCE` |
 
 ```bash
 shine env set SURGE_SUBSCRIPTION_URL 'https://provider.example/subscription?...'
-shine env set W_GET_CLOUD_SURGE_SUBSCRIPTION_URL 'https://provider.example/wget-cloud?...'
 ```
 
+For wGetCloud, set `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` to use the HTTPS subscription.
+To generate offline, leave that variable unset and set `W_GET_CLOUD_SURGE_CACHE_SOURCE` to the
+filename of the imported configuration in `~/Library/Application Support/Surge/Profiles/`.
+Shine reads the existing cache for its subscription. If both variables are set, the URL takes
+precedence. A failed download leaves the previous output in place.
+
+```bash
+shine env set W_GET_CLOUD_SURGE_CACHE_SOURCE WgetCloud.conf
+```
+
+You can also supply the absolute path to a downloaded cache file containing the `🚀 节点选择` group.
+
 The `Subscription` group in `local-proxy-groups.conf` reads `subscription-proxies.conf` through
-`policy-path`; use `include-other-group=Subscription` to include its nodes in other groups.
+`policy-path`. The `WgetCloud` group reads `wget-cloud-proxies.conf`. Use
+`include-other-group=Subscription` or `include-other-group=WgetCloud` to reuse their nodes.
 
 ## Install and apply
 
 The Profile must be beside the installed local files, normally in
 `~/Library/Application Support/Surge/Profiles/`, with a `#!include` line in each of `[Proxy]`,
 `[Proxy Group]`, and `[Rule]`. Replace `Profile.conf` below with its actual filename. Review the
-overlay before installing; if you configured a subscription, open the provider's access window first:
+overlay before installing. Any configured subscription URL must be reachable during installation.
 
 ```bash
 shine app install surge --dry-run
@@ -117,8 +128,9 @@ in `LAN PROXY`; select `DIRECT` to connect directly instead.
 
 ## Refresh subscriptions
 
-Routine `update` and `upgrade` do not access these subscriptions. Open the provider's access window
-and refresh the file you use explicitly:
+Routine `update` and `upgrade` do not read these subscriptions. Refresh the file you use explicitly.
+If your URL has an access window, open it before refreshing. A local wGetCloud cache can be
+read offline and supplies the nodes from its last download.
 
 ```bash
 shine app refresh surge subscription-proxies.conf
@@ -131,6 +143,9 @@ you explicitly add `--force`.
 
 For HTTP errors, timeouts, oversized responses, or no compatible nodes, check the subscription
 service and confirm that its URL returns the [supported format](#surge-uri-subscriptions).
+For a local cache error, check that the named configuration references a single subscription across
+`[Proxy]` and `[Proxy Group]` and that Surge has already downloaded it. If you supplied an absolute
+path, check that it points to the cache file.
 
 ## Remove the integration
 

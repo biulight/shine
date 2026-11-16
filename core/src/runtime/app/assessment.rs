@@ -58,6 +58,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 self.check_analysis_command()?;
                 let destination = self.app_destination(category, file)?;
                 let raw = if let Some(generator) = &file.generator {
+                    let generator = generator.selected(&self.context.env);
                     let triggered = self.context.env.contains_key(&generator.when_env)
                         && (policy != AppAssessmentPolicy::Upgrade || generator.auto);
                     if preserve_errors && triggered {
@@ -111,7 +112,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                             AppGeneratorRequest {
                                 category: category.name.clone(),
                                 source: file.source_rel.display().to_string(),
-                                generator: file.generator.clone().expect("checked generator"),
+                                generator: generator.clone(),
                                 explicit: policy != AppAssessmentPolicy::Upgrade,
                             },
                             observer,

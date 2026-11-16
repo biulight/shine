@@ -346,6 +346,102 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sen
 }
 
 #[tokio::test]
+async fn generator_fallback_plans_only_the_selected_script_and_input() {
+    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+        .file(
+            "app/demo/shine.toml",
+            br#"dest = '~/.config/demo'
+[permissions]
+schema_version = 1
+[[files]]
+source = 'config.txt'
+generator = { script = 'remote.ts', runtime = 'bun', env = [{ source = 'URL', sensitivity = 'secret' }], when_env = 'URL', auto = false, fallback = { script = 'local.ts', runtime = 'bun', env = [{ source = 'CACHE', sensitivity = 'plain' }], when_env = 'CACHE', auto = false } }
+"#
+            .to_vec(),
+        )
+        .file("app/demo/config.txt", b"static".to_vec())
+        .file("app/demo/remote.ts", b"process.stdout.write('remote')".to_vec())
+        .file("app/demo/local.ts", b"process.stdout.write('local')".to_vec())
+        .build();
+    let mut runtime = runtime(snapshot);
+    let mut request = AppPlanRequest {
+        operation: LifecycleOperation::Install,
+        target: Some("demo".into()),
+        force: false,
+        purge: false,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let executes = |plan: &PlanV1, script: &str| {
+        plan.permissions
+            .required
+            .contains(&PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Execute,
+                path: format!("preset:{script}"),
+            })
+    };
+    let static_plan = runtime.plan_apps(request.clone()).await.unwrap();
+    assert!(static_plan.is_ready());
+    assert!(!executes(&static_plan, "remote.ts"));
+    assert!(!executes(&static_plan, "local.ts"));
+
+    runtime
+        .context_mut_for_test()
+        .env
+        .insert("CACHE".into(), "/tmp/cache".into());
+    let local = runtime.plan_apps(request.clone()).await.unwrap();
+    assert!(local.is_ready(), "{local:?}");
+    assert!(executes(&local, "local.ts"));
+    assert!(!executes(&local, "remote.ts"));
+    assert!(
+        !local
+            .permissions
+            .required
+            .contains(&PermissionV1::Environment {
+                name: "URL".into(),
+                sensitivity: EnvironmentSensitivityV1::Secret,
+            })
+    );
+    let approval = PlanApprovalV1::for_reviewed_plan(&local).unwrap();
+
+    runtime
+        .context_mut_for_test()
+        .env
+        .insert("URL".into(), "https://example.invalid".into());
+    let missing_identity = runtime.plan_apps(request.clone()).await.unwrap();
+    assert!(
+        missing_identity
+            .permissions
+            .uncomputable_codes
+            .contains("secret_input_identity_unavailable")
+    );
+    request
+        .input_versions
+        .insert_secret_version("URL", OpaqueSecretVersion::new("url-version"));
+    let remote = runtime.plan_apps(request.clone()).await.unwrap();
+    assert!(remote.is_ready(), "{remote:?}");
+    assert!(executes(&remote, "remote.ts"));
+    assert!(!executes(&remote, "local.ts"));
+    let since = runtime.host().operations().len();
+    let error = runtime
+        .install_apps_approved(request, &approval, &mut NullObserver, &mut Interaction)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<crate::plan::PlanApprovalError>(),
+        Some(&crate::plan::PlanApprovalError::PermissionSetChanged)
+    );
+    assert!(
+        runtime.host().operations()[since..]
+            .iter()
+            .all(|operation| matches!(
+                operation,
+                HostOperation::Read(_) | HostOperation::AcquireOperationLock(_)
+            ))
+    );
+}
+
+#[tokio::test]
 async fn approved_app_install_rechecks_generator_gate_before_writing_fallback() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
         .file(
