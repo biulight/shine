@@ -45,6 +45,19 @@ pub struct SysItem {
     pub permissions: Option<PermissionDeclarationV1>,
 }
 
+impl SysItem {
+    /// Visibility and automatic bootstrap selection only, not installation support or permission.
+    pub fn matches_shell(&self, sys_shell: &str) -> bool {
+        self.mode == SysItemMode::Managed
+            || self.shell.is_empty()
+            || SysShellKind::from_runtime(sys_shell).is_some_and(|shell| {
+                self.shell
+                    .iter()
+                    .any(|integration| integration.shells.contains(&shell))
+            })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum SysDetection {

@@ -287,6 +287,11 @@ before installation; see [Arch preparation](../built-in-presets/system-bootstrap
 
 ### Shell integration: `[[items.shell]]` {#sys-shell}
 
+`shells` also controls default-list visibility and automatic bootstrap selection: any integration
+matching the target shell includes the item; items without integrations are unrestricted. Explicit
+item installation bypasses this filter. `when_command`, phase, and installation detection do not
+affect selection. These declarations do not extend the platform's [supported shells](../guides/system-init.md#platform-notes).
+
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `shells` | Required nonempty array | `bash`, `zsh`, or `powershell`. |

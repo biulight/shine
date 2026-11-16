@@ -32,7 +32,9 @@ shine sys list
 shine sys info neovim
 ```
 
-使用 `shine sys list --all` 可浏览其他平台的项目。各平台的项目与配置组合（profile）见
+默认列表会隐藏已声明 Shell 集成、但不匹配 Shine 当前目标 Shell 的安装项目。
+使用 `shine sys list --all` 查看完整目录和集成范围，`shine sys info <ITEM>` 也会说明项目是否匹配。
+各平台的项目与配置组合（profile）见
 [内置预设](../built-in-presets/index.md#系统预设)。
 
 预览想要安装的项目：
@@ -54,6 +56,10 @@ shine sys bootstrap neovim fzf --dry-run
 | 只安装 fzf | `shine sys bootstrap fzf` |
 | 依次安装 Neovim 和 fzf | `shine sys bootstrap neovim fzf` |
 | 使用命名组合 | `shine sys bootstrap --preset <PROFILE>` |
+
+交互候选和配置组合只保留匹配当前 Shell 的项目，以及未声明 Shell 集成的项目。
+显式指定项目 ID（包括 `--item`）会跳过此筛选；即使没有为当前 Shell 声明集成，也可以继续安装。
+使用 `--dry-run` 检查实际选中的项目。
 
 实际修改系统前，Shine 会显示操作计划并请求确认，默认为否。请检查改动、所需权限和恢复限制；
 需要更多详情时添加 `--verbose`。自定义脚本会以你的权限运行，没有沙箱隔离；请先审阅外部代码，

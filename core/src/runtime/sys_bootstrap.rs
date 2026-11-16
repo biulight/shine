@@ -68,6 +68,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             &request.requested,
             request.preset.as_deref(),
             request.interactive,
+            &request.sys_shell,
             interaction,
             observer,
         )?;

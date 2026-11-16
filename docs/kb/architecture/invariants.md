@@ -210,6 +210,8 @@ bugs. Check this list before changing the modules named in each entry.
   resulting enabled item set; nonempty bootstrap observes the existing enabled set it preserves,
   in addition to selected receipts. Pure PATH integrations can change composition without changing
   permissions or code boundaries, so those indirect observations cannot replace this binding.
+  An approved empty bootstrap ID list remains empty after approval revalidation; it must never
+  enter implicit default-profile selection or perform installer/profile/receipt writes.
 
 - **Shared SHA-256 encoding does not unify fingerprint protocols.** `digest.rs` hashes exact bytes
   and encodes 32-byte digests as 64 lowercase hexadecimal characters. Each caller owns its input
@@ -961,6 +963,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **Sys profile composition is activation-additive, not selection-replacing.** A targeted item or
   named selection profile enables successful item integrations but never disables previously
   enabled ones. Only `shine sys profile disable <ITEM>` removes that item's generated content.
+  Shell-based list/selection filtering never replaces the complete manifest: composition and Plan
+  binding retain unselected enabled integrations, rendering only those matching the target shell.
   Composition order is phase, explicit priority, manifest order, then integration order; failures
   must leave the last installed profile intact.
 

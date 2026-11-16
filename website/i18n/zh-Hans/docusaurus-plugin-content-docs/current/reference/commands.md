@@ -202,7 +202,8 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 
 `sys init` 刷新当前系统预设的启动配置，保留已启用的软件集成，无需安装软件。
 
-`sys list --all` 将其他操作系统标记为 `catalog only`（仅供浏览），只为当前系统显示 apply 提示。
+`sys list` 按当前 Shell 筛选安装项目；`sys list --all` 显示完整目录及 Shell 集成范围，
+将其他操作系统标记为 `catalog only`（仅供浏览），只为当前系统显示 apply 提示。
 `sys info`、`bootstrap`、`apply` 和 `uninstall` 始终按当前系统查找项目；其他系统存在同名项目时
 也不会切换查找范围。
 
@@ -217,7 +218,9 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 
 `bootstrap` 的位置参数按输入顺序选择项目，并忽略重复项；也可以重复使用 `--item`，例如
 `shine sys bootstrap --item rust --item mise --yes`。位置参数、`--item` 和 `--preset` 不能组合。
-非交互环境下，未指定项目或配置组合时使用预设的默认配置组合。
+非交互环境下，未指定项目或配置组合时使用预设的默认配置组合。交互候选、命名组合和默认组合
+会排除已声明集成但均不匹配当前 Shell 的项目；未声明集成的项目仍可选择。
+显式 ID 和 `--item` 跳过此筛选。有效选择经过筛选后为空时，正常结束，不安装任何项目。
 项目 ID 以 `-` 开头时，将选项放在 `--` 前、名称放在其后，例如
 `shine sys apply --dry-run -- -custom`。
 

@@ -17,6 +17,7 @@ impl<H> CoreRuntime<H> {
             requested,
             preset,
             interactive,
+            self.context().shell.into(),
             interaction,
             observer,
         )
@@ -28,6 +29,7 @@ pub(super) fn resolve_selection(
     requested: &[String],
     preset: Option<&str>,
     interactive: bool,
+    sys_shell: &str,
     interaction: &mut impl RuntimeInteraction,
     observer: &mut impl RuntimeObserver,
 ) -> Result<ResolvedSelection> {
@@ -61,7 +63,7 @@ pub(super) fn resolve_selection(
             .get(name)
             .with_context(|| format!("unknown sys bootstrap profile `{name}`"))?;
         return Ok(ResolvedSelection {
-            item_ids: profile.items.clone(),
+            item_ids: matching_items(manifest, &profile.items, sys_shell),
             source: SelectionSource::Profile(name.to_string()),
         });
     }
@@ -77,15 +79,22 @@ pub(super) fn resolve_selection(
         });
     }
     if interactive {
+        let choices = init_items
+            .iter()
+            .filter(|item| item.matches_shell(sys_shell))
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>();
+        if choices.is_empty() {
+            return Ok(ResolvedSelection {
+                item_ids: Vec::new(),
+                source: SelectionSource::Interactive,
+            });
+        }
         observer.emit(RuntimeEvent::Interaction {
             code: "sys_bootstrap_selection",
             target: manifest.default_profile.clone().unwrap_or_default(),
         });
-        let choices = init_items
-            .iter()
-            .map(|item| item.id.clone())
-            .collect::<Vec<_>>();
-        let defaults = default_selection(manifest);
+        let defaults = matching_items(manifest, &default_selection(manifest), sys_shell);
         let item_ids = interaction.select_many("Select system init items", &choices, &defaults)?;
         return Ok(ResolvedSelection {
             item_ids,
@@ -101,9 +110,24 @@ pub(super) fn resolve_selection(
         .get(name)
         .with_context(|| format!("unknown sys bootstrap profile `{name}`"))?;
     Ok(ResolvedSelection {
-        item_ids: profile.items.clone(),
+        item_ids: matching_items(manifest, &profile.items, sys_shell),
         source: SelectionSource::DefaultProfile(name.to_string()),
     })
+}
+
+// The complete manifest and selection names have already been validated. Keep their order;
+// never replace the manifest used for preserved integrations or approval with this projection.
+fn matching_items(manifest: &SysManifest, items: &[String], sys_shell: &str) -> Vec<String> {
+    items
+        .iter()
+        .filter(|id| {
+            manifest
+                .items
+                .iter()
+                .any(|item| item.id == **id && item.matches_shell(sys_shell))
+        })
+        .cloned()
+        .collect()
 }
 
 fn default_selection(manifest: &SysManifest) -> Vec<String> {
@@ -119,3 +143,6 @@ fn default_selection(manifest: &SysManifest) -> Vec<String> {
         .map(|item| item.id.clone())
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

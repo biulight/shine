@@ -4097,6 +4097,289 @@ target = "~/.config/plain.txt"
     fixture
 }
 
+async fn sys_shell_selection_fixture() -> (Fixture, String) {
+    let fixture = sys_output_fixture();
+    // Ordinary CLI setup ensures the bin directory even for list/preview commands.
+    fs::create_dir_all(fixture.0.join("state/bin")).unwrap();
+    let os = cli::sys::detect_os_id().await.unwrap();
+    let preset = fixture.0.join("state/presets/sys").join(&os);
+    fs::create_dir_all(&preset).unwrap();
+    let provider = match os.as_str() {
+        "windows" => "winget",
+        "arch" => "pacman",
+        "ubuntu" => "apt",
+        _ => "homebrew",
+    };
+    let mut metadata = "version = 2\ndefault_profile = 'recommended'\n".to_string();
+    for (id, shells) in [
+        ("plain", ""),
+        ("zsh-only", "['zsh']"),
+        ("shared", "['bash', 'powershell']"),
+    ] {
+        metadata.push_str(&format!(
+            "[[items]]\nid = '{id}'\nlabel = '{id}'\ndetect = {{ kind = 'path', path = '~/.present' }}\ninstall = {{ kind = 'package', provider = '{provider}', package = '{id}' }}\n"
+        ));
+        if !shells.is_empty() {
+            metadata.push_str(&format!(
+                "[[items.shell]]\nshells = {shells}\nphase = 'post'\npath = '$HOME/{id}/bin'\n"
+            ));
+        }
+    }
+    metadata.push_str("[[items]]\nid = 'managed'\nlabel = 'Managed retained'\nmode = 'managed'\ndriver = 'managed-file'\n[items.config]\nsource = 'managed.txt'\ntarget = '~/.config/managed.txt'\n[profiles.recommended]\nitems = ['shared', 'zsh-only', 'plain']\n[profiles.zsh]\nitems = ['zsh-only']\n");
+    fs::write(preset.join("shine.toml"), metadata).unwrap();
+    fs::write(preset.join("managed.txt"), "fixture\n").unwrap();
+    fs::write(fixture.0.join("home/.present"), "already installed\n").unwrap();
+    for domain in ["app", "shell"] {
+        fs::create_dir_all(fixture.0.join("state/presets").join(domain)).unwrap();
+    }
+    (fixture, os)
+}
+
+#[tokio::test]
+async fn sys_shell_selection_filters_all_available_list_routes_but_keeps_full_lookup() {
+    let (fixture, os) = sys_shell_selection_fixture().await;
+    let mut receipts = shine_core::runtime::SysRunManifest::default();
+    receipts.entries.push(shine_core::runtime::SysRunEntry {
+        os_id: os,
+        item_id: "zsh-only".into(),
+        label: "zsh-only".into(),
+        status: shine_core::runtime::SysItemStatus::Installed,
+        detail: String::new(),
+        updated_at: "fixture".into(),
+        managed: false,
+        profile_enabled: true,
+        receipt: None,
+    });
+    let receipt_path = fixture.0.join("state/sys-manifest.toml");
+    fs::write(&receipt_path, toml::to_string(&receipts).unwrap()).unwrap();
+    let before = upgrade_tree_state(&fixture.0);
+    for args in [
+        vec!["sys", "list"],
+        vec!["list", "--available", "sys"],
+        vec!["list", "--available"],
+        vec!["sys", "list", "--all"],
+        vec!["sys", "info", "zsh-only"],
+        vec!["info", "sys/zsh-only"],
+        vec!["sys", "status"],
+    ] {
+        let out = fixture
+            .command()
+            .env("SHELL", "/bin/bash")
+            .env("NO_COLOR", "1")
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        let text = String::from_utf8(out.stdout).unwrap();
+        let filtered = args == ["sys", "list"] || args.contains(&"--available");
+        assert_eq!(text.contains("zsh-only"), !filtered, "{args:?}: {text}");
+        if filtered {
+            for expected in ["plain", "shared", "Managed retained"] {
+                assert!(text.contains(expected), "{args:?}: {text}");
+            }
+        }
+        if args.contains(&"--all") {
+            assert!(text.contains("Shell integration: zsh"), "{text}");
+            assert!(
+                text.contains("unrestricted (no integration declared)"),
+                "{text}"
+            );
+        }
+        if args.contains(&"info") {
+            assert!(
+                text.contains("excluded from automatic selection; explicit installation allowed"),
+                "{text}"
+            );
+        }
+    }
+    assert_eq!(upgrade_tree_state(&fixture.0), before);
+}
+
+#[tokio::test]
+async fn sys_shell_selection_preview_and_approved_execution_keep_items_order_and_source() {
+    for (args, source, selected) in [
+        (
+            vec![],
+            "default profile `recommended`",
+            vec!["shared", "plain"],
+        ),
+        (
+            vec!["--preset", "recommended"],
+            "profile `recommended`",
+            vec!["shared", "plain"],
+        ),
+        (
+            vec!["zsh-only", "plain", "zsh-only"],
+            "explicit items",
+            vec!["zsh-only", "plain"],
+        ),
+        (
+            vec!["--item", "zsh-only", "--item", "plain"],
+            "explicit items",
+            vec!["zsh-only", "plain"],
+        ),
+    ] {
+        let (fixture, _) = sys_shell_selection_fixture().await;
+        for dry_run in [true, false] {
+            let mut command = fixture.command();
+            command
+                .env("SHELL", "/bin/bash")
+                .env("NO_COLOR", "1")
+                .args(["sys", "bootstrap"])
+                .args(&args)
+                .arg(if dry_run { "--dry-run" } else { "--yes" });
+            let out = command.output().unwrap();
+            assert!(out.status.success(), "{args:?}/{dry_run}: {out:?}");
+            let text = String::from_utf8(out.stdout).unwrap();
+            assert!(text.contains(&format!("Selection: {source}")), "{text}");
+            assert!(text.contains(&selected.join(", ")), "{text}");
+            assert_eq!(
+                text.contains("Explicit installation continues for zsh-only"),
+                source == "explicit items",
+                "{text}"
+            );
+            let receipt = fixture.0.join("state/sys-manifest.toml");
+            if dry_run {
+                assert!(!receipt.exists());
+            } else {
+                let receipt: shine_core::runtime::SysRunManifest =
+                    toml::from_str(&fs::read_to_string(receipt).unwrap()).unwrap();
+                assert_eq!(
+                    receipt
+                        .entries
+                        .iter()
+                        .map(|e| e.item_id.as_str())
+                        .collect::<Vec<_>>(),
+                    selected
+                );
+                assert!(
+                    receipt
+                        .entries
+                        .iter()
+                        .all(|e| e.status == shine_core::runtime::SysItemStatus::AlreadyInstalled)
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn sys_shell_selection_empty_batch_does_not_write_or_mask_invalid_selection() {
+    let (fixture, os) = sys_shell_selection_fixture().await;
+    let before = upgrade_tree_state(&fixture.0);
+    for dry_run in [true, false] {
+        let out = fixture
+            .command()
+            .env("SHELL", "/bin/bash")
+            .env("NO_COLOR", "1")
+            .args(["sys", "bootstrap", "--preset", "zsh"])
+            .arg(if dry_run { "--dry-run" } else { "--yes" })
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.contains("profile `zsh`"), "{text}");
+        assert!(
+            text.contains(if dry_run {
+                "Items: (none)"
+            } else {
+                "No sys bootstrap items selected"
+            }),
+            "{text}"
+        );
+        assert_eq!(upgrade_tree_state(&fixture.0), before);
+    }
+    let path = fixture
+        .0
+        .join("state/presets/sys")
+        .join(os)
+        .join("shine.toml");
+    let mut metadata: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    metadata.remove("default_profile");
+    metadata
+        .get_mut("items")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["id"].as_str() == Some("zsh-only"));
+    metadata
+        .get_mut("profiles")
+        .unwrap()
+        .as_table_mut()
+        .unwrap()
+        .remove("recommended");
+    fs::write(&path, toml::to_string(&metadata).unwrap()).unwrap();
+    for (args, error) in [
+        (vec![], "requires `default_profile`"),
+        (vec!["--preset", "missing"], "unknown sys bootstrap profile"),
+        (vec!["missing"], "unknown sys bootstrap item"),
+    ] {
+        for mode in ["--dry-run", "--yes"] {
+            let out = fixture
+                .command()
+                .env("SHELL", "/bin/bash")
+                .env("NO_COLOR", "1")
+                .args(["sys", "bootstrap", mode])
+                .args(&args)
+                .output()
+                .unwrap();
+            assert!(!out.status.success(), "{args:?}: {out:?}");
+            assert!(
+                String::from_utf8_lossy(&out.stderr).contains(error),
+                "{out:?}"
+            );
+        }
+    }
+    assert!(!fixture.0.join("state/sys-manifest.toml").exists());
+}
+
+#[tokio::test]
+async fn sys_shell_selection_empty_source_encodes_profile_controls() {
+    let (fixture, os) = sys_shell_selection_fixture().await;
+    let path = fixture
+        .0
+        .join("state/presets/sys")
+        .join(os)
+        .join("shine.toml");
+    let mut metadata: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let name = "profile\nFORGED=source\r\t\u{1b}";
+    let profiles = metadata
+        .get_mut("profiles")
+        .unwrap()
+        .as_table_mut()
+        .unwrap();
+    let profile = profiles.remove("zsh").unwrap();
+    profiles.insert(name.into(), profile);
+    metadata.insert("default_profile".into(), toml::Value::String(name.into()));
+    fs::write(path, toml::to_string(&metadata).unwrap()).unwrap();
+    let before = upgrade_tree_state(&fixture.0);
+    for explicit in [false, true] {
+        for mode in ["--dry-run", "--yes"] {
+            let mut command = fixture.command();
+            command
+                .env("SHELL", "/bin/bash")
+                .env("NO_COLOR", "1")
+                .args(["sys", "bootstrap", mode]);
+            if explicit {
+                command.args(["--preset", name]);
+            }
+            let out = command.output().unwrap();
+            assert!(out.status.success(), "{out:?}");
+            let text = String::from_utf8(out.stdout).unwrap();
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(
+                !text.lines().any(|line| line.starts_with("FORGED=")),
+                "{text:?}"
+            );
+            assert!(
+                text.contains(r"profile\nFORGED=source\r\t\u{1b}"),
+                "{text:?}"
+            );
+            assert_eq!(upgrade_tree_state(&fixture.0), before);
+        }
+    }
+}
+
 #[tokio::test]
 async fn sys_info_encodes_recorded_detail_preserving_failed_status_and_bytes() {
     let fixture = sys_output_fixture();
