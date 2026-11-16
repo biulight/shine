@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-11-17 — App install must plan the generator fallback when its gate is absent
+
+- **Symptom**: Surge install with only the primary subscription configured was blocked by
+  `secret_input_identity_unavailable` for the optional WGet Cloud subscription.
+- **Cause**: the installer checked `when_env` before executing a generator, but the Plan
+  requested its secret identity and script permissions even when execution would use the fallback.
+- **Rule**: bind the missing gate to the install Plan, assess the static fallback, and require
+  opaque secret identities for enabled generators. Revalidate before writing so enabling a
+  generator after review invalidates the old approval.
+
 ## 2026-11-16 — Empty reviewed bootstrap IDs cannot mean implicit selection
 
 - **Symptom**: Core accepted an empty bootstrap Plan, then executed default-profile items because

@@ -1,5 +1,6 @@
 //! App planning regressions.
 use super::*;
+use crate::runtime::NullObserver;
 
 #[tokio::test]
 async fn modified_generated_file_stops_before_generator_input_and_relocation_planning() {
@@ -342,6 +343,127 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sen
     let encoded = serde_json::to_string(&ready).unwrap();
     assert!(!encoded.contains("top-secret-value"));
     assert!(!encoded.contains("vault-revision-7"));
+}
+
+#[tokio::test]
+async fn approved_app_install_rechecks_generator_gate_before_writing_fallback() {
+    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+        .file(
+            "app/demo/shine.toml",
+            br#"dest = '~/.config/demo'
+[permissions]
+schema_version = 1
+commands = ['bun']
+filesystem = [{ access = ['execute'], base = 'preset', path = 'gen.ts' }]
+environment = [{ name = 'LABEL', sensitivity = 'plain' }]
+[[files]]
+source = 'config.txt'
+transforms = ['template']
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sensitivity = 'secret' }], when_env = 'TOKEN' }
+"#
+            .to_vec(),
+        )
+        .file("app/demo/config.txt", b"fallback for @@LABEL@@".to_vec())
+        .file("app/demo/gen.ts", b"process.stdout.write('generated')".to_vec())
+        .build();
+    let mut runtime = runtime(snapshot);
+    runtime
+        .context_mut_for_test()
+        .env
+        .insert("LABEL".into(), "demo".into());
+    let destination = runtime.context().home_dir.join(".config/demo/config.txt");
+    let backup = crate::install::backup_path(&destination);
+    runtime.host().put_file(&destination, b"original".to_vec());
+    let request = AppPlanRequest {
+        operation: LifecycleOperation::Install,
+        target: Some("demo".into()),
+        force: false,
+        purge: false,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let plan = runtime.plan_apps(request.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    assert!(plan.code_boundaries.is_empty());
+    assert!(
+        plan.permissions
+            .required
+            .contains(&PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: review_path(runtime.context(), &backup),
+            })
+    );
+
+    let mut context = runtime.context().clone();
+    context.env.insert("TOKEN".into(), "new-value".into());
+    let changed = CoreRuntime::new(runtime.host().clone(), context, runtime.presets().clone());
+    let mut changed_request = request.clone();
+    changed_request
+        .input_versions
+        .insert_secret_version("TOKEN", OpaqueSecretVersion::new("new-version"));
+    let changed_plan = changed.plan_apps(changed_request.clone()).await.unwrap();
+    assert!(changed_plan.is_ready(), "{changed_plan:?}");
+    let since = changed.host().operations().len();
+    let error = changed
+        .install_apps_approved(
+            changed_request,
+            &approval,
+            &mut NullObserver,
+            &mut Interaction,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<crate::plan::PlanApprovalError>(),
+        Some(&crate::plan::PlanApprovalError::PermissionSetChanged)
+    );
+    assert!(
+        changed.host().operations()[since..]
+            .iter()
+            .all(|operation| matches!(
+                operation,
+                HostOperation::Read(_) | HostOperation::AcquireOperationLock(_)
+            ))
+    );
+
+    runtime
+        .install_apps_approved(
+            request.clone(),
+            &approval,
+            &mut NullObserver,
+            &mut Interaction,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        b"fallback for demo"
+    );
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), b"original");
+    runtime.host().remove_file(&destination).await.unwrap();
+    let restored_plan = runtime.plan_apps(request.clone()).await.unwrap();
+    let restored_approval = PlanApprovalV1::for_reviewed_plan(&restored_plan).unwrap();
+    runtime
+        .install_apps_approved(
+            request,
+            &restored_approval,
+            &mut NullObserver,
+            &mut Interaction,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        b"fallback for demo"
+    );
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), b"original");
+    assert!(
+        !runtime
+            .host()
+            .operations()
+            .iter()
+            .any(|operation| matches!(operation, HostOperation::Run { .. }))
+    );
 }
 
 #[tokio::test]

@@ -1050,8 +1050,12 @@ rollback is introduced (ADR 0130).
 
 The execution and reporting rules remain:
 
-1. `shine app install` always materializes first, then reuses the normal
-   manifest hash and atomic file installer.
+1. The `shine app install` Plan binds the generator's `when_env` gate to approval.
+   A missing key selects the static fallback and omits the generator's execution steps and
+   input requirements. An enabled generator still requires identities for its secret inputs.
+   The CLI verifies the captured environment layers before applying an approved install.
+   Install materializes enabled generators before applying files, using the normal manifest hash
+   and atomic file installer for the resulting content.
 2. `auto` defaults to true; automatic generators may materialize during an approved
    `shine upgrade`. Ordinary status/update reports `app_generator_not_evaluated` when dynamic
    output cannot be known without execution. `info`/`update --run-generators` executes selected

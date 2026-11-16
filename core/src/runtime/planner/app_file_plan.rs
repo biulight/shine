@@ -69,12 +69,21 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             steps,
         };
         if let Some(generator) = &file.generator {
-            self.plan_generated_app_file(file, generator, inputs, observed, &mut planning)
-                .await
-        } else {
-            self.plan_static_app_file(file, inputs, observed, &mut planning)
-                .await
+            if inputs.request.operation == LifecycleOperation::Install
+                && !self.context().env.contains_key(&generator.when_env)
+            {
+                planning.state.public(
+                    format!("app-generator-gate:{}", generator.when_env),
+                    "missing",
+                )?;
+            } else {
+                return self
+                    .plan_generated_app_file(file, generator, inputs, observed, &mut planning)
+                    .await;
+            }
         }
+        self.plan_static_app_file(file, inputs, observed, &mut planning)
+            .await
     }
 
     async fn observe_app_file<'a>(
