@@ -6,7 +6,7 @@ use super::{
 };
 use crate::install::AppInstallStrategy;
 use crate::permission::PermissionDeclarationV1;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -158,6 +158,7 @@ struct GeneratorToml {
     when_env: String,
     #[serde(default = "default_true")]
     auto: bool,
+    fallback: Option<Box<GeneratorToml>>,
 }
 
 fn default_true() -> bool {
@@ -282,15 +283,18 @@ impl<H> CoreRuntime<H> {
                 let install_strategy = install_strategy(&file, &metadata_path)?;
                 let generator = generator(file.generator, &metadata_path, &mut permissions)?;
                 if let Some(generator) = &generator {
-                    let generator_path = format!("{prefix}{}", logical(&generator.script));
-                    if self.presets().get(&generator_path).is_none() {
-                        bail!(MetadataDiagnosticError::new(
-                            MetadataDiagnosticKind::MissingReference,
-                            format!(
-                                "app/{name}/shine.toml references missing generator script: {}",
-                                generator.script.display()
-                            ),
-                        ));
+                    for generator in std::iter::once(generator).chain(generator.fallback.as_deref())
+                    {
+                        let generator_path = format!("{prefix}{}", logical(&generator.script));
+                        if self.presets().get(&generator_path).is_none() {
+                            bail!(MetadataDiagnosticError::new(
+                                MetadataDiagnosticKind::MissingReference,
+                                format!(
+                                    "app/{name}/shine.toml references missing generator script: {}",
+                                    generator.script.display()
+                                ),
+                            ));
+                        }
                     }
                 }
                 resolved.push(AppFile {
@@ -619,12 +623,27 @@ fn generator(
             value.when_env
         );
     }
+    if let Some(fallback) = &value.fallback {
+        ensure!(
+            fallback.fallback.is_none()
+                && fallback.when_env != value.when_env
+                && fallback.auto == value.auto,
+            "{context}: generator.fallback must use a different when_env, the same auto, and no nested fallback"
+        );
+    }
+    let fallback = generator(
+        value.fallback.map(|fallback| *fallback),
+        context,
+        permissions,
+    )?
+    .map(Box::new);
     Ok(Some(AppGenerator {
         script,
         runtime,
         env,
         when_env: value.when_env,
         auto: value.auto,
+        fallback,
     }))
 }
 

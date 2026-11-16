@@ -121,7 +121,11 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
             entry,
         } = selected;
         let source = &file.source_rel;
-        let generator = file.generator.clone().expect("selected generated App file");
+        let generator = file
+            .generator
+            .as_ref()
+            .expect("selected generated App file")
+            .selected(&self.context.env);
 
         if !self.context.env.contains_key(&generator.when_env) {
             bail!(
@@ -135,7 +139,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                 AppGeneratorRequest {
                     category: request.category.clone(),
                     source: source.display().to_string(),
-                    generator,
+                    generator: generator.clone(),
                     explicit: true,
                 },
                 observer,

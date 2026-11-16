@@ -75,6 +75,7 @@ fn generator(explicit: bool) -> AppGeneratorRequest {
             env: mappings(),
             when_env: "ENABLE".into(),
             auto: false,
+            fallback: None,
         },
     }
 }

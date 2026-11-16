@@ -53,10 +53,14 @@ fallback. Other groups may use `include-other-group=Subscription`.
 - `shine install`, `shine update --run-generators`, and `shine upgrade` refresh remote desired state
   while update preserves its no-write contract.
 - User-owned local proxy definitions remain independent from generated nodes.
-- The generator requires Bun only when a file's declared subscription URL enables it. The default
-  file reads `SURGE_SUBSCRIPTION_URL`; the WGet Cloud file maps
-  `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` into that script variable.
+- The default file reads `SURGE_SUBSCRIPTION_URL`; the wGetCloud file maps
+  `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` into that script variable. When that wGetCloud URL is
+  absent, its alternate Bun generator can read the cache file at `W_GET_CLOUD_SURGE_CACHE_SOURCE`
+  and emit the native policy lines offline. A profile filename selects a file in the user's
+  Surge Profiles directory. Lookup requires one distinct remote include across `[Proxy]` and
+  `[Proxy Group]` and derives `.managed/<md5>.conf` from the original URL spelling, following
+  the observed Surge macOS layout. A missing exact match fails without scanning other caches.
   Separately, ADR 0017's explicit Surge build/unbuild artifacts also use Bun.
-- Removing the URL restores static fallback behavior; uninstall continues to be
+- With neither input configured, generated files use the static source. Uninstall continues to be
   driven solely by the app manifest.
 - Artifact scripts and teardown semantics from ADRs 0009/0012 are unchanged.

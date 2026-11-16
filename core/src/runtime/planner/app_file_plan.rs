@@ -69,6 +69,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             steps,
         };
         if let Some(generator) = &file.generator {
+            let generator = generator.selected(&self.context().env);
             if inputs.request.operation == LifecycleOperation::Install
                 && !self.context().env.contains_key(&generator.when_env)
             {

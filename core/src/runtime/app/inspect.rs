@@ -104,7 +104,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     self.app_external_source_kinds(&inspection.category.name);
             }
             if mode == AppInspectionMode::Evaluated
-                && let Some(generator) = &inspection.file.generator
+                && let Some(generator) = inspection
+                    .file
+                    .generator
+                    .as_ref()
+                    .map(|generator| generator.selected(&self.context().env))
                 && self.context().env.contains_key(&generator.when_env)
             {
                 inspection.code_analysis = Some(

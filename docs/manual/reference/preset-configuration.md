@@ -139,8 +139,9 @@ and contain no `..`. New presets should declare `dest` and `target` in metadata.
 | `env` | Required nonempty array | [Inputs](#environment-inputs) supplied to this generator, including its `when_env` source. |
 | `when_env` | Required string | Run only when this source name is present in Shine's environment; it must also appear in this generator's `env`. |
 | `auto` | `true` | Permit generation during upgrade. With `false`, use explicit installation or refresh; ordinary update/upgrade does not fetch fresh generated content. |
+| `fallback` | None | An alternate generator used when the primary `when_env` is absent and its own `when_env` is present. It requires a different trigger and the same `auto` value. Nesting is unsupported. |
 
-Without the trigger, Shine uses the source file. Inspection does not run code unless explicitly
+Without an enabled generator, Shine uses the source file. Inspection does not run code unless explicitly
 requested. Generation still requires approval or trust; failure preserves the last successful
 installed content. See [refreshing generated files](../guides/app-presets.md).
 

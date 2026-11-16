@@ -581,6 +581,146 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
     }
 
     #[tokio::test]
+    async fn refresh_wgetcloud_keeps_the_installed_output_after_cache_resolution_failure() {
+        if std::process::Command::new("bun")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("Skipping wGetCloud execution test: Bun unavailable");
+            return;
+        }
+        let root = crate::test_support::make_temp_dir("shine-wgetcloud-refresh").await;
+        let mut config = Config::new_for_test(&root);
+        config.is_external_presets = true;
+        let profiles = root.join("Profiles");
+        let managed = profiles.join(".managed");
+        fs::create_dir_all(&managed).await.unwrap();
+        let profile = profiles.join("WgetCloud.conf");
+        let reference = "https://Provider.Example:443/link/test?token=fake%2fvalue";
+        let cache = managed.join("f0deaab2b6108f06d6fd889d95bcb7fe.conf");
+        fs::write(&profile, format!("[Proxy]\n#!include {reference}\n"))
+            .await
+            .unwrap();
+        let node = "Test = trojan, example.invalid, 443, password=example";
+        fs::write(
+            &cache,
+            format!("[Proxy]\n{node}\n[Proxy Group]\n🚀 节点选择 = select, Test, DIRECT\n"),
+        )
+        .await
+        .unwrap();
+        config.env.insert(
+            "W_GET_CLOUD_SURGE_CACHE_SOURCE".into(),
+            "WgetCloud.conf".into(),
+        );
+        // Use the real generator metadata and scripts, with an isolated destination and no Surge hooks.
+        let mut metadata: toml::Value =
+            toml::from_str(include_str!("../../../presets/app/surge/shine.toml")).unwrap();
+        let table = metadata.as_table_mut().unwrap();
+        for name in ["artifact", "post_install", "post_upgrade"] {
+            table.remove(name);
+        }
+        table.insert("dest".into(), root.join("dest").to_str().unwrap().into());
+        let files = table.get_mut("files").unwrap().as_array_mut().unwrap();
+        files.retain(|file| file["source"].as_str() == Some("sub/wget-cloud-proxies.conf"));
+        assert_eq!(files.len(), 1);
+        let app = config.presets_dir().join("app/surge");
+        fs::create_dir_all(app.join("sub")).await.unwrap();
+        for (path, bytes) in [
+            (
+                "generate-subscription.ts",
+                include_str!("../../../presets/app/surge/generate-subscription.ts"),
+            ),
+            (
+                "cache-generator.ts",
+                include_str!("../../../presets/app/surge/generate-wgetcloud-cache.ts"),
+            ),
+            (
+                "sub/wget-cloud-proxies.conf",
+                include_str!("../../../presets/app/surge/sub/wget-cloud-proxies.conf"),
+            ),
+        ] {
+            fs::write(app.join(path), bytes).await.unwrap();
+        }
+        // Replace only the Profiles directory lookup in the fixture entry point.
+        fs::write(
+            app.join("generate-wgetcloud-cache.ts"),
+            format!(
+                "import {{ runCacheGenerator }} from './cache-generator.ts';\nawait runCacheGenerator(process.env.W_GET_CLOUD_SURGE_CACHE_SOURCE, {});\n",
+                serde_json::to_string(&profiles).unwrap()
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(app.join("shine.toml"), toml::to_string(&metadata).unwrap())
+            .await
+            .unwrap();
+        crate::trust::grant_current_for_test(&config, "app/surge").await;
+        handle_install_approved(&config, Some("surge"), false, false, true)
+            .await
+            .unwrap();
+        let output = root.join("dest/wget-cloud-proxies.conf");
+        let installed = format!("{node}\n");
+        assert_eq!(fs::read_to_string(&output).await.unwrap(), installed);
+
+        config.env.insert(
+            "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL".into(),
+            "http://example.invalid/subscription".into(),
+        );
+        // Invalid before any network access. The still valid cache must not take over.
+        assert!(
+            handle_refresh_approved(
+                &config,
+                "surge",
+                Some("sub/wget-cloud-proxies.conf"),
+                false,
+                true,
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(fs::read_to_string(&output).await.unwrap(), installed);
+        config.env.remove("W_GET_CLOUD_SURGE_SUBSCRIPTION_URL");
+
+        fs::write(
+            &profile,
+            format!("[Proxy]\n#!include {reference}\n[General]\n[Proxy Group] # provider groups\n#!include https://other.invalid/link\n"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            handle_refresh_approved(
+                &config,
+                "surge",
+                Some("sub/wget-cloud-proxies.conf"),
+                false,
+                true,
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(fs::read_to_string(&output).await.unwrap(), installed);
+
+        fs::write(&profile, format!("[Proxy]\n#!include {reference}\n"))
+            .await
+            .unwrap();
+        fs::remove_file(cache).await.unwrap();
+        assert!(
+            handle_refresh_approved(
+                &config,
+                "surge",
+                Some("sub/wget-cloud-proxies.conf"),
+                false,
+                true,
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(fs::read_to_string(&output).await.unwrap(), installed);
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn refresh_requires_the_generator_condition_env() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
         let mut config = write_fixture(&root, false).await;

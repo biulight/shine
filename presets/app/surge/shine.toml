@@ -73,5 +73,5 @@ generator = { script = "generate-subscription.ts", runtime = "bun", env = [{ sou
 [[files]]
 source = "sub/wget-cloud-proxies.conf"
 target = "wget-cloud-proxies.conf"
-description = "SS/VMess/Trojan policies generated from W_GET_CLOUD_SURGE_SUBSCRIPTION_URL."
-generator = { script = "generate-subscription.ts", runtime = "bun", env = [{ source = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", target = "SURGE_SUBSCRIPTION_URL", sensitivity = "secret" }], when_env = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", auto = false }
+description = "wGetCloud policies generated from a subscription URL or a local Surge cache."
+generator = { script = "generate-subscription.ts", runtime = "bun", env = [{ source = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", target = "SURGE_SUBSCRIPTION_URL", sensitivity = "secret" }], when_env = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", auto = false, fallback = { script = "generate-wgetcloud-cache.ts", runtime = "bun", env = [{ source = "W_GET_CLOUD_SURGE_CACHE_SOURCE", sensitivity = "plain" }], when_env = "W_GET_CLOUD_SURGE_CACHE_SOURCE", auto = false } }
