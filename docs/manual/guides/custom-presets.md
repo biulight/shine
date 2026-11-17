@@ -385,7 +385,7 @@ and `shine sys info <ITEM>`, then preview with `shine sys bootstrap <ITEM> --dry
 For initialization alone, declare `version = 2` in `sys/<os>/shine.toml` without adding items.
 Write startup configuration in `profile/base.pre.sh` (loaded before user startup configuration)
 or `profile/base.post.sh` (loaded afterwards); use `.ps1` on Windows. Follow the
-[initialization refresh steps](./system-init.md#refresh-initialization) to preview and apply.
+[startup configuration steps](./system-init.md#refresh-initialization) for first use and later updates.
 
 ## Application artifact runtimes
 

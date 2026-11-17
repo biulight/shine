@@ -8,9 +8,10 @@ sidebar_position: 3
 使用系统预设，可以在 macOS、Ubuntu、Arch Linux 或 Windows 上安装选定的开发工具，并启用相应的 Shell
 集成。Shine 也能单独管理私有 DNS 等系统设置，第三方软件的日常更新仍由包管理器或上游工具负责。
 
-## 单独刷新初始化配置 {#refresh-initialization}
+## 应用系统启动配置 {#refresh-initialization}
 
-修改系统预设的启动配置后，运行以下命令更新配置，保留已启用的软件集成：
+仅安装 Shine 不会启用系统预设的启动配置。首次使用这些配置，或修改配置后，运行以下命令
+预览并应用。此操作不安装软件，并保留已有的软件集成：
 
 ```bash
 shine sys init --dry-run

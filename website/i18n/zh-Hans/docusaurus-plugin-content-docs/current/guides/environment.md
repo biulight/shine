@@ -103,7 +103,8 @@ PROXY_HOST = { value = "127.0.0.1", description = "本地代理主机" }
 
 可用的值格式、说明和覆盖顺序见[配置参考](../reference/configuration.md#env-条目格式与说明)。
 
-修改用于模板渲染的值后，运行：
+首次使用时，先设置预设所需的变量，再安装 [Shell](./shell-presets.md) 或 [App](./app-presets.md)
+预设。修改模板变量后，要更新已安装的预设，运行：
 
 ```bash
 shine upgrade

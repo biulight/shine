@@ -217,8 +217,8 @@ shine sys apply [ITEM] [--dry-run] [--yes] [--verbose]
 shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
 
-`sys init` refreshes startup configuration from the current system preset, preserving enabled
-software integrations without installing software.
+`sys init` applies startup configuration from the current system preset for first use or updates
+it after edits, preserving enabled software integrations without installing software.
 
 `sys list` filters installation items by the current shell; `sys list --all` shows the full catalog
 with shell integration ranges. It marks other operating systems as `catalog only` and shows apply hints only for

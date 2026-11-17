@@ -111,7 +111,8 @@ PROXY_HOST = { value = "127.0.0.1", description = "Local proxy host" }
 For accepted value formats, descriptions, and precedence, see the
 [configuration reference](../reference/configuration.md#environment-entry-formats-and-descriptions).
 
-After changing a value used by template rendering, run:
+For first use, install the [Shell](./shell-presets.md) or [App](./app-presets.md) preset after
+setting its required values. To apply changed template values to already installed presets, run:
 
 ```bash
 shine upgrade
