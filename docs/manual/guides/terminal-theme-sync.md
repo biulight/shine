@@ -25,8 +25,10 @@ non-essential messages but still reports configuration errors.
 
 ## Synchronize in a managed profile
 
-After `shine sys bootstrap`, managed macOS, Ubuntu, and Arch Linux profiles invoke synchronization automatically.
-Disable it through either mechanism:
+To enable automatic synchronization with the built-in macOS, Ubuntu, or Arch Linux preset,
+[apply its startup configuration](./system-init.md#refresh-initialization) with `shine sys init`,
+then open a new shell. Bootstrap also applies this configuration when setting up software.
+Disable automatic synchronization through either mechanism:
 
 ```toml title="~/.shine/config.toml"
 sync_terminal_theme = false

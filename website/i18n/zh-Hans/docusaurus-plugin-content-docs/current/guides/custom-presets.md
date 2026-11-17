@@ -353,8 +353,7 @@ pacman 数据库；bootstrap 前应先完成全系统更新，见 [Arch Linux �
 
 只提供初始化配置时，`sys/<os>/shine.toml` 中声明 `version = 2`，无需添加 items。
 将启动配置写入 `profile/base.pre.sh`（用户启动配置之前加载）或 `profile/base.post.sh`
-（之后加载）；Windows 使用 `.ps1`。按[初始化配置刷新步骤](./system-init.md#refresh-initialization)
-预览并应用。
+（之后加载）；Windows 使用 `.ps1`。按[应用系统启动配置](./system-init.md#refresh-initialization)中的步骤首次应用或更新配置。
 
 ## App 构建脚本运行时
 

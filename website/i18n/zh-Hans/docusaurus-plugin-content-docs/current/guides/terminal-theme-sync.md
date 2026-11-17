@@ -21,7 +21,9 @@ Shine 优先使用已有的 `SHINE_TERMINAL_THEME` 或 `COLORFGBG`，再尝试�
 
 ## 在受管 profile 中自动同步
 
-运行 `shine sys bootstrap` 后，macOS、Ubuntu 和 Arch Linux 的受管 profile 会自动调用同步。可通过任一种方式关闭：
+使用内置 macOS、Ubuntu 或 Arch Linux 预设时，先用 `shine sys init`
+[应用系统启动配置](./system-init.md#refresh-initialization)，再打开新的 Shell，即可启用自动同步。
+通过 bootstrap 配置软件时也会应用这些配置。可通过任一种方式关闭自动同步：
 
 ```toml title="~/.shine/config.toml"
 sync_terminal_theme = false

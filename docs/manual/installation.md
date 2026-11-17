@@ -31,7 +31,7 @@ To choose a destination or version, first download the script, then choose an in
 ```bash
 curl -fsSLo install.sh https://github.com/biulight/shine/releases/latest/download/install.sh
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.10.0 sh install.sh
+SHINE_VERSION=2.11.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -49,7 +49,7 @@ To choose a destination or version, first download the script, then choose an in
 ```powershell
 Invoke-WebRequest https://github.com/biulight/shine/releases/latest/download/install.ps1 -OutFile install.ps1
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.10.0"; .\install.ps1
+$env:SHINE_VERSION = "2.11.0"; .\install.ps1
 ```
 
 ## Install preview

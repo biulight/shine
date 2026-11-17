@@ -200,7 +200,7 @@ shine sys apply [ITEM] [--dry-run] [--yes] [--verbose]
 shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
 
-`sys init` 刷新当前系统预设的启动配置，保留已启用的软件集成，无需安装软件。
+`sys init` 首次应用或更新当前系统预设的启动配置，保留已有的软件集成，不安装软件。
 
 `sys list` 按当前 Shell 筛选安装项目；`sys list --all` 显示完整目录及 Shell 集成范围，
 将其他操作系统标记为 `catalog only`（仅供浏览），只为当前系统显示 apply 提示。

@@ -9,10 +9,11 @@ Use system presets to install selected development tools on macOS, Ubuntu, Arch 
 and enable their shell integration. Shine can also manage system settings such as private DNS separately.
 Ongoing software updates remain the responsibility of the package manager or upstream tool.
 
-## Refresh initialization {#refresh-initialization}
+## Apply shell startup configuration {#refresh-initialization}
 
-After editing your system preset's startup configuration, refresh it while preserving enabled
-software integrations:
+Installing Shine alone does not enable the system preset's startup configuration. For first use
+or after editing that configuration, preview and apply it with the following commands. This
+installs no software and preserves any enabled software integrations:
 
 ```bash
 shine sys init --dry-run

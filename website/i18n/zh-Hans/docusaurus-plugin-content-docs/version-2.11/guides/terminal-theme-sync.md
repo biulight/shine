@@ -1,0 +1,43 @@
+---
+title: 同步终端主题
+sidebar_position: 7
+---
+
+# 同步终端主题
+
+在 macOS、Ubuntu 或 Arch Linux 的受管 shell profile 中，Shine 可以自动判断终端背景是浅色还是深色，并导出 `SHINE_TERMINAL_THEME=light|dark`。同时会为未自行设置的 `BAT_THEME` 选择 `GitHub`（浅色）或 `OneHalfDark`（深色）。
+
+## 手动检查
+
+```bash
+shine theme sync
+eval "$(shine theme sync --quiet)"
+```
+
+第一条命令只显示应写入 shell 的 `export` 语句；第二条才会在当前 shell 生效。已经自行设置的 `BAT_THEME` 不会被覆盖。
+
+Shine 优先使用已有的 `SHINE_TERMINAL_THEME` 或 `COLORFGBG`，再尝试检测终端背景。
+无法确定主题时，不修改变量。`--quiet` 隐藏非必要提示，但仍会报告配置错误。
+
+## 在受管 profile 中自动同步
+
+使用内置 macOS、Ubuntu 或 Arch Linux 预设时，先用 `shine sys init`
+[应用系统启动配置](./system-init.md#refresh-initialization)，再打开新的 Shell，即可启用自动同步。
+通过 bootstrap 配置软件时也会应用这些配置。可通过任一种方式关闭自动同步：
+
+```toml title="~/.shine/config.toml"
+sync_terminal_theme = false
+```
+
+```bash
+export SHINE_SYNC_TERMINAL_THEME=0
+```
+
+环境变量优先级更高，适合临时禁用。即使关闭自动同步，仍可随时手动运行 `shine theme sync`。
+
+自行维护 profile 时，可按需使用 [`shine-theme-sync` 预设命令](../built-in-presets/utils.md#terminal-theme)，
+将这些设置应用到当前会话。
+
+## SSH 会话
+
+`shine ssh <HOST>` 会把本机终端主题传给远端会话，让 `bat` 等工具与本机终端保持一致。

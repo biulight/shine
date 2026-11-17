@@ -7,35 +7,57 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.11.0] — 2026-11-17
+
 ### Features
 
+- Add `shine sys init` to apply shell startup configuration for first use or update it later,
+  without installing software or changing enabled integrations. Preview changes with `--dry-run`; open a new shell after applying.
+- Filter system catalogs, interactive bootstrap choices and named selections by the target shell.
+  Use `shine sys list --all` for the full catalog or explicit item IDs for a fixed installation set.
+- Add official x86_64 Arch Linux bootstrap with a default `minimal` selection: Neovim, fzf, bat,
+  eza and zoxide. Complete a full Arch system update first; Shine does not refresh package databases
+  or upgrade the system.
+- Install Docker Engine for Ubuntu `recommended` and `all` through Docker's official APT repository,
+  including CLI, containerd, Buildx and Compose. Review removal of conflicting packages before
+  approving; Shine verifies installation with `hello-world` without adding users to the Docker group.
+- Configure `ccenv` providers and models through `shell/agent/cc.providers.toml`, including overlays,
+  while keeping credentials in Shine's encrypted environment storage.
+- Manage Surge General settings through `shine-general.sgmodule`, with explicit apply/remove and
+  module-state checks. Import wGetCloud nodes from Surge's downloaded cache for offline use;
+  a configured subscription URL takes precedence over the cache.
 - Accept JSON5 decimal-point shorthand, extended string escapes and line continuations in
   `jsonc-to-json` transforms, while rejecting non-finite and overflowing numbers.
-
-- Add Arch Linux system bootstrap with a default `minimal` selection: Neovim, fzf, bat, eza,
-  and zoxide. Install missing packages through pacman and manage their Bash/Zsh integrations.
-  Complete a full Arch system update before bootstrap; Shine does not refresh package databases
-  or upgrade the system.
+- Show native installer download progress and colored status on terminals, highlight top-level
+  CLI failures, and present compact bootstrap approval summaries. Detailed review remains available
+  with `--verbose`.
 
 ### Bug Fixes
 
-- Reject out-of-range numbers during JSONC-to-JSON conversion instead of silently writing `null`.
-
 - Restore Ubuntu 22.04 compatibility for Linux release binaries by building against glibc 2.35
   and checking both Linux architectures before uploading release assets.
-
-- Make new Bash login files created by the installer instructions load `.bashrc` in interactive
-  sessions, so aliases and shell integrations work over SSH. Preserve existing startup logic.
-
-- Explain Arch package database prerequisites before native pacman installation and add targeted
-  HTTP-404 recovery guidance for recognized package download failures, preserving original errors
-  and install-only behavior.
-
-- Invalidate system-bootstrap approval when either affected shell startup file or generated
-  profile input changes. Preserve unrelated startup files when switching Bash/Zsh integrations.
+- Simplify Bash/Zsh PATH setup instructions and make new Bash login files load `.bashrc` in
+  interactive sessions, including SSH, while preserving existing startup logic.
+- Explain Arch package database prerequisites and provide targeted HTTP-404 recovery guidance
+  for recognized package download failures, preserving original errors and install-only behavior.
+- Invalidate bootstrap approval when affected shell startup files or generated profile inputs
+  change. Preserve unrelated startup files when switching Bash/Zsh integrations.
 - Allow Bash/Zsh integration repair within the same second and resume committed profile cleanup
-  after interruption without discarding user edits. Review pending-file cleanup and forced-profile
+  after interruption without discarding user edits. Review pending cleanup and forced-profile
   backup permissions before execution.
+- Plan the static fallback when an App generator is disabled, instead of requiring its runtime
+  inputs or execution. Keep generator-backed refresh ownership checks intact.
+- Read Surge module state as JSON and import wGetCloud nodes directly from the cache's `[Proxy]`
+  section, avoiding dependence on provider policy-group names.
+- Update the Fastfetch preset for current configuration syntax.
+- Reject out-of-range numbers during JSONC-to-JSON conversion instead of silently writing `null`.
+
+### Docs
+
+- Publish updated English and Simplified Chinese manuals with separate built-in preset guides,
+  a preset configuration reference, and task-focused installation, migration and recovery guidance.
+  Replace the 2.10 snapshot with 2.11, retaining the 1.8 manual and Next.
+- Complete Bash, INI and gitignore syntax highlighting and highlight Shine commands in examples.
 
 ## [2.10.0] — 2026-11-07
 
