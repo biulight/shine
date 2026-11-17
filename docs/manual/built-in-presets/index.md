@@ -6,8 +6,8 @@ slug: /built-in-presets
 
 # Overview and selection
 
-Shine includes common scripts, application configurations, and system setup selections prepared by
-the author. They reflect the author's everyday preferences; choose or customize the ones you need.
+Shine includes a set of shell scripts, application configurations, and system setup options.
+You can choose or customize them as needed.
 
 ## Shell presets
 

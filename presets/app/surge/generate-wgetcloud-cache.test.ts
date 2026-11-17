@@ -19,27 +19,26 @@ function runGenerator(path: string, profilesDirectory?: string) {
   });
 }
 
-test("generates the wGetCloud node list offline from an explicitly configured cache file", async () => {
+test.each([
+  ["with only a Proxy section", []],
+  ["with a renamed policy group", ["[Proxy Group] # provider groups", "Provider Nodes = select, Tokyo, DIRECT"]],
+  ["with the original policy group", ["[Proxy Group]", "🚀 节点选择 = select, Tokyo, DIRECT"]],
+] as const)("imports all wGetCloud proxies %s", async (_scenario, groupLines) => {
   const directory = await mkdtemp(join(tmpdir(), "shine-wgetcloud-"));
   try {
     const path = join(directory, "local cache.conf");
     const first = 'Osaka, JP = trojan, test.invalid, 443, password="example, one"';
     const second = "Tokyo = ss, test.invalid, 443, password=example";
     await writeFile(path, [
-      "\ufeff[General]",
-      "loglevel = notify",
-      "[Proxy]",
+      "\ufeff[Proxy]",
+      "# Provider proxies",
       first,
       second,
-      "Unselected = ss, test.invalid, 443, password=unused",
-      "[Proxy Group]",
-      '🚀 节点选择 = select, Tokyo, DIRECT, "Osaka, JP", Tokyo',
-      "[Rule]",
-      "FINAL,🚀 节点选择",
+      ...groupLines,
     ].join("\r\n"));
     const result = runGenerator(path);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout.toString()).toBe(`${second}\n${first}\n`);
+    expect(result.stdout.toString()).toBe(`${first}\n${second}\n`);
     expect(result.stderr.toString()).toBe("");
   } finally {
     await rm(directory, { force: true, recursive: true });
@@ -88,7 +87,7 @@ test("resolves a named Surge configuration to the cache of its exact subscriptio
   }
 });
 
-test("failed cache reads and invalid node selections produce no output or sensitive diagnostics", async () => {
+test("failed cache reads and invalid Proxy sections produce no output or sensitive diagnostics", async () => {
   const directory = await mkdtemp(join(tmpdir(), "shine-wgetcloud-"));
   try {
     const path = join(directory, "private-cache-location.conf");
@@ -97,13 +96,16 @@ test("failed cache reads and invalid node selections produce no output or sensit
     expect(missing.stdout.toString()).toBe("");
     expect(missing.stderr.toString()).toBe("shine-generator-diagnostic-v1:cache-read-failed\n");
 
-    for (const members of ["Known, Missing", '"Known']) {
-      await writeFile(path, [
-        "[Proxy]",
-        "Known = ss, test.invalid, 443, password=secret",
-        "[Proxy Group]",
-        `🚀 节点选择 = select,${members}`,
-      ].join("\n"));
+    const validProxy = "Known = ss, test.invalid, 443, password=secret";
+    for (const lines of [
+      ["[Proxy Group]", "Provider Nodes = select, DIRECT"],
+      ["[Proxy]", "# No proxies"],
+      ["[Proxy]", validProxy, "Broken"],
+      ["[Proxy]", validProxy, "Other ="],
+      ["[Proxy]", validProxy, validProxy],
+      ["[Proxy]", validProxy, "#!include more-proxies.conf"],
+    ]) {
+      await writeFile(path, lines.join("\n"));
       const invalid = runGenerator(path);
       expect(invalid.exitCode).toBe(1);
       expect(invalid.stdout.toString()).toBe("");

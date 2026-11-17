@@ -4,21 +4,19 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
-const SELECTION_GROUP = "🚀 节点选择";
-const BUILT_IN_POLICIES = new Set(["DIRECT", "REJECT", "REJECT-TINYGIF", "REJECT-DROP", "REJECT-NO-DROP"]);
 
 function proxyList(profile: string): string | undefined {
   const proxies = new Map<string, string>();
   let section = "";
-  let group: string | undefined;
 
   for (const rawLine of profile.split(/\r\n|\n|\r/)) {
     const line = rawLine.trim();
-    if (/^\[[^\]]+\]$/.test(line)) {
-      section = line;
+    const header = /^(\[[^\]]+\])(?:[ \t]+(?:#|;|\/\/).*)?$/.exec(line)?.[1];
+    if (header) {
+      section = header;
       continue;
     }
-    if (section !== "[Proxy]" && section !== "[Proxy Group]") continue;
+    if (section !== "[Proxy]") continue;
     if (/^#!include\s/.test(line)) return undefined;
     if (line === "" || /^(#|;|\/\/)/.test(line)) continue;
 
@@ -26,31 +24,12 @@ function proxyList(profile: string): string | undefined {
     if (separator < 0) return undefined;
     const name = line.slice(0, separator).trim();
     const definition = line.slice(separator + 1).trim();
-    if (section === "[Proxy]") {
-      if (name === "" || definition === "" || proxies.has(name)) return undefined;
-      proxies.set(name, rawLine);
-    } else if (name === SELECTION_GROUP) {
-      if (group !== undefined) return undefined;
-      group = definition;
-    }
+    if (name === "" || definition === "" || proxies.has(name)) return undefined;
+    proxies.set(name, rawLine);
   }
 
-  // The first field is the group type. Quoted names and option values may contain commas.
-  const fields = group?.match(/(?:[^",]|"(?:[^"\\]|\\.)*")+(?:,|$)/gy);
-  if (!fields || fields.join("") !== group) return undefined;
-  const selected = new Set<string>();
-  for (const field of fields.slice(1)) {
-    const token = field.replace(/,$/, "").trim();
-    if (/^(include-[\w-]+|policy-path)\s*=/.test(token)) return undefined;
-    if (/^[\w-]+\s*=/.test(token)) continue;
-    const name = token.replace(/^"(.*)"$/, "$1").replace(/\\(["\\])/g, "$1");
-    if (BUILT_IN_POLICIES.has(name)) continue;
-    const proxy = proxies.get(name);
-    if (proxy === undefined) return undefined;
-    selected.add(proxy);
-  }
-  if (selected.size === 0) return undefined;
-  return [...selected].join("\n") + "\n";
+  if (proxies.size === 0) return undefined;
+  return [...proxies.values()].join("\n") + "\n";
 }
 
 class CacheError extends Error {}
