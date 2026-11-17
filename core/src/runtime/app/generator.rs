@@ -140,7 +140,7 @@ pub(super) fn generator_failure_detail(stderr: &[u8]) -> Option<String> {
         "surge-profile-cache-missing" => {
             "no downloaded local subscription cache exists for the named Surge configuration"
         }
-        "invalid-surge-cache" => "local Surge cache has no valid wGetCloud node selection",
+        "invalid-surge-cache" => "local Surge cache has no valid proxies defined in [Proxy]",
         "generation-failed" => "generation failed; details redacted",
         _ => {
             let status = diagnostic

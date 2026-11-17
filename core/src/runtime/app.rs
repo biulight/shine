@@ -1039,6 +1039,10 @@ mod lifecycle_tests {
             Some("response contained no compatible proxy nodes".to_string())
         );
         assert_eq!(
+            generator_failure_detail(b"shine-generator-diagnostic-v1:invalid-surge-cache\n"),
+            Some("local Surge cache has no valid proxies defined in [Proxy]".to_string())
+        );
+        assert_eq!(
             generator_failure_detail(
                 b"shine-generator-diagnostic-v1:surge-configuration-response\n"
             ),

@@ -5,160 +5,128 @@ sidebar_position: 2
 
 # Surge
 
-The Surge preset keeps local proxies, policy groups, and rules in separate files and connects them
-to your Profile with apply. General settings use a native module without rewriting `[General]`.
-It can also generate proxy files from URI subscriptions or a local wGetCloud cache and reload Surge when refreshed
-content changes.
+With the Shine preset, you can keep receiving updates from your provider while adding your own
+proxies, policy groups, and routing rules. You can also bring nodes from multiple subscriptions
+together in one Surge policy group.
 
-## Prepare local configuration
+Install Bun and use Surge Mac with [CLI module support](https://manual.nssurge.com/tools/cli.html).
+Keep Surge running while you set up or remove the integration.
 
-For authorization, updates, and recovery, see [Manage application configuration](../guides/app-presets.md).
+## Prepare the profile to customize
 
-Install Bun and use Surge Mac with CLI module support. Surge must be running for artifact apply
-and remove. Copy the preset to an overlay:
+1. In Surge's **Profile** settings, import the provider's Surge configuration from its URL if you
+   haven't already.
+2. Create a [Linked Profile](https://manual.nssurge.com/profile/format.html) from that
+   configuration and save it in Surge's local Profiles folder. This is the profile Shine will
+   modify. Make sure `[Proxy]`, `[Proxy Group]`, and `[Rule]` each have a `#!include` line that
+   references the provider's configuration. Shine adds its local files to these lines.
+3. Note the new profile's `.conf` filename. Use **Reveal in Finder** if you need to confirm it.
 
-```bash
-mkdir -p ~/dotfiles/shine-overlay
-cd ~/dotfiles/shine-overlay
-shine preset copy app/surge
-shine preset overlay link .
-```
+## Add subscription sources (optional) {#surge-uri-subscriptions}
 
-For example, route `example.com` and its subdomains through a LAN SOCKS5 proxy. Replace the example
-address, port, and domain, and add these entries to the corresponding sections in the overlay files:
+For extra nodes, set the variable for the source you want before installing.
 
-```ini title="app/surge/local-proxies.conf"
-[Proxy]
-LAN-SOCKS = socks5, 192.0.2.10, 1080
-```
-
-```ini title="app/surge/local-proxy-groups.conf"
-[Proxy Group]
-LAN PROXY = select, LAN-SOCKS, DIRECT
-```
-
-```ini title="app/surge/local-rules.conf"
-[Rule]
-DOMAIN-SUFFIX,example.com,LAN PROXY
-```
-
-Delete copied files you do not customize. Edit overlay sources rather than the managed copies in
-Surge's Profiles directory.
-
-For a rule-list setup instead, adapt the commented `LAN Network`, `LAN PROXY`, and `Other Direct`
-examples in the bundled files. For each traffic class, enable one source: relative `rules/*.list` files, HTTP on the same
-device, or remote HTTPS with your own domain. Relative files are usually simplest. `localhost`
-means the device running Surge, including on iOS; it does not point to another LAN host.
-
-## Optional General settings
-
-To customize `[General]`, keep and edit `app/surge/shine-general.sgmodule` in the overlay:
-
-```ini
-#!name=shine-general
-#!desc=Local General settings managed by Shine.
-#!system=mac
-
-[General]
-skip-proxy = %APPEND% *.internal
-```
-
-Keep the filename, `#!name`, and native destination `~/Library/Application Support/Surge/Profiles/`
-unchanged. The built-in module contains only commented examples. `%APPEND%` adds list values
-without deduplication; `key = value` overrides a scalar setting. `skip-proxy` controls system proxy
-bypass, not a `DIRECT` routing rule; Enhanced Mode may still handle that traffic.
-
-The module's enabled state is device-wide, not limited to `SURGE_PROFILE`, and survives deletion
-and reinstallation.
-
-## Optional subscriptions {#surge-uri-subscriptions}
-
-The preset accepts HTTPS Base64 URI subscriptions with compatible `ss://`, `vmess://`, and
-`trojan://` records; Trojan supports TCP and WebSocket. VLESS, unsupported transports or security
-modes, plugins, malformed records, and duplicates are skipped. Diagnostics omit credentials,
-and your `local-proxies.conf` is preserved. For an HTTPS input, use the provider's URI/Base64 URL.
-
-Set the variable for each subscription you use:
-
-| Source path for refresh | Installed filename | Environment variable |
+| Source | Shine variable | Surge policy group |
 | --- | --- | --- |
-| `subscription-proxies.conf` | `subscription-proxies.conf` | `SURGE_SUBSCRIPTION_URL` |
-| `sub/wget-cloud-proxies.conf` | `wget-cloud-proxies.conf` | `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` or `W_GET_CLOUD_SURGE_CACHE_SOURCE` |
+| Provider's HTTPS Base64 URI subscription | `SURGE_SUBSCRIPTION_URL` | `Subscription` |
+| wGetCloud's HTTPS Base64 URI subscription | `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` | `WgetCloud` |
+| Surge's downloaded wGetCloud cache | `W_GET_CLOUD_SURGE_CACHE_SOURCE` | `WgetCloud` |
+
+To set a provider's URI subscription URL, use the following command.
 
 ```bash
 shine env set SURGE_SUBSCRIPTION_URL 'https://provider.example/subscription?...'
 ```
 
-For wGetCloud, set `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` to use the HTTPS subscription.
-To generate offline, leave that variable unset and set `W_GET_CLOUD_SURGE_CACHE_SOURCE` to the
-filename of the imported configuration in `~/Library/Application Support/Surge/Profiles/`.
-Shine reads the existing cache for its subscription. If both variables are set, the URL takes
-precedence. A failed download leaves the previous output in place.
+Use your provider's URI/Base64 link for either URL variable. Shine imports compatible `ss://`,
+`vmess://`, and `trojan://` nodes. Trojan supports TCP and WebSocket.
+
+### Use the wGetCloud cache offline
+
+In Surge's Profile settings, locate or create a separate local Linked Profile that directly
+references the wGetCloud Surge configuration URL with `#!include`. The `[Proxy]` and
+`[Proxy Group]` sections together must reference exactly one URL. Load the profile in Surge so
+it downloads the subscription. Set `W_GET_CLOUD_SURGE_CACHE_SOURCE` to this **source profile's
+filename** in the local Profiles folder, for example `WgetCloud.conf`.
 
 ```bash
 shine env set W_GET_CLOUD_SURGE_CACHE_SOURCE WgetCloud.conf
 ```
 
-You can also supply the absolute path to a downloaded cache file containing the `🚀 节点选择` group.
+You can also give the absolute path to the downloaded cache file. Shine imports the nodes
+defined directly in the cache's `[Proxy]` section. Leave `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`
+unset for offline use. When both inputs are set, Shine uses the URL.
 
-The `Subscription` group in `local-proxy-groups.conf` reads `subscription-proxies.conf` through
-`policy-path`. The `WgetCloud` group reads `wget-cloud-proxies.conf`. Use
-`include-other-group=Subscription` or `include-other-group=WgetCloud` to reuse their nodes.
+## Add your own settings (optional)
+
+Follow the [overlay setup](../guides/custom-presets.md#override-selected-files-with-an-overlay)
+for `app/surge` and keep the copies you want to customize. Edit the files in the overlay.
+
+- `local-proxies.conf` adds your own [proxies](https://manual.nssurge.com/policies/overview.html).
+- `local-proxy-groups.conf` defines your own [policy groups](https://manual.nssurge.com/policy-groups/policy-including.html).
+  To combine nodes from the two subscription groups in one group, use
+  `include-other-group="Subscription,WgetCloud"` in that group once both sources are set up.
+- `local-rules.conf` adds [routing rules](https://manual.nssurge.com/rules/overview.html) that
+  Surge checks before the provider's rules.
+- `shine-general.sgmodule` adds [General settings through a Surge module](https://manual.nssurge.com/profile/module.html).
+  Keep the filename and `#!name=shine-general`. The bundled module contains commented examples.
+  Enabling it applies its settings device-wide, including when you switch profiles.
 
 ## Install and apply
 
-The Profile must be beside the installed local files, normally in
-`~/Library/Application Support/Surge/Profiles/`, with a `#!include` line in each of `[Proxy]`,
-`[Proxy Group]`, and `[Rule]`. Replace `Profile.conf` below with its actual filename. Review the
-overlay before installing. Any configured subscription URL must be reachable during installation.
+Replace `MySurge.conf` with the filename of the **Linked Profile you want Shine to modify**.
+The built-in preset installs its files in the local Profiles folder shown below. Shine finds the
+files to connect beside the target profile. Make sure any configured subscription URLs are
+reachable, then review the install and apply plans before approving them.
 
 ```bash
+shine env set SURGE_PROFILE "~/Library/Application Support/Surge/Profiles/MySurge.conf"
 shine app install surge --dry-run
 shine app install surge
-shine env set SURGE_PROFILE "~/Library/Application Support/Surge/Profiles/Profile.conf"
 shine app artifact apply surge
 ```
 
-Apply connects the local proxy, group, and rule files to the Profile, enables `shine-general`, and
-reloads Surge. Updates to an enabled module take effect when install or upgrade reloads Surge. If apply
-reports that the installed module differs from the preset, review your edits and install or upgrade first.
+Apply connects the local files, enables `shine-general`, and reloads Surge. Select your target
+profile in Surge and check that the groups you configured appear. Use Rule-Based mode to test
+your routing rules. For approval and updates, see [Manage application configuration](../guides/app-presets.md).
 
-To use the SOCKS5 example above, switch Surge to Rule-based Proxy mode and select `LAN-SOCKS`
-in `LAN PROXY`; select `DIRECT` to connect directly instead.
+If apply reports a missing `#!include`, check the corresponding section of the target profile.
+If the installed module differs from the preset, review your edits and install or upgrade before
+trying again.
 
 ## Refresh subscriptions
 
-Routine `update` and `upgrade` do not read these subscriptions. Refresh the file you use explicitly.
-If your URL has an access window, open it before refreshing. A local wGetCloud cache can be
-read offline and supplies the nodes from its last download.
+Use the command for the source you configured. Routine `update` and `upgrade` skip these subscriptions.
 
 ```bash
 shine app refresh surge subscription-proxies.conf
 shine app refresh surge sub/wget-cloud-proxies.conf
 ```
 
-Changed content reloads Surge; failure preserves the last successful file. If you add a subscription
-later, run `shine app install surge` before its first refresh. Local edits remain protected unless
-you explicitly add `--force`.
+Run `shine app install surge` before the first refresh of a source you add later. A successful
+refresh reloads Surge when the content changes. A failed refresh keeps the last successful file.
+Refresh preserves local edits unless you opt in to replacing them with `--force`.
 
-For HTTP errors, timeouts, oversized responses, or no compatible nodes, check the subscription
-service and confirm that its URL returns the [supported format](#surge-uri-subscriptions).
-For a local cache error, check that the named configuration references a single subscription across
-`[Proxy]` and `[Proxy Group]` and that Surge has already downloaded it. If you supplied an absolute
-path, check that it points to the cache file.
+- For a failed download or no compatible nodes, check access to the subscription URL and its
+  [format](#surge-uri-subscriptions).
+- For an offline cache error, check the source profile's filename and URL reference, then confirm
+  Surge has downloaded the subscription. If you supplied an absolute path, verify it points to
+  the cache file.
 
 ## Remove the integration
+
+Keep `SURGE_PROFILE` pointed at the profile you applied the integration to. Run the following
+with Surge open.
 
 ```bash
 shine app artifact remove surge
 ```
 
-This disables `shine-general`, reloads Surge, and undoes the Profile changes while keeping installed
-files. App uninstall also removes the managed files. Other modules are not changed.
+This removes the Shine references from the profile, disables `shine-general`, and reloads Surge.
+Keep the module file in place until removal succeeds so Surge can clear its enabled state. If
+you already deleted the module, restore the file and run remove again. To delete the installed
+files as well, see [App uninstall](../guides/app-presets.md#uninstall-and-restore).
 
-Do not delete the module file first: its effect may remain until reload, and deletion does not
-reset its enabled state. If already deleted, restore the file and run remove again.
-
-If apply or remove fails or is interrupted, some settings may already have changed. Fix the reported
-issue and repeat the command. If old Shine proxy-group markers are missing or nested, repair them
-in your Profile before retrying; remove may already have disabled the module.
+If apply or remove fails or is interrupted, some changes may already be in effect. Fix the
+reported issue and retry the same command. If Shine reports broken legacy proxy-group markers,
+repair them in the target profile before retrying.

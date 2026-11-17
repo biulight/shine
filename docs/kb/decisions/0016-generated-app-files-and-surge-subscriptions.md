@@ -56,7 +56,8 @@ fallback. Other groups may use `include-other-group=Subscription`.
 - The default file reads `SURGE_SUBSCRIPTION_URL`; the wGetCloud file maps
   `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` into that script variable. When that wGetCloud URL is
   absent, its alternate Bun generator can read the cache file at `W_GET_CLOUD_SURGE_CACHE_SOURCE`
-  and emit the native policy lines offline. A profile filename selects a file in the user's
+  and emit all locally defined `[Proxy]` policy lines in cache order. Policy groups are ignored.
+  A profile filename selects a file in the user's
   Surge Profiles directory. Lookup requires one distinct remote include across `[Proxy]` and
   `[Proxy Group]` and derives `.managed/<md5>.conf` from the original URL spelling, following
   the observed Surge macOS layout. A missing exact match fails without scanning other caches.

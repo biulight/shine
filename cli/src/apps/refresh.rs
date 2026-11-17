@@ -603,12 +603,9 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             .await
             .unwrap();
         let node = "Test = trojan, example.invalid, 443, password=example";
-        fs::write(
-            &cache,
-            format!("[Proxy]\n{node}\n[Proxy Group]\n🚀 节点选择 = select, Test, DIRECT\n"),
-        )
-        .await
-        .unwrap();
+        fs::write(&cache, format!("[Proxy]\n{node}\n"))
+            .await
+            .unwrap();
         config.env.insert(
             "W_GET_CLOUD_SURGE_CACHE_SOURCE".into(),
             "WgetCloud.conf".into(),
