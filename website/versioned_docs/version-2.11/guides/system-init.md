@@ -40,6 +40,8 @@ The default list hides installation items whose declared shell integrations do n
 current target shell. Use `shine sys list --all` to see the complete catalog and integration ranges;
 `shine sys info <ITEM>` also explains whether an item matches. Available items and named selections
 (profiles) are listed in [Built-in presets](../built-in-presets/index.md#system-presets).
+For package managers and prerequisites, see
+[Installation methods by platform](../built-in-presets/system-bootstrap.md#installation-methods).
 
 Preview the items you want to install:
 

@@ -37,6 +37,7 @@ shine sys info neovim
 使用 `shine sys list --all` 查看完整目录和集成范围，`shine sys info <ITEM>` 也会说明项目是否匹配。
 各平台的项目与配置组合（profile）见
 [内置预设](../built-in-presets/index.md#系统预设)。
+所用的包管理器及准备工作见[各平台的安装方式](../built-in-presets/system-bootstrap.md#installation-methods)。
 
 预览想要安装的项目：
 

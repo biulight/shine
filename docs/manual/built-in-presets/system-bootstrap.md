@@ -12,6 +12,17 @@ to suit your machine.
 For preview, approval, and shell integration controls, see
 [Initialize and manage a system](../guides/system-init.md).
 
+## Installation methods by platform {#installation-methods}
+
+The built-in `shine sys bootstrap` presets use the installation method specified for each item.
+
+| Platform | Installation method and prerequisites |
+| --- | --- |
+| macOS | Most tools use Homebrew, including Homebrew Cask for some apps. Rust uses a separate installer. Built-in profiles list Homebrew first. When selecting an individual tool that uses Homebrew, make sure `brew` is available. |
+| Windows | Software installation items use WinGet. Make sure `winget` is available before installing. |
+| Ubuntu | Items use APT or a separate installer. For example, Neovim uses APT and Rust uses the rustup installer. |
+| Arch Linux | The `minimal` profile uses pacman. [Complete a full system update](#arch-linux-preparation) before installing. |
+
 ## Arch Linux preparation {#arch-linux-preparation}
 
 Only official x86_64 Arch Linux is supported. The only preset is `minimal` (the default),

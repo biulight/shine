@@ -10,6 +10,17 @@ sidebar_position: 8
 
 预览、批准及 Shell 集成管理方法见[初始化与管理系统](../guides/system-init.md)。
 
+## 各平台的安装方式 {#installation-methods}
+
+使用内置预设时，`shine sys bootstrap` 按各项目指定的方式安装软件。
+
+| 平台 | 安装方式与准备工作 |
+| --- | --- |
+| macOS | 多数工具通过 Homebrew 安装，部分应用使用 Homebrew Cask。Rust 使用独立安装器。内置组合将 Homebrew 列为首项。单独选择依赖 Homebrew 的工具前，请确认 `brew` 可用。 |
+| Windows | 软件安装项使用 WinGet。安装前请确认 `winget` 可用。 |
+| Ubuntu | 按项目使用 APT 或独立安装器。例如，Neovim 使用 APT，Rust 使用 rustup 安装器。 |
+| Arch Linux | `minimal` 组合使用 pacman。安装前请[完成全系统更新](#arch-linux-preparation)。 |
+
 ## Arch Linux 准备工作 {#arch-linux-preparation}
 
 仅支持官方 x86_64 Arch Linux，目前只提供默认的 `minimal` 预设，
