@@ -126,18 +126,17 @@ pub async fn handle_info(
 }
 
 fn print_app_info_file(inspection: &AppFileInspection, root: Option<&Path>, home: &Path) {
-    let source = &inspection.file.source_rel;
-    let mapping = match &inspection.destination {
-        Some(destination) => match root.and_then(|root| destination.strip_prefix(root).ok()) {
-            Some(relative) if relative == source => String::new(),
-            Some(relative) => format!(" → {}", escape_controls(&path_display::format(relative))),
-            None => format!(
-                " → {}",
-                escape_controls(&path_display::format_home(destination, home))
-            ),
-        },
-        None => " (destination unresolvable)".to_string(),
-    };
+    let detail_indent = "       ";
+    let source = inspection.file.source_rel.as_path();
+    let destination = inspection.destination.as_deref();
+    let relative_destination =
+        destination.and_then(|destination| destination.strip_prefix(root?).ok());
+    let inline_mapping = relative_destination
+        .filter(|relative| *relative != source)
+        .map_or_else(String::new, |relative| {
+            let target = escape_controls(&path_display::format(relative));
+            format!("  {}", colors::dim(&format!("→ {target}")))
+        });
     let (label, symbol) = if destination_managed_by_other_source(inspection) {
         ("destination managed by another source", "!")
     } else {
@@ -145,12 +144,25 @@ fn print_app_info_file(inspection: &AppFileInspection, root: Option<&Path>, home
     };
     let status = colors::status_label(&format!("[{label}]"), symbol);
     println!(
-        "  {}{}  {status}",
-        escape_controls(&path_display::format(source)),
-        colors::dim(&mapping)
+        "  {}  {}  {status}{inline_mapping}",
+        colors::symbol(symbol),
+        escape_controls(&path_display::format(source))
     );
     if let Some(description) = &inspection.file.description {
-        println!("    {}", colors::dim(&escape_controls(description)));
+        println!(
+            "{detail_indent}{}",
+            colors::dim(&escape_controls(description))
+        );
+    }
+    if relative_destination.is_none() {
+        let detail = match destination {
+            Some(path) => format!(
+                "→ {}",
+                escape_controls(&path_display::format_home(path, home))
+            ),
+            None => "(destination unresolvable)".to_string(),
+        };
+        println!("{detail_indent}{}", colors::dim(&detail));
     }
 }
 

@@ -1046,7 +1046,10 @@ fn app_and_trust_hints_preserve_literal_category_arguments() {
         let info = fixture.run(&["app", "info", category]);
         success(&info);
         let text = stdout(&info);
-        assert!(text.contains("  config.txt  [user modified]\n"), "{text}");
+        assert!(
+            text.contains("  ~  config.txt  [user modified]\n"),
+            "{text}"
+        );
         assert!(
             text.contains("  1 up to date · 1 user modified\n"),
             "{text}"
@@ -3220,7 +3223,7 @@ async fn verbose_status_keeps_current_pending_and_missing_managed_sys_entries() 
 }
 
 #[test]
-fn app_info_displays_paths_relative_to_the_declared_root_when_possible() {
+fn app_info_places_status_before_paths_and_full_destinations_after_descriptions() {
     let fixture = Fixture::new();
     let preset = fixture.0.join("state/presets/app/demo");
     for directory in ["rules", "themes", "launch"] {
@@ -3238,10 +3241,12 @@ source = 'rules/lan.list'
 [[files]]
 source = 'themes/old.toml'
 target = 'themes/dark.toml'
+description = 'Dark theme settings.'
 [[files]]
 source = 'launch/example.plist'
 dest = '~/.config/example-app-extra/LaunchAgents'
 target = 'example.plist'
+description = 'Launch agent configuration.'
 "#,
     )
     .unwrap();
@@ -3253,6 +3258,13 @@ target = 'example.plist'
     ] {
         fs::write(preset.join(path), "example\n").unwrap();
     }
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fs::remove_file(
+        fixture
+            .0
+            .join("home/.config/example-app-extra/LaunchAgents/example.plist"),
+    )
+    .unwrap();
     let output = fixture.run(&["app", "info", "demo"]);
     success(&output);
     let text = stdout(&output);
@@ -3260,29 +3272,40 @@ target = 'example.plist'
         text.contains(concat!(
             "  Destination  ~/.config/example-app\n",
             "  Files        4\n\n",
-            "  config.toml  [not installed]\n",
-            "    Main application settings.\n",
-            "  rules/lan.list  [not installed]\n",
-            "  themes/old.toml → themes/dark.toml  [not installed]\n",
-            "  launch/example.plist → ~/.config/example-app-extra/LaunchAgents/example.plist  [not installed]\n",
+            "  ✓  config.toml  [up to date]\n",
+            "       Main application settings.\n",
+            "  ✓  rules/lan.list  [up to date]\n",
+            "  ✓  themes/old.toml  [up to date]  → themes/dark.toml\n",
+            "       Dark theme settings.\n",
+            "  !  launch/example.plist  [missing on disk]\n",
+            "       Launch agent configuration.\n",
+            "       → ~/.config/example-app-extra/LaunchAgents/example.plist\n",
         )),
         "{text}"
     );
 
     let legacy = fixture.0.join("state/presets/app/legacy");
     fs::create_dir_all(&legacy).unwrap();
-    fs::write(legacy.join("settings"), "# shine-dest: ~/.config/legacy\n").unwrap();
-    fs::write(legacy.join("startup"), "# shine-dest: ~/startup/legacy\n").unwrap();
+    fs::write(
+        legacy.join("settings"),
+        "# shine-dest: ~/.config/legacy-settings\n",
+    )
+    .unwrap();
+    fs::write(legacy.join("startup"), "startup settings\n").unwrap();
     let output = fixture.run(&["app", "info", "legacy"]);
     success(&output);
     let text = stdout(&output);
     assert!(!text.contains("Destination"), "{text}");
     assert!(
-        text.contains("  settings → ~/.config/legacy  [not installed]\n"),
+        text.contains(concat!(
+            "  ✗  settings  [not installed]\n",
+            "       shine-dest: ~/.config/legacy-settings\n",
+            "       → ~/.config/legacy-settings\n",
+        )),
         "{text}"
     );
     assert!(
-        text.contains("  startup → ~/startup/legacy  [not installed]\n"),
+        text.contains("  ✗  startup  [not installed]\n       → ~/.config/legacy/startup\n"),
         "{text}"
     );
 }
@@ -3311,7 +3334,7 @@ fn app_info_summarizes_observed_states_and_only_suggests_applicable_actions() {
     success(&output);
     let text = stdout(&output);
     assert!(
-        text.contains("  manual.txt  [generator not evaluated]\n"),
+        text.contains("  !  manual.txt  [generator not evaluated]\n"),
         "{text}"
     );
     assert!(
@@ -3326,7 +3349,10 @@ fn app_info_summarizes_observed_states_and_only_suggests_applicable_actions() {
     let output = fixture.run(&["app", "info", "demo"]);
     success(&output);
     let text = stdout(&output);
-    assert!(text.contains("  manual.txt  [missing on disk]\n"), "{text}");
+    assert!(
+        text.contains("  !  manual.txt  [missing on disk]\n"),
+        "{text}"
+    );
     assert!(
         text.contains("  1 up to date · 1 generator not evaluated · 1 missing on disk\n"),
         "{text}"
@@ -3369,7 +3395,7 @@ fn app_info_reports_stale_destination_ownership_before_suggesting_replacement() 
     success(&output);
     let text = stdout(&output);
     assert!(
-        text.contains("  renamed.txt → manual.txt  [destination managed by another source]\n"),
+        text.contains("  !  renamed.txt  [destination managed by another source]  → manual.txt\n"),
         "{text}"
     );
     assert!(
@@ -3430,7 +3456,10 @@ fn app_list_shows_category_summaries_and_preserves_available_and_installed_views
     success(&output);
     let text = stdout(&output);
     assert!(text.contains("  Files        2\n"), "{text}");
-    assert!(text.contains("  config.txt  [not installed]\n"), "{text}");
+    assert!(
+        text.contains("  ✗  config.txt  [not installed]\n"),
+        "{text}"
+    );
     assert!(!fixture.0.join("state/app-manifest.toml").exists());
     assert!(!fixture.0.join("destination").exists());
 
@@ -3485,7 +3514,7 @@ fn app_catalog_and_update_columns_use_unicode_display_width() {
     let text = stdout(&output);
     for source in ["abc.txt", "猫.txt", "e\u{301}.txt"] {
         assert!(
-            text.contains(&format!("  {source}  [not installed]\n")),
+            text.contains(&format!("  ✗  {source}  [not installed]\n")),
             "{text}"
         );
     }
