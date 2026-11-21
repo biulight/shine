@@ -798,8 +798,8 @@ a previously captured function so removing one false blocker cannot hide the oth
   LF/ESC descriptions and comment-line ESC/TAB bytes as terminal controls. Control-bearing targets
   also entered install hints and lookup-error choices unchanged.
 - **Fix**: reuse the display encoder per name/path/description line, before styling and width
-  measurement. Preserve parsed blank lines, exact lookup/status identity, normal quoting, repair
-  options and failure exits; control-bearing hints request the original operand.
+  measurement. Preserve parsed blank lines in detail views, exact lookup/status identity, normal
+  quoting, repair options and failure exits. Control-bearing hints request the original operand.
 - **Coverage**: real CLI category/command/canonical queries cover paragraph layout, missing and
   ambiguous targets, ordinary installed repair hints, preserved receipts/metadata and Unix names.
 

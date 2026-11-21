@@ -2657,7 +2657,6 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
             vec!["info", &canonical],
         ] {
             let text = String::from_utf8(run(&args, 0).stdout).unwrap();
-            assert!(text.contains("DESC\\nFORGED=record\\u{1b}"), "{text:?}");
             assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
             assert!(
                 !text.lines().any(|line| line.starts_with("FORGED=")),
@@ -2669,12 +2668,19 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
                     "{text:?}"
                 );
                 assert!(
-                    text.contains(
-                        "comment    COMMENT\\u{1b}[31m\n\n               CONTINUED\\tliteral\n"
-                    ),
+                    text.contains("comment    COMMENT\\u{1b}[31m\n    tool       DESC\n"),
                     "{text:?}"
                 );
+                assert!(!text.contains("CONTINUED"), "{text:?}");
+                assert!(!text.contains("FORGED=record"), "{text:?}");
             } else {
+                assert!(text.contains("DESC\\nFORGED=record\\u{1b}"), "{text:?}");
+                if args.last() == Some(&name) {
+                    assert!(
+                        text.contains("Description  COMMENT\\u{1b}[31m\n                 \n                 CONTINUED\\tliteral\n"),
+                        "{text:?}"
+                    );
+                }
                 assert!(
                     text.contains(&format!(
                         "{shown_name}\n  CATEGORY\\nFORGED=category\\u{{1b}}"

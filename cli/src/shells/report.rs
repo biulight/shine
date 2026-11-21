@@ -134,12 +134,13 @@ pub async fn handle_list_with_presets_note(
         crate::config::print_presets_note(config);
     }
     // A pristine embedded catalog needs no runtime state, including external-code trust.
-    let categories = if !config.is_external_presets && config.active_presets_overlay_dir().is_none()
-    {
-        metadata::load_embedded_categories(None)?
-    } else {
-        metadata::load_active_categories(config, None).await?
-    };
+    let mut categories =
+        if !config.is_external_presets && config.active_presets_overlay_dir().is_none() {
+            metadata::load_embedded_categories(None)?
+        } else {
+            metadata::load_active_categories(config, None).await?
+        };
+    categories.retain(|category| !category.files.is_empty());
 
     if categories.is_empty() {
         println!("{}", colors::dim("No shell preset categories found."));
@@ -172,42 +173,34 @@ pub async fn handle_list_with_presets_note(
             .map(|s| console::measure_text_width(s))
             .max()
             .unwrap_or(0);
-        let gap = 4;
-        let desc_col = max_name + gap;
-        let continuation_indent = " ".repeat(4 + desc_col);
+        let desc_col = max_name + 4;
 
         for (script, name) in cat.files.iter().zip(names.iter()) {
-            let padding = " ".repeat(desc_col - console::measure_text_width(name));
-            match script.description.as_slice() {
-                [] => println!("    {name}"),
-                [first, rest @ ..] => {
-                    let first = escape_controls(first);
-                    println!("    {name}{padding}{first}");
-                    for line in rest {
-                        if line.is_empty() {
-                            println!();
-                        } else {
-                            let line = escape_controls(line);
-                            println!("{continuation_indent}{line}");
-                        }
-                    }
-                }
+            let mut line = format!("    {name}");
+            let summary = script
+                .description
+                .first()
+                .and_then(|description| description.lines().next());
+            if let Some(summary) = summary.filter(|summary| !summary.is_empty()) {
+                let padding = desc_col - console::measure_text_width(name);
+                line.push_str(&" ".repeat(padding));
+                line.push_str(&escape_controls(summary));
             }
-            if script.runtime == crate::bin_links::LinkRuntime::Bun {
-                let status = if bun_available {
-                    colors::green("available")
-                } else {
-                    colors::yellow("not found on PATH")
-                };
-                println!(
-                    "{continuation_indent}{} {status}",
-                    colors::dim("runtime: bun ·")
-                );
+            if !bun_available && script.runtime == crate::bin_links::LinkRuntime::Bun {
+                line.push(' ');
+                line.push_str(&colors::yellow("[Bun missing]"));
             }
-            println!();
+            println!("{line}");
         }
+        println!();
     }
 
+    println!(
+        "{}",
+        colors::dim(
+            "Run `shine shell info <CATEGORY>/<COMMAND>` for details (e.g. `shine shell info proxy/setproxy`)."
+        )
+    );
     println!(
         "{}",
         colors::dim("Run `shine install shell/<CATEGORY>` to install a specific category.")

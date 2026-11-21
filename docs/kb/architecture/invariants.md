@@ -100,8 +100,10 @@ bugs. Check this list before changing the modules named in each entry.
   App/Shell catalog list/info encode control-bearing names, descriptions and paths before styling or
   column measurement. Control-bearing categories get an original-target install notice, never an
   escaped alias as a copyable operand; Core metadata, selection and inspection remain unchanged.
-  Shell description lines keep parsed paragraph/blank-line structure while encoding controls
-  within each line; target lookup, ambiguity and missing-target exits retain their original policy.
+  The Shell catalog omits categories without commands for the active platform and shell. It shows
+  only the first description line and flags Bun commands when Bun is missing from PATH.
+  Shell detail views keep parsed paragraph and blank-line structure while encoding controls
+  within each line. Target lookup, ambiguity and missing-target exits retain their original policy.
   Installed App/Shell `info` encodes metadata labels/descriptions and path headings after inspection;
   verbose content keeps the existing lossy UTF-8 decoding and missing-final-newline behavior.
   Info diff file labels encode controls before unified-diff construction, so path newlines cannot

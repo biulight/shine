@@ -1838,7 +1838,76 @@ fn simple_list_shows_partially_installed_app_categories() {
 }
 
 #[test]
-fn shell_descriptions_align_unicode_names_and_continuations() {
+fn shell_catalog_lists_only_command_summaries_and_missing_runtimes() {
+    let fixture = Fixture::new();
+    let shell = fixture.0.join("state/presets/shell");
+    let empty = shell.join("hidden-category");
+    fs::create_dir(&empty).unwrap();
+    let (extension, other_platform) = if cfg!(windows) {
+        ("ps1", "linux")
+    } else {
+        ("sh", "windows")
+    };
+    fs::write(
+        empty.join("shine.toml"),
+        format!(
+            "[[files]]\nsource = 'hidden.ts'\nruntime = 'bun'\nplatforms = ['{other_platform}']\n"
+        ),
+    )
+    .unwrap();
+    fs::write(empty.join("hidden.ts"), "// Unsupported command\n").unwrap();
+    let output = fixture.run(&["shell", "list"]);
+    success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("No shell preset categories found."), "{text}");
+    assert!(!text.contains("hidden-category"), "{text}");
+
+    let tools = shell.join("tools");
+    fs::create_dir(&tools).unwrap();
+    fs::write(
+        tools.join("shine.toml"),
+        format!(
+            "[[files]]\nsource = 'helper.{extension}'\n[[files]]\nsource = 'runner.ts'\nruntime = 'bun'\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        tools.join(format!("helper.{extension}")),
+        "# Native summary\n# Native details\n",
+    )
+    .unwrap();
+    fs::write(tools.join("runner.ts"), "// Bun summary\n// Bun details\n").unwrap();
+
+    let bin = fixture.0.join("bin");
+    fs::create_dir(&bin).unwrap();
+    for bun_available in [false, true] {
+        if bun_available {
+            let bun = if cfg!(windows) { "bun.exe" } else { "bun" };
+            fs::write(bin.join(bun), "").unwrap();
+        }
+        let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+        command.args(["shell", "list"]).env("PATH", &bin);
+        let output = fixture.run_command(command);
+        success(&output);
+        let text = stdout(&output);
+        let suffix = if bun_available { "" } else { " [Bun missing]" };
+        let expected = format!(
+            concat!(
+                "Shell Preset Categories\n\n",
+                "  tools  2 scripts\n",
+                "    helper    Native summary\n",
+                "    runner    Bun summary{}\n\n",
+                "Run `shine shell info <CATEGORY>/<COMMAND>` for details (e.g. `shine shell info proxy/setproxy`).\n"
+            ),
+            suffix
+        );
+        assert!(text.contains(&expected), "{text}");
+        assert!(!text.contains("hidden-category"), "{text}");
+    }
+}
+
+#[test]
+fn shell_catalog_summaries_align_unicode_names() {
     let fixture = Fixture::new();
     let preset = fixture.0.join("state/presets/shell/unicode");
     fs::create_dir_all(&preset).unwrap();
@@ -1860,11 +1929,10 @@ fn shell_descriptions_align_unicode_names_and_continuations() {
         .lines()
         .filter_map(|line| {
             line.split_once("First description")
-                .or_else(|| line.split_once("Continued description"))
                 .map(|(prefix, _)| console::measure_text_width(prefix))
         })
         .collect();
-    assert_eq!(widths.len(), 6, "{text}");
+    assert_eq!(widths.len(), 3, "{text}");
     assert!(widths.iter().all(|width| *width == widths[0]), "{text}");
 }
 
