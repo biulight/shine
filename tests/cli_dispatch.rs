@@ -2384,7 +2384,11 @@ fn preset_source_notes_escape_paths_without_changing_effective_layers_or_state()
             "schema_version = 2\n".to_owned()
         };
         fs::write(state.join("config.toml"), &config).unwrap();
-        for args in [vec!["app", "list"], vec!["app", "info", "demo"]] {
+        for args in [
+            vec!["app", "list"],
+            vec!["app", "info", "demo"],
+            vec!["list", "--available", "app"],
+        ] {
             let result = fixture
                 .command()
                 .env_remove("SUDO_USER")
@@ -2405,7 +2409,7 @@ fn preset_source_notes_escape_paths_without_changing_effective_layers_or_state()
             assert_eq!(text.contains("◈ Presets Overlay"), use_overlay, "{text:?}");
             assert_eq!(
                 text.contains("snapshot · changes require `shine upgrade`"),
-                args[1] == "list",
+                args[0] == "list",
                 "{text:?}"
             );
             assert!(
@@ -2507,15 +2511,17 @@ fn app_catalog_queries_escape_metadata_without_changing_source_or_install_state(
                 text.contains("DESC\\nFORGED=installed\\u{1b}[31m"),
                 "{text:?}"
             );
-            assert!(text.contains("FILE\\rFAKE\\tVALUE"), "{text:?}");
-            if name != shown_name {
+            assert_eq!(
+                text.contains("FILE\\rFAKE\\tVALUE"),
+                args[1] != "list",
+                "{text:?}"
+            );
+            if name != shown_name && args[1] != "list" {
                 assert!(text.contains("config\\nFORGED=file\\u{1b}.txt"), "{text:?}");
-                if args[1] != "list" {
-                    assert!(
-                        text.contains("~/.config/demo\\nFORGED=path\\u{1b}"),
-                        "{text:?}"
-                    );
-                }
+                assert!(
+                    text.contains("~/.config/demo\\nFORGED=path\\u{1b}"),
+                    "{text:?}"
+                );
             }
             if args[1] == "list" {
                 let width = console::measure_text_width(shown_name).max("short".len());

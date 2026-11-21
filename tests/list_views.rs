@@ -3314,6 +3314,73 @@ fn app_info_reports_stale_destination_ownership_before_suggesting_replacement() 
 }
 
 #[test]
+fn app_list_shows_category_summaries_and_preserves_available_and_installed_views() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    let metadata = fixture.0.join("state/presets/app/demo/shine.toml");
+    let original = fs::read_to_string(&metadata).unwrap();
+    let first_line = "設定".repeat(20);
+    let description = format!("{first_line} Continuation text.");
+    fs::write(
+        &metadata,
+        format!("description = {description:?}\n{original}"),
+    )
+    .unwrap();
+    let solo = fixture.0.join("state/presets/app/solo");
+    fs::create_dir_all(&solo).unwrap();
+    fs::write(solo.join("settings.txt"), "# Standalone settings.\n").unwrap();
+
+    let output = fixture.run(&["app", "list"]);
+    success(&output);
+    let text = stdout(&output);
+    assert!(text.starts_with("◈ Preset Source"), "{text}");
+    assert!(!text.contains("Shell Deployment"), "{text}");
+    assert!(
+        text.ends_with(&format!(
+            "App Preset Categories\n\n  demo  {first_line}\n        Continuation text.\n  solo  Standalone settings.\n\n\
+             View files and status with `shine app info <CATEGORY>`.\n\
+             Preview installation with `shine app install <CATEGORY> --dry-run`.\n"
+        )),
+        "{text}"
+    );
+
+    let output = fixture.run(&["list", "--available", "app"]);
+    success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("◈ Shell Deployment"), "{text}");
+    assert!(
+        text.contains(&format!("  demo  {description}  2 files\n")),
+        "{text}"
+    );
+    assert!(text.contains("    config.txt\n    manual.txt\n"), "{text}");
+    assert!(
+        text.ends_with("Run `shine app install` to install all.\n"),
+        "{text}"
+    );
+
+    let output = fixture.run(&["app", "info", "demo"]);
+    success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("  Files        2\n"), "{text}");
+    assert!(text.contains("  config.txt  [not installed]\n"), "{text}");
+    assert!(!fixture.0.join("state/app-manifest.toml").exists());
+    assert!(!fixture.0.join("destination").exists());
+
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    let output = fixture.run(&["list"]);
+    success(&output);
+    let text = stdout(&output);
+    assert!(text.ends_with("==> App Configs\ndemo\n"), "{text}");
+
+    let output = fixture.run(&["update", "--verbose", "--diff"]);
+    success(&output);
+    let text = stdout(&output);
+    for label in ["demo/config.txt", "demo/manual.txt"] {
+        assert!(text.contains(label), "{text}");
+    }
+}
+
+#[test]
 fn app_catalog_and_update_columns_use_unicode_display_width() {
     let fixture = Fixture::new();
     for category in ["abc", "猫", "e\u{301}"] {

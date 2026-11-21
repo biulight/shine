@@ -273,7 +273,11 @@ fn print_app_install_hint(controls: bool, command: &str, purpose: &str) {
 }
 
 pub async fn handle_list(config: &Config) -> Result<()> {
-    handle_list_with_presets_note(config, true).await
+    for line in crate::config::presets_source_note_lines(config) {
+        println!("{line}");
+    }
+    println!();
+    print_app_catalog(config, AppCatalogView::Categories).await
 }
 
 #[doc(hidden)]
@@ -284,6 +288,15 @@ pub async fn handle_list_with_presets_note(
     if print_presets_note {
         crate::config::print_presets_note(config);
     }
+    print_app_catalog(config, AppCatalogView::Available).await
+}
+
+enum AppCatalogView {
+    Categories,
+    Available,
+}
+
+async fn print_app_catalog(config: &Config, view: AppCatalogView) -> Result<()> {
     let categories = metadata::load_active_categories(config, None).await?;
 
     if categories.is_empty() {
@@ -298,6 +311,7 @@ pub async fn handle_list_with_presets_note(
         .map(|c| console::measure_text_width(&escape_controls(&c.name)))
         .max()
         .unwrap_or(0);
+    let description_indent = " ".repeat(4 + name_width);
 
     for cat in &categories {
         let effective_desc = cat.description.as_deref().or_else(|| {
@@ -310,6 +324,25 @@ pub async fn handle_list_with_presets_note(
 
         let name = escape_controls(&cat.name);
         let name_pad = " ".repeat(name_width.saturating_sub(console::measure_text_width(&name)));
+        if matches!(view, AppCatalogView::Categories) {
+            if let Some(description) = effective_desc
+                .map(escape_controls)
+                .filter(|description| !description.trim().is_empty())
+            {
+                let mut output = String::new();
+                crate::preset_report::write_wrapped_with_continuation(
+                    &mut output,
+                    &format!("  {name}{name_pad}  "),
+                    &description_indent,
+                    &description,
+                );
+                print!("{output}");
+            } else {
+                println!("  {name}");
+            }
+            continue;
+        }
+
         let count = cat.files.len() + cat.secret_files.len();
         let file_count = if count > 1 {
             format!("  {}", colors::dim(&format!("{count} files")))
@@ -341,11 +374,19 @@ pub async fn handle_list_with_presets_note(
     }
 
     println!();
-    println!(
-        "{}",
-        colors::dim("Run `shine install app/<CATEGORY>` to install a specific category.")
-    );
-    println!("{}", colors::dim("Run `shine app install` to install all."));
+    let hints = match view {
+        AppCatalogView::Categories => [
+            "View files and status with `shine app info <CATEGORY>`.",
+            "Preview installation with `shine app install <CATEGORY> --dry-run`.",
+        ],
+        AppCatalogView::Available => [
+            "Run `shine install app/<CATEGORY>` to install a specific category.",
+            "Run `shine app install` to install all.",
+        ],
+    };
+    for hint in hints {
+        println!("{}", colors::dim(hint));
+    }
 
     Ok(())
 }

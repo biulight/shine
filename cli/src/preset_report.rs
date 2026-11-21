@@ -58,7 +58,7 @@ pub(crate) fn write_wrapped(output: &mut String, prefix: &str, text: &str) {
     write_wrapped_with_continuation(output, prefix, prefix, text);
 }
 
-fn write_wrapped_with_continuation(
+pub(crate) fn write_wrapped_with_continuation(
     output: &mut String,
     first_prefix: &str,
     continuation_prefix: &str,
