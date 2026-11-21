@@ -841,6 +841,105 @@ fn shell_diff_missing_paths_escape_controls_without_repairing_state() {
 }
 
 #[test]
+fn shell_info_shows_command_status_and_only_relevant_details() {
+    let fixture = Fixture::new();
+    let preset = fixture.0.join("state/presets/shell/tools");
+    fs::create_dir(&preset).unwrap();
+    let script = if cfg!(windows) {
+        "native.ps1"
+    } else {
+        "native.sh"
+    };
+    fs::write(
+        preset.join("shine.toml"),
+        format!(
+            "description = 'Tools under test.'\n[[files]]\nsource = '{script}'\n\
+             [[files]]\nsource = 'runner.ts'\nruntime = 'bun'\ntransforms = ['template']\n\
+             env = [{{ source = 'QUALITY', target = 'IMAGE_QUALITY', sensitivity = 'plain' }}]\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        preset.join(script),
+        "# Native summary.\n# Usage: native KEY\n",
+    )
+    .unwrap();
+    fs::write(preset.join("runner.ts"), "// Bun summary.\n").unwrap();
+    let bin = fixture.0.join("tools-bin");
+    fs::create_dir(&bin).unwrap();
+    let run = |target: &str| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+        command.args(["shell", "info", target]).env("PATH", &bin);
+        let output = fixture.run_command(command);
+        success(&output);
+        stdout(&output)
+    };
+
+    for (bun_available, runtime) in [
+        (false, "bun (not found on PATH)"),
+        (true, "bun (available)"),
+    ] {
+        if bun_available {
+            fs::write(bin.join(if cfg!(windows) { "bun.exe" } else { "bun" }), "").unwrap();
+        }
+        let text = run("tools");
+        let expected = format!(
+            concat!(
+                "tools  Tools under test.\n\n",
+                "  ✗  native  [not installed]\n",
+                "       Native summary.\n",
+                "       Usage: native KEY\n\n",
+                "  ✗  runner  [not installed]\n",
+                "       Bun summary.\n",
+                "       Runtime      {}\n",
+                "       Transforms   template\n",
+                "       Environment  QUALITY=IMAGE_QUALITY\n\n",
+                "Run `shine install shell/tools` to install the tools category.\n",
+            ),
+            runtime
+        );
+        assert!(text.ends_with(&expected), "{text}");
+    }
+
+    for target in ["native", "tools/native"] {
+        let text = run(target);
+        let expected = format!(
+            concat!(
+                "tools  Tools under test.\n\n",
+                "  ✗  native  [not installed]\n",
+                "       Native summary.\n",
+                "       Usage: native KEY\n",
+                "       Source       shell/tools/{}\n\n",
+                "Run `shine install shell/tools/native` to install this command.\n",
+            ),
+            script
+        );
+        assert!(text.ends_with(&expected), "{text}");
+    }
+
+    let launcher_dir = fixture.0.join("state/bin");
+    fs::create_dir_all(&launcher_dir).unwrap();
+    let launcher = launcher_dir.join(if cfg!(windows) {
+        "native.ps1"
+    } else {
+        "native"
+    });
+    fs::write(&launcher, "foreign launcher\n").unwrap();
+    let text = run("tools");
+    assert!(
+        text.contains("  !  native  [launcher ownership conflict]"),
+        "{text}"
+    );
+    assert!(text.contains("  ✗  runner  [not installed]"), "{text}");
+    assert!(
+        text.ends_with("Run `shine info shell/tools --diff` to review the reported problems.\n"),
+        "{text}"
+    );
+    assert!(!text.contains("Run `shine install"), "{text}");
+    assert_eq!(fs::read_to_string(launcher).unwrap(), "foreign launcher\n");
+}
+
+#[test]
 fn shell_info_hints_preserve_category_arguments_before_and_after_install() {
     for category in ["team tools", "it's", "-demo"] {
         let fixture = Fixture::new();
@@ -857,14 +956,16 @@ fn shell_info_hints_preserve_category_arguments_before_and_after_install() {
         let target = format!("shell/{selector}");
         let info = fixture.run(&["shell", "info", "--", category]);
         success(&info);
-        let mut expected = vec!["shine", "shell", "install"];
-        if category.starts_with('-') {
-            expected.push("--");
-        }
-        expected.push(&selector);
+        let category_target = format!("shell/{category}");
+        let text = stdout(&info);
+        assert!(
+            !text.contains(&format!("shell/{category}/{script}")),
+            "{text}"
+        );
+        let suffix = format!("` to install the {category} category.");
         assert_hint_argv(
-            hint(&stdout(&info), "Run `", "` to install this target."),
-            &expected,
+            hint(&text, "Run `", &suffix),
+            &["shine", "install", &category_target],
         );
 
         success(&fixture.run(&["trust", "grant", &target, "--yes"]));
@@ -872,9 +973,20 @@ fn shell_info_hints_preserve_category_arguments_before_and_after_install() {
         let receipt = fs::read(fixture.0.join("state/shell-manifest.toml")).unwrap();
         let info = fixture.run(&["shell", "info", "--", category]);
         success(&info);
+        let text = stdout(&info);
+        assert!(
+            text.ends_with("  ✓  tool  [up-to-date]\n       never executed\n"),
+            "{text}"
+        );
+
+        fs::write(preset.join(script), "# Changed since installation\n").unwrap();
+        let info = fixture.run(&["shell", "info", "--", category]);
+        success(&info);
+        let text = stdout(&info);
+        assert!(text.contains("  ↑  tool  [update available]\n"), "{text}");
         assert_hint_argv(
-            hint(&stdout(&info), "Run `", "` to repair this target."),
-            &["shine", "install", &target, "--replace-managed"],
+            hint(&text, "Run `", "` to apply available updates."),
+            &["shine", "upgrade", &category_target],
         );
         assert_eq!(
             fs::read(fixture.0.join("state/shell-manifest.toml")).unwrap(),

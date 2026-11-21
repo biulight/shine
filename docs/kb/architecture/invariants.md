@@ -98,12 +98,15 @@ bugs. Check this list before changing the modules named in each entry.
   category is gone; they prevent the empty-installation message and retain uninstall-preview
   guidance without becoming upgrade candidates or changing files, receipts or exit status.
   App/Shell catalog list/info encode control-bearing names, descriptions and paths before styling or
-  column measurement. Control-bearing categories get an original-target install notice, never an
+  column measurement. Control-bearing targets get original-target guidance, never an
   escaped alias as a copyable operand; Core metadata, selection and inspection remain unchanged.
   The Shell catalog omits categories without commands for the active platform and shell. It shows
   only the first description line and flags Bun commands when Bun is missing from PATH.
   Shell detail views keep parsed paragraph and blank-line structure while encoding controls
-  within each line. Target lookup, ambiguity and missing-target exits retain their original policy.
+  within each line. The available Shell detail view shows a source file only for an explicit
+  command query. Footer hints use typed statuses, keep category or command scope, and direct
+  launcher conflicts to inspection. Current commands alone need no action hint. Target lookup,
+  ambiguity and missing-target exits retain their original policy.
   Installed App/Shell `info` encodes metadata labels/descriptions and path headings after inspection;
   verbose content keeps the existing lossy UTF-8 decoding and missing-final-newline behavior.
   Info diff file labels encode controls before unified-diff construction, so path newlines cannot

@@ -2675,20 +2675,24 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
                 assert!(!text.contains("FORGED=record"), "{text:?}");
             } else {
                 assert!(text.contains("DESC\\nFORGED=record\\u{1b}"), "{text:?}");
-                if args.last() == Some(&name) {
+                let category_query = args.last() == Some(&name);
+                if category_query {
                     assert!(
-                        text.contains("Description  COMMENT\\u{1b}[31m\n                 \n                 CONTINUED\\tliteral\n"),
+                        text.contains(
+                            "       COMMENT\\u{1b}[31m\n       \n       CONTINUED\\tliteral\n"
+                        ),
                         "{text:?}"
                     );
                 }
                 assert!(
                     text.contains(&format!(
-                        "{shown_name}\n  CATEGORY\\nFORGED=category\\u{{1b}}"
+                        "{shown_name}  CATEGORY\\nFORGED=category\\u{{1b}}"
                     )),
                     "{text:?}"
                 );
-                assert!(
-                    text.contains(&format!("shell/{shown_name}/{script}")),
+                assert_eq!(
+                    text.contains(&format!("Source       shell/{shown_name}/{script}")),
+                    !category_query,
                     "{text:?}"
                 );
                 if name != shown_name {
@@ -2700,13 +2704,9 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
                     );
                     assert!(!text.contains("Run `shine"), "{text:?}");
                 } else {
-                    let target = if args.last() == Some(&name) {
-                        "demo"
-                    } else {
-                        "demo/tool"
-                    };
+                    let target = if category_query { "demo" } else { "demo/tool" };
                     assert!(
-                        text.contains(&format!("Run `shine shell install {target}`")),
+                        text.contains(&format!("Run `shine install shell/{target}`")),
                         "{text:?}"
                     );
                 }
@@ -2752,10 +2752,8 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
             let before = fs::read(&receipt).unwrap();
             let text = String::from_utf8(run(&["shell", "info", "demo/tool"], 0).stdout).unwrap();
             assert!(text.contains("DESC\\nFORGED=record\\u{1b}"), "{text:?}");
-            assert!(
-                text.contains("Run `shine install shell/demo/tool --replace-managed`"),
-                "{text:?}"
-            );
+            assert!(text.contains("  ✓  tool  [up-to-date]"), "{text:?}");
+            assert!(!text.contains("Run `shine"), "{text:?}");
             assert_eq!(fs::read(receipt).unwrap(), before);
         }
         assert_eq!(
