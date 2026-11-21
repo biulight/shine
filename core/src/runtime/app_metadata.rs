@@ -410,12 +410,13 @@ impl<H> CoreRuntime<H> {
             Some(AppDestinationRoot::Path(raw)) => {
                 expand_path(raw, self.context())?.join(&file.target_rel)
             }
-            None => match self.app_category_destination_root(category)? {
-                Some(root) => root.join(&file.target_rel),
-                None if let Some(annotation) = &file.legacy_dest_annotation => {
-                    expand_path(annotation, self.context())?
-                }
-                None => self
+            None => match (
+                self.app_category_destination_root(category)?,
+                &file.legacy_dest_annotation,
+            ) {
+                (Some(root), _) => root.join(&file.target_rel),
+                (None, Some(annotation)) => expand_path(annotation, self.context())?,
+                (None, None) => self
                     .context()
                     .app_default_dest_root
                     .join(&category.name)

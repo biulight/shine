@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-11-22 — App destination matching must compile on Rust 1.90
+
+- **Symptom**: an `if let` match guard in App destination resolution compiled on the pinned
+  development toolchain and failed the Rust 1.90 MSRV check with `E0658`.
+- **Fix**: match the resolved category root and legacy annotation as a tuple. Keep the category
+  root ahead of the annotation and preserve the default destination fallback.
+- **Verification**: use `cargo +1.90.0 check --locked --workspace` for syntax compatibility and
+  run the existing App destination regressions for behavior.
+
 ## 2026-11-17 — Surge module inventory can include a detail line
 
 - **Symptom**: Surge Mac 6.11.0 listed modules successfully, but both artifact operations rejected
