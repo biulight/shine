@@ -391,27 +391,30 @@ impl<H> CoreRuntime<H> {
             .with_context(|| format!("missing preset file {path}"))
     }
 
+    /// Resolve the declared default root using the same rules as App destinations.
+    pub fn app_category_destination_root(&self, category: &AppCategory) -> Result<Option<PathBuf>> {
+        category
+            .destination_root
+            .as_deref()
+            .map(|raw| expand_path(raw, self.context()))
+            .transpose()
+    }
+
     pub fn app_destination(&self, category: &AppCategory, file: &AppFile) -> Result<PathBuf> {
-        let root = file.destination_root.as_ref().map_or_else(
-            || {
-                category
-                    .destination_root
-                    .as_ref()
-                    .map(|path| AppDestinationRoot::Path(path.clone()))
-            },
-            |root| Some(root.clone()),
-        );
-        let destination = match root {
+        let destination = match &file.destination_root {
             Some(AppDestinationRoot::DataDir(relative)) => self
                 .context()
                 .data_dir
                 .join(relative)
                 .join(&file.target_rel),
             Some(AppDestinationRoot::Path(raw)) => {
-                expand_path(&raw, self.context())?.join(&file.target_rel)
+                expand_path(raw, self.context())?.join(&file.target_rel)
             }
-            None => match &file.legacy_dest_annotation {
-                Some(annotation) => expand_path(annotation, self.context())?,
+            None => match self.app_category_destination_root(category)? {
+                Some(root) => root.join(&file.target_rel),
+                None if let Some(annotation) = &file.legacy_dest_annotation => {
+                    expand_path(annotation, self.context())?
+                }
                 None => self
                     .context()
                     .app_default_dest_root

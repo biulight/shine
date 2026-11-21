@@ -2403,8 +2403,9 @@ fn preset_source_notes_escape_paths_without_changing_effective_layers_or_state()
                 "{text:?}"
             );
             assert_eq!(text.contains("◈ Presets Overlay"), use_overlay, "{text:?}");
-            assert!(
+            assert_eq!(
                 text.contains("snapshot · changes require `shine upgrade`"),
+                args[1] == "list",
                 "{text:?}"
             );
             assert!(
@@ -2593,12 +2594,7 @@ fn app_catalog_queries_escape_metadata_without_changing_source_or_install_state(
             "{text:?}"
         );
         assert!(text.contains("FILE\\rFAKE\\tVALUE"), "{text:?}");
-        assert!(text.contains("Installed."), "{text:?}");
-        assert!(text.contains("--replace-managed"), "{text:?}");
-        assert_eq!(
-            text.contains("copyable command omitted"),
-            name != shown_name
-        );
+        assert!(text.ends_with("  2 up to date\n"), "{text:?}");
         assert_eq!(fs::read(receipt).unwrap(), before);
         assert_eq!(
             fs::read_to_string(category.join("shine.toml")).unwrap(),
