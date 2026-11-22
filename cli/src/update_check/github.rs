@@ -8,9 +8,8 @@ use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
-/// Defense-in-depth cap on downloaded release archives; the real binaries
-/// are a few MB, so anything past this points at a corrupted or malicious asset.
-pub(super) const MAX_RELEASE_ASSET_BYTES: u64 = 200 * 1024 * 1024;
+/// Maximum size of a compressed release archive downloaded by self-upgrade.
+pub(super) const MAX_RELEASE_ASSET_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct GithubRelease {

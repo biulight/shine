@@ -268,7 +268,7 @@ mod tests {
     }
 
     async fn local_response(
-        response: &'static [u8],
+        response: impl AsRef<[u8]> + Send + 'static,
         width: Option<usize>,
         limit: u64,
     ) -> (Result<Vec<u8>>, String) {
@@ -276,7 +276,7 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
             let mut socket = accept_request(listener).await;
-            socket.write_all(response).await.unwrap();
+            socket.write_all(response.as_ref()).await.unwrap();
         });
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let mut output = Vec::new();
@@ -291,6 +291,27 @@ mod tests {
         .await;
         server.await.unwrap();
         (result, String::from_utf8(output).unwrap())
+    }
+
+    #[tokio::test]
+    async fn release_asset_download_enforces_the_32_mib_boundary() {
+        const BOUNDARY: usize = 32 * 1024 * 1024;
+        let mut response =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {BOUNDARY}\r\n\r\n").into_bytes();
+        response.resize(response.len() + BOUNDARY, b'x');
+        let (result, _) = local_response(response, None, MAX_RELEASE_ASSET_BYTES).await;
+        assert_eq!(result.unwrap().len(), BOUNDARY);
+
+        let oversized = BOUNDARY + 1;
+        let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {oversized}\r\n\r\n");
+        let (result, _) = local_response(response, None, MAX_RELEASE_ASSET_BYTES).await;
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains(&format!(
+                "reports {oversized} bytes, exceeding the {BOUNDARY}-byte limit"
+            )),
+            "{error}"
+        );
     }
 
     #[tokio::test]
