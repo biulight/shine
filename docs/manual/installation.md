@@ -171,6 +171,9 @@ steps stay applied.
 
 Program removal comes last. Shine only removes unchanged copies it can confirm it installed.
 Review any changed or different-version copy separately.
+On Unix, if the preview lists a protected program for manual removal, keep a separate copy of the
+same build first. Have an administrator remove the listed executable, then rerun `self uninstall`
+from the separate copy as your usual user with the same configuration.
 
 For a Cargo installation, use the Cargo uninstall command printed by Shine. For a manual download
 or an older installation without a matching receipt, remove the executable through its original

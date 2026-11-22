@@ -1781,7 +1781,9 @@ normal cleanup and forced-abort residue retain ADR 0092 semantics. See [code ana
 
 Read-only dispatch loads the current configuration without starting initialization or update
 workers. Preview builds domain uninstall plans and inventories program receipts, service state
-and final cleanup candidates. Apply uses each domain's approval, lock and recovery path.
+and final cleanup candidates.
+Linked Sys startup files are listed for manual inspection. A verified Unix program in a directory
+the account cannot modify requires manual removal before domain cleanup. Apply uses each domain's approval, lock and recovery path.
 After all domains converge, it captures a new final review, acquires domain and config locks,
 rechecks that review, clears only the listed state and removes verified program copies last.
 A retry re-inventories the remaining resources. See [ADR 0165](../decisions/0165-self-uninstall.md).

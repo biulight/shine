@@ -1,5 +1,13 @@
 # Lessons Learned
 
+## 2026-11-22 — Check Unix program removal before self-uninstall cleanup
+
+Installing into a protected directory can succeed through elevation. The uninstalling account
+needs write and search permission on the parent to unlink the executable. Check access during
+preview and before cleanup, while the user still has the receipt, configuration and program.
+A symlinked startup file is a separate case. Report it for manual inspection and leave its
+target alone while collecting independently owned state.
+
 ## 2026-11-22 — App destination matching must compile on Rust 1.90
 
 - **Symptom**: an `if let` match guard in App destination resolution compiled on the pinned
