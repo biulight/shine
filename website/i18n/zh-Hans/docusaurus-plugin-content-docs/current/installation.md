@@ -30,7 +30,7 @@ shine --version
 ```bash
 curl -fsSLo install.sh https://github.com/biulight/shine/releases/latest/download/install.sh
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.11.0 sh install.sh
+SHINE_VERSION=2.12.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -47,7 +47,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```powershell
 Invoke-WebRequest https://github.com/biulight/shine/releases/latest/download/install.ps1 -OutFile install.ps1
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.11.0"; .\install.ps1
+$env:SHINE_VERSION = "2.12.0"; .\install.ps1
 ```
 
 ## 安装 preview

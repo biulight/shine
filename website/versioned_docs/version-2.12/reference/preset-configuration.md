@@ -98,7 +98,7 @@ their listed inputs. Declaring `env` does not isolate a process from its inherit
 | `metadata_schema_version` | `1` (legacy) | Supported versions: `1`, `2`, `3`. Use `2` for new ordinary presets, or `3` when declaring `secret_files`. |
 | `description` | None | Human-readable category description. |
 | `dest` | Required | Default destination root; see [paths](#platforms-and-paths). |
-| `list_mode` | `files` with explicit `files`, otherwise `category` | Choose `files` or `category` for list presentation. |
+| `list_mode` | `files` with explicit `files`, otherwise `category` | Group App status and update output by file or category. The available catalog always shows categories. |
 | `files` | Discover category files | Explicit file list. Without it, files other than `shine.toml` are discovered; a nonempty `secret_files` list disables this implicit discovery. Use explicit entries to keep helper scripts out of installation targets. |
 | `secret_files` | `[]` | Workspace-backed encrypted file groups; see [secret files](#secret-files). |
 | `artifact` | None | Scripts for explicit apply/remove operations. |
