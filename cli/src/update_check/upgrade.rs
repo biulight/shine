@@ -1,4 +1,4 @@
-use super::github::{GithubRelease, download_asset_bytes, fetch_release};
+use super::github::{GithubRelease, fetch_release};
 use super::{ReleaseChannel, UpgradeResult, parse_release_tag, unix_timestamp_now};
 use crate::config::Config;
 use crate::{output::escape_controls, platform, version};
@@ -6,6 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use flate2::read::GzDecoder;
 use semver::Version;
 use std::ffi::OsStr;
+use std::io::Write;
 use std::path::Path;
 use tar::Archive;
 use tokio::fs;
@@ -59,8 +60,10 @@ pub async fn upgrade_to_release(
         std::env::consts::OS,
         std::env::consts::ARCH,
     )?;
-    let archive_bytes = download_asset_bytes(&asset.download_url).await?;
+    let archive_bytes =
+        super::download::release_archive(&asset.download_url, &asset.release_tag).await?;
     let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
+    let _ = writeln!(std::io::stderr(), "Installing...");
     install_downloaded_archive(
         &archive_bytes,
         &current_exe,

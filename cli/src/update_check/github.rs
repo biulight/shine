@@ -10,7 +10,7 @@ use std::time::Duration;
 
 /// Defense-in-depth cap on downloaded release archives; the real binaries
 /// are a few MB, so anything past this points at a corrupted or malicious asset.
-const MAX_RELEASE_ASSET_BYTES: u64 = 200 * 1024 * 1024;
+pub(super) const MAX_RELEASE_ASSET_BYTES: u64 = 200 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct GithubRelease {
@@ -116,9 +116,13 @@ pub(super) async fn fetch_release(channel: ReleaseChannel) -> Result<GithubRelea
     })
 }
 
-pub(super) async fn download_asset_bytes(download_url: &str) -> Result<Vec<u8>> {
-    let client = github_client()?;
-    let response = client
+pub(super) async fn download_asset_bytes(
+    client: &reqwest::Client,
+    download_url: &str,
+    limit: u64,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> Result<Vec<u8>> {
+    let mut response = client
         .get(download_url)
         .send()
         .await
@@ -133,30 +137,35 @@ pub(super) async fn download_asset_bytes(download_url: &str) -> Result<Vec<u8>> 
         );
     }
 
-    if let Some(len) = response.content_length()
-        && len > MAX_RELEASE_ASSET_BYTES
+    let total = response.content_length();
+    if let Some(len) = total
+        && len > limit
     {
         bail!(
-            "release asset at {download_url} reports {len} bytes, exceeding the {MAX_RELEASE_ASSET_BYTES}-byte limit"
+            "release asset at {download_url} reports {len} bytes, exceeding the {limit}-byte limit"
         );
     }
 
-    let bytes = response
-        .bytes()
+    let mut bytes = Vec::new();
+    progress(0, total);
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .context("failed to read release asset bytes")?;
-
-    if bytes.len() as u64 > MAX_RELEASE_ASSET_BYTES {
-        bail!(
-            "release asset at {download_url} is {} bytes, exceeding the {MAX_RELEASE_ASSET_BYTES}-byte limit",
-            bytes.len()
-        );
+        .context("failed to read release asset bytes")?
+    {
+        let received = bytes.len() as u64 + chunk.len() as u64;
+        if received > limit {
+            bail!(
+                "release asset at {download_url} is {received} bytes, exceeding the {limit}-byte limit"
+            );
+        }
+        bytes.extend_from_slice(&chunk);
+        progress(received, total);
     }
-
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
-fn github_client() -> Result<reqwest::Client> {
+pub(super) fn github_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .default_headers(default_headers()?)
         .timeout(Duration::from_secs(30))
