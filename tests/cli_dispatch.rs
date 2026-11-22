@@ -4181,6 +4181,11 @@ async fn sys_shell_selection_filters_all_available_list_routes_but_keeps_full_lo
             }
         }
         if args.contains(&"--all") {
+            let recorded = text
+                .lines()
+                .find(|line| line.trim_start().starts_with("zsh-only "))
+                .unwrap();
+            assert!(recorded.ends_with("zsh-only"), "{recorded}");
             assert!(text.contains("Shell integration: zsh"), "{text}");
             assert!(
                 text.contains("unrestricted (no integration declared)"),

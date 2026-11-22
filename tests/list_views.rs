@@ -1601,6 +1601,7 @@ async fn sys_all_catalog_limits_guidance_to_current_os_without_changing_lookup()
     let all = fixture.run(&["sys", "list", "--all"]);
     success(&all);
     let text = stdout(&all);
+    assert!(text.contains(&format!("{os} (current)")), "{text}");
     assert!(
         text.contains(&format!("{foreign} (catalog only)")),
         "{text}"
@@ -1618,8 +1619,17 @@ async fn sys_all_catalog_limits_guidance_to_current_os_without_changing_lookup()
     );
     let local = fixture.run(&["sys", "list"]);
     success(&local);
+    assert!(!stdout(&local).contains("(current)"));
     assert!(!stdout(&local).contains("Foreign"));
     assert!(!stdout(&local).contains("catalog only"));
+    for output in [&local, &all] {
+        let text = stdout(output);
+        let row = text
+            .lines()
+            .find(|line| line.contains("Local shared"))
+            .unwrap();
+        assert!(row.ends_with("Local shared"), "{row}");
+    }
     let info = fixture.run(&["sys", "info", "shared"]);
     success(&info);
     assert!(stdout(&info).contains("Local shared"));
