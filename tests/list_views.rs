@@ -3520,7 +3520,7 @@ fn app_info_reports_stale_destination_ownership_before_suggesting_replacement() 
 }
 
 #[test]
-fn app_list_shows_category_summaries_and_preserves_available_and_installed_views() {
+fn app_list_shares_category_summaries_and_preserves_installed_views() {
     let fixture = Fixture::new();
     fixture.app(false);
     let metadata = fixture.0.join("state/presets/app/demo/shine.toml");
@@ -3552,17 +3552,7 @@ fn app_list_shows_category_summaries_and_preserves_available_and_installed_views
 
     let output = fixture.run(&["list", "--available", "app"]);
     success(&output);
-    let text = stdout(&output);
-    assert!(text.contains("◈ Shell Deployment"), "{text}");
-    assert!(
-        text.contains(&format!("  demo  {description}  2 files\n")),
-        "{text}"
-    );
-    assert!(text.contains("    config.txt\n    manual.txt\n"), "{text}");
-    assert!(
-        text.ends_with("Run `shine app install` to install all.\n"),
-        "{text}"
-    );
+    assert_eq!(stdout(&output), text);
 
     let output = fixture.run(&["app", "info", "demo"]);
     success(&output);
@@ -3587,6 +3577,56 @@ fn app_list_shows_category_summaries_and_preserves_available_and_installed_views
     for label in ["demo/config.txt", "demo/manual.txt"] {
         assert!(text.contains(label), "{text}");
     }
+}
+
+#[tokio::test]
+async fn available_overview_prints_one_source_header_and_reuses_scoped_catalogs() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    let state = fixture.0.join("state");
+    fs::create_dir(state.join("overlay")).unwrap();
+    fs::write(
+        state.join("config.toml"),
+        "schema_version = 2\npresets_overlay_dir = 'overlay'\n",
+    )
+    .unwrap();
+    let shell = state.join("presets/shell/demo");
+    fs::create_dir(&shell).unwrap();
+    let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+    fs::write(shell.join(script), "# Shell command summary.\n").unwrap();
+
+    let os = cli::sys::detect_os_id().await.unwrap();
+    let sys = state.join("presets/sys").join(os);
+    fs::create_dir_all(&sys).unwrap();
+    fs::write(
+        sys.join("shine.toml"),
+        "version = 2\n[[items]]\nid = 'example'\nlabel = 'Example system item'\nmode = 'managed'\n\
+         driver = 'managed-file'\n[items.config]\nsource = 'example.txt'\ntarget = '~/.example'\n",
+    )
+    .unwrap();
+    fs::write(sys.join("example.txt"), "fixture\n").unwrap();
+
+    let run = |args: &[&str]| {
+        let output = fixture.run(args);
+        success(&output);
+        stdout(&output)
+    };
+    let shell = run(&["shell", "list"]);
+    assert!(
+        shell.contains("    tool    Shell command summary.\n"),
+        "{shell}"
+    );
+    let app = run(&["app", "list"]);
+    let (_, app_body) = app.split_once("\n\n").unwrap();
+    let sys = run(&["sys", "list"]);
+    let (_, sys_body) = sys.split_once("\n\n").unwrap();
+    assert_eq!(run(&["list", "--available", "sys"]), sys);
+
+    let overview = run(&["list", "--available"]);
+    for note in ["◈ Preset Source", "◈ Presets Overlay", "◈ Shell Deployment"] {
+        assert_eq!(overview.matches(note).count(), 1, "{overview}");
+    }
+    assert_eq!(overview, format!("{shell}\n{app_body}\n{sys_body}"));
 }
 
 #[test]

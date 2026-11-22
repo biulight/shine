@@ -265,9 +265,7 @@ async fn run_command(cli: Cli) -> Result<()> {
 
 async fn handle_available_list(config: &Config, kind: Option<ResourceKind>) -> Result<()> {
     match kind {
-        Some(ResourceKind::App) => {
-            Box::pin(apps::handle_list_with_presets_note(config, true)).await
-        }
+        Some(ResourceKind::App) => Box::pin(apps::handle_list(config)).await,
         Some(ResourceKind::Shell) => Box::pin(shells::handle_list(config)).await,
         Some(ResourceKind::Sys) => Box::pin(sys::handle_list(config, false)).await,
         None => {
@@ -276,7 +274,7 @@ async fn handle_available_list(config: &Config, kind: Option<ResourceKind>) -> R
             println!();
             Box::pin(apps::handle_list_with_presets_note(config, false)).await?;
             println!();
-            Box::pin(sys::handle_list(config, false)).await
+            Box::pin(sys::print_list(config, false)).await
         }
     }
 }

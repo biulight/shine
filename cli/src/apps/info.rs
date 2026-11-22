@@ -9,8 +9,6 @@ use shine_core::runtime::AppFileInspection;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::AppListMode;
-
 pub async fn handle_info(
     config: &Config,
     category: &str,
@@ -285,11 +283,7 @@ fn print_app_install_hint(controls: bool, command: &str, purpose: &str) {
 }
 
 pub async fn handle_list(config: &Config) -> Result<()> {
-    for line in crate::config::presets_source_note_lines(config) {
-        println!("{line}");
-    }
-    println!();
-    print_app_catalog(config, AppCatalogView::Categories).await
+    handle_list_with_presets_note(config, true).await
 }
 
 #[doc(hidden)]
@@ -298,17 +292,11 @@ pub async fn handle_list_with_presets_note(
     print_presets_note: bool,
 ) -> Result<()> {
     if print_presets_note {
-        crate::config::print_presets_note(config);
+        for line in crate::config::presets_source_note_lines(config) {
+            println!("{line}");
+        }
+        println!();
     }
-    print_app_catalog(config, AppCatalogView::Available).await
-}
-
-enum AppCatalogView {
-    Categories,
-    Available,
-}
-
-async fn print_app_catalog(config: &Config, view: AppCatalogView) -> Result<()> {
     let categories = metadata::load_active_categories(config, None).await?;
 
     if categories.is_empty() {
@@ -335,68 +323,30 @@ async fn print_app_catalog(config: &Config, view: AppCatalogView) -> Result<()> 
         });
 
         let name = escape_controls(&cat.name);
-        let name_pad = " ".repeat(name_width.saturating_sub(console::measure_text_width(&name)));
-        if matches!(view, AppCatalogView::Categories) {
-            if let Some(description) = effective_desc
-                .map(escape_controls)
-                .filter(|description| !description.trim().is_empty())
-            {
-                let mut output = String::new();
-                crate::preset_report::write_wrapped_with_continuation(
-                    &mut output,
-                    &format!("  {name}{name_pad}  "),
-                    &description_indent,
-                    &description,
-                );
-                print!("{output}");
-            } else {
-                println!("  {name}");
-            }
-            continue;
-        }
-
-        let count = cat.files.len() + cat.secret_files.len();
-        let file_count = if count > 1 {
-            format!("  {}", colors::dim(&format!("{count} files")))
+        if let Some(description) = effective_desc
+            .map(escape_controls)
+            .filter(|description| !description.trim().is_empty())
+        {
+            let name_pad =
+                " ".repeat(name_width.saturating_sub(console::measure_text_width(&name)));
+            let mut output = String::new();
+            crate::preset_report::write_wrapped_with_continuation(
+                &mut output,
+                &format!("  {name}{name_pad}  "),
+                &description_indent,
+                &description,
+            );
+            print!("{output}");
         } else {
-            String::new()
-        };
-
-        let desc_part = effective_desc
-            .map(|d| format!("  {}", escape_controls(d)))
-            .unwrap_or_default();
-
-        println!("  {name}{name_pad}{desc_part}{file_count}");
-
-        // Per-file rows for explicit multi-file categories
-        if cat.has_explicit_files && cat.list_mode == AppListMode::Files && cat.files.len() > 1 {
-            for file in &cat.files {
-                let name = escape_controls(&file.source_rel.display().to_string());
-                if let Some(desc) = &file.description {
-                    println!(
-                        "    {}  {}",
-                        colors::dim(&name),
-                        colors::dim(&escape_controls(desc))
-                    );
-                } else {
-                    println!("    {}", colors::dim(&name));
-                }
-            }
+            println!("  {name}");
         }
     }
 
     println!();
-    let hints = match view {
-        AppCatalogView::Categories => [
-            "View files and status with `shine app info <CATEGORY>`.",
-            "Preview installation with `shine app install <CATEGORY> --dry-run`.",
-        ],
-        AppCatalogView::Available => [
-            "Run `shine install app/<CATEGORY>` to install a specific category.",
-            "Run `shine app install` to install all.",
-        ],
-    };
-    for hint in hints {
+    for hint in [
+        "View files and status with `shine app info <CATEGORY>`.",
+        "Preview installation with `shine app install <CATEGORY> --dry-run`.",
+    ] {
         println!("{}", colors::dim(hint));
     }
 

@@ -23,6 +23,10 @@ use super::{
 
 pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     crate::config::print_presets_note(config);
+    print_list(config, all).await
+}
+
+pub(crate) async fn print_list(config: &Config, all: bool) -> Result<()> {
     let current_os = if all {
         detect_os_id().await.ok()
     } else {

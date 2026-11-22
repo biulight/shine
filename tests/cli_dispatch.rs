@@ -2407,11 +2407,7 @@ fn preset_source_notes_escape_paths_without_changing_effective_layers_or_state()
                 "{text:?}"
             );
             assert_eq!(text.contains("◈ Presets Overlay"), use_overlay, "{text:?}");
-            assert_eq!(
-                text.contains("snapshot · changes require `shine upgrade`"),
-                args[0] == "list",
-                "{text:?}"
-            );
+            assert!(!text.contains("◈ Shell Deployment"), "{text:?}");
             assert!(
                 text.contains(if use_overlay {
                     "from-overlay"

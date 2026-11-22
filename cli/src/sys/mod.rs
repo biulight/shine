@@ -19,6 +19,7 @@ use model::{
 
 use anyhow::{Context, Result};
 
+pub(crate) use commands::print_list;
 pub use commands::{BootstrapCliOptions, handle_info, handle_init, handle_list, handle_status};
 pub use detect::detect_os_id;
 pub use managed::{handle_apply_approved, handle_uninstall_approved, managed_updates};
