@@ -17,7 +17,8 @@ shine app info starship
 shine app install starship --dry-run
 ```
 
-Preview the destinations and scope before installing, especially for system directories that need
+Use `shine app list` to choose a category and `shine app info <CATEGORY>` to check each file’s
+status and destination. Preview the installation before writing to a system directory that needs
 administrator access. `--dry-run` does not write application files.
 
 ## Install and update

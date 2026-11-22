@@ -7,6 +7,28 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.12.0] — 2026-11-23
+
+### Features
+
+- In the bundled `ccenv` Codex provider, select `gpt-6.2-astra` through the Fable alias
+  and `gpt-6.2-sol` through Opus. Switching providers clears any inherited Fable mapping.
+
+### Bug Fixes
+
+- Browse App categories and Shell commands in compact catalogs. Use `shine app info <CATEGORY>`
+  to see file status and destination paths, or `shine shell info <COMMAND>` for command details.
+- Use `shine sys list` to browse available items and `shine sys status` to see their latest
+  recorded operation results.
+- On Unix, self-uninstall detects protected executables before cleaning up user state.
+  Self-uninstall also skips linked shell startup files.
+- Update the `url` dependency to 2.5.9 to address RUSTSEC-2026-0592.
+
+### Docs
+
+- Document the installer and package manager used by each supported bootstrap platform and
+  the prerequisites to check before installation.
+
 ## [2.11.0] — 2026-11-17
 
 ### Features

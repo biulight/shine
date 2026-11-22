@@ -3,9 +3,11 @@ use crate::colors;
 use crate::config::Config;
 use crate::output::escape_controls;
 use crate::path_display;
+use crate::status::FileStatus;
 use anyhow::Result;
-
-use super::AppListMode;
+use shine_core::runtime::AppFileInspection;
+use std::collections::BTreeMap;
+use std::path::Path;
 
 pub async fn handle_info(
     config: &Config,
@@ -13,10 +15,13 @@ pub async fn handle_info(
     run_generators: bool,
     diff: bool,
 ) -> Result<()> {
-    crate::config::print_presets_note(config);
+    for line in crate::config::presets_source_note_lines(config) {
+        println!("{line}");
+    }
+    println!();
     let mut observer = shine_core::runtime::NullObserver;
-    let inspections = crate::core_runtime::frontend_from_config(config)
-        .await?
+    let frontend = crate::core_runtime::frontend_from_config(config).await?;
+    let inspections = frontend
         .inspect_apps_with_options(
             shine_core::runtime::AppInspectionOptions {
                 run_generators,
@@ -53,110 +58,28 @@ pub async fn handle_info(
     }
     println!();
 
-    if let Some(dest_root) = &cat.destination_root {
+    // A declaration that no file uses may be unresolvable. Each row still has its
+    // own resolved destination, so display those paths without a root in that case.
+    let runtime = frontend.runtime();
+    let home = &runtime.context().home_dir;
+    let destination_root = runtime.app_category_destination_root(cat).ok().flatten();
+    if let Some(root) = &destination_root {
         println!(
             "  {}  {}",
             colors::dim("Destination"),
-            escape_controls(&path_display::format_tilde_path(
-                dest_root,
-                &config.home_dir
-            ))
+            escape_controls(&path_display::format_home(root, home))
         );
     }
     println!("  {}  {}", colors::dim("Files      "), selected.len());
     println!();
 
-    let col_width = selected
-        .iter()
-        .map(|f| {
-            console::measure_text_width(&escape_controls(&f.file.source_rel.display().to_string()))
-        })
-        .max()
-        .unwrap_or(0);
-
-    let mut any_installed = false;
-
     for inspection in &selected {
-        let file = &inspection.file;
-        let source_name = escape_controls(&file.source_rel.display().to_string());
-        let padding =
-            " ".repeat(col_width.saturating_sub(console::measure_text_width(&source_name)));
-        let dest_str = match &inspection.destination {
-            Some(dest) => {
-                let directly_installed = inspection
-                    .manifest_entry
-                    .as_ref()
-                    .is_some_and(|entry| entry.destination == *dest);
-                let secret_installed = inspection.assessment_diagnostic
-                    == Some("app_secret_content_redacted")
-                    && inspection.status != shine_core::runtime::InspectionFileStatus::NotInstalled;
-                let status = if directly_installed || secret_installed {
-                    any_installed = true;
-                    match inspection.status {
-                        shine_core::runtime::InspectionFileStatus::Partial => {
-                            format!("  {}", colors::yellow("installed, missing managed keys"))
-                        }
-                        shine_core::runtime::InspectionFileStatus::UserModified => {
-                            format!("  {}", colors::yellow("installed, user-modified"))
-                        }
-                        shine_core::runtime::InspectionFileStatus::Missing => {
-                            format!("  {}", colors::yellow("installed, missing on disk"))
-                        }
-                        shine_core::runtime::InspectionFileStatus::UpdateAvail => {
-                            format!("  {}", colors::yellow("installed, update available"))
-                        }
-                        shine_core::runtime::InspectionFileStatus::GeneratorNotEvaluated => {
-                            format!("  {}", colors::yellow("generator not evaluated"))
-                        }
-                        shine_core::runtime::InspectionFileStatus::GeneratorEvaluationFailed => {
-                            format!("  {}", colors::yellow("generator evaluation failed"))
-                        }
-                        shine_core::runtime::InspectionFileStatus::GeneratorTrustRequired => {
-                            format!("  {}", colors::yellow("generator trust required"))
-                        }
-                        _ => format!("  {}", colors::green("installed, up to date")),
-                    }
-                } else {
-                    String::new()
-                };
-                format!(
-                    "{}  {}{}",
-                    colors::dim("→"),
-                    colors::dim(&escape_controls(&path_display::format_home(
-                        dest,
-                        &config.home_dir
-                    ))),
-                    status
-                )
-            }
-            None => colors::dim("(destination unresolvable)"),
-        };
-
-        let file_desc = file
-            .description
-            .as_deref()
-            .map(|d| format!("  {}", colors::dim(&escape_controls(d))))
-            .unwrap_or_default();
-
-        println!("  {source_name}{padding}  {dest_str}{file_desc}");
+        print_app_info_file(inspection, destination_root.as_deref(), home);
         if diff {
             crate::info::print_app_inspection_diff(config, inspection).await?;
         }
     }
 
-    if !run_generators && cat.files.iter().any(|file| file.generator.is_some()) {
-        println!();
-        println!(
-            "{}",
-            colors::yellow("! Generated configuration was not evaluated.")
-        );
-        println!(
-            "{}",
-            colors::dim(
-                "  Status may be incomplete. Re-run with `--run-generators` to evaluate generator output."
-            )
-        );
-    }
     for inspection in &selected {
         if let Some(scope) = &inspection.code_analysis {
             for line in crate::code_analysis::lines(scope, true) {
@@ -192,45 +115,171 @@ pub async fn handle_info(
         }
     }
 
-    println!();
-    let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
-    if category.chars().any(char::is_control) {
-        let state = if any_installed {
-            "Installed"
-        } else {
-            "Not installed"
-        };
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "{state}. Use shine install with the original target (control characters; copyable command omitted){}.",
-                if any_installed {
-                    " and --replace-managed to repair managed files"
-                } else {
-                    " to install"
-                }
-            ))
-        );
-    } else if any_installed {
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "Installed. Run `shine install {target_arg} --replace-managed` to repair managed files."
-            ))
-        );
-    } else {
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "Not installed. Run `shine install {target_arg}` to install."
-            ))
-        );
-    }
+    print_app_info_summary(&selected, category);
 
     if !generator_failures.is_empty() {
         anyhow::bail!("one or more App generators could not be evaluated");
     }
     Ok(())
+}
+
+fn print_app_info_file(inspection: &AppFileInspection, root: Option<&Path>, home: &Path) {
+    let detail_indent = "       ";
+    let source = inspection.file.source_rel.as_path();
+    let destination = inspection.destination.as_deref();
+    let relative_destination =
+        destination.and_then(|destination| destination.strip_prefix(root?).ok());
+    let inline_mapping = relative_destination
+        .filter(|relative| *relative != source)
+        .map_or_else(String::new, |relative| {
+            let target = escape_controls(&path_display::format(relative));
+            format!("  {}", colors::dim(&format!("→ {target}")))
+        });
+    let (label, symbol) = if destination_managed_by_other_source(inspection) {
+        ("destination managed by another source", "!")
+    } else {
+        app_info_status(inspection.status)
+    };
+    let status = colors::status_label(&format!("[{label}]"), symbol);
+    println!(
+        "  {}  {}  {status}{inline_mapping}",
+        colors::symbol(symbol),
+        escape_controls(&path_display::format(source))
+    );
+    if let Some(description) = &inspection.file.description {
+        println!(
+            "{detail_indent}{}",
+            colors::dim(&escape_controls(description))
+        );
+    }
+    if relative_destination.is_none() {
+        let detail = match destination {
+            Some(path) => format!(
+                "→ {}",
+                escape_controls(&path_display::format_home(path, home))
+            ),
+            None => "(destination unresolvable)".to_string(),
+        };
+        println!("{detail_indent}{}", colors::dim(&detail));
+    }
+}
+
+fn app_info_status(status: FileStatus) -> (&'static str, &'static str) {
+    match status {
+        FileStatus::NotInstalled => ("not installed", "✗"),
+        FileStatus::UpToDate => ("up to date", "✓"),
+        FileStatus::UpdateAvail => ("update available", "↑"),
+        FileStatus::GeneratorNotEvaluated => ("generator not evaluated", "!"),
+        FileStatus::GeneratorEvaluationFailed => ("generator evaluation failed", "!"),
+        FileStatus::GeneratorTrustRequired => ("generator trust required", "!"),
+        FileStatus::Partial => ("missing managed keys", "~"),
+        FileStatus::UserModified => ("user modified", "~"),
+        FileStatus::Missing => ("missing on disk", "!"),
+    }
+}
+
+fn destination_managed_by_other_source(file: &AppFileInspection) -> bool {
+    file.manifest_entry.as_ref().is_some_and(|entry| {
+        Some(&entry.destination) == file.destination.as_ref()
+            && !entry
+                .source
+                .strip_prefix(&format!("app/{}/", file.category.name))
+                .is_some_and(|source| Path::new(source) == file.file.source_rel)
+    })
+}
+
+fn print_app_info_summary(files: &[&AppFileInspection], category: &str) {
+    let mut counts = BTreeMap::new();
+    let mut deferred = 0;
+    let mut conflicts = 0;
+    for file in files {
+        if destination_managed_by_other_source(file) {
+            conflicts += 1;
+        } else if file.status != FileStatus::GeneratorNotEvaluated {
+            *counts.entry(file.status).or_insert(0) += 1;
+        }
+        // A missing, modified, or uninstalled file can also have deferred generator output.
+        if file.assessment_diagnostic == Some("app_generator_not_evaluated") {
+            deferred += 1;
+        }
+    }
+    if deferred > 0 {
+        counts.insert(FileStatus::GeneratorNotEvaluated, deferred);
+    }
+    let mut summary = counts
+        .iter()
+        .map(|(&status, &count)| {
+            let label = match (status, count) {
+                (FileStatus::GeneratorNotEvaluated, 2..) => "generators not evaluated",
+                (FileStatus::GeneratorEvaluationFailed, 2..) => "generator evaluations failed",
+                _ => app_info_status(status).0,
+            };
+            format!("{count} {label}")
+        })
+        .collect::<Vec<_>>();
+    if conflicts > 0 {
+        let label = if conflicts == 1 {
+            "destination managed by another source"
+        } else {
+            "destinations managed by other sources"
+        };
+        summary.push(format!("{conflicts} {label}"));
+    }
+    println!("\n  {}", summary.join(" · "));
+
+    let controls = category.chars().any(char::is_control);
+    if deferred > 0 {
+        let hint = if controls {
+            "Re-run with `--run-generators` and the original category (control characters; copyable command omitted).".to_string()
+        } else {
+            let command = if category.starts_with('-') {
+                let operand = crate::shell_quote::command_positionals(&[category]);
+                format!("shine app info --run-generators {operand}")
+            } else {
+                let operand = crate::shell_quote::command_arg(category);
+                format!("shine app info {operand} --run-generators")
+            };
+            format!("Run generators to check output with `{command}`.")
+        };
+        println!("  {}", colors::dim(&hint));
+    }
+
+    // Install operates on the entire category, including any conflicting file.
+    if conflicts > 0 {
+        return;
+    }
+    let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
+    let install = format!("shine install {target_arg}");
+    if counts.contains_key(&FileStatus::Missing) || counts.contains_key(&FileStatus::Partial) {
+        print_app_install_hint(controls, &install, "restore missing files or managed keys");
+    } else if counts.contains_key(&FileStatus::NotInstalled) {
+        print_app_install_hint(controls, &install, "install");
+    }
+
+    if files.iter().any(|file| {
+        file.status == FileStatus::UserModified
+            && file
+                .manifest_entry
+                .as_ref()
+                .is_some_and(|entry| Some(&entry.destination) == file.destination.as_ref())
+    }) {
+        print_app_install_hint(
+            controls,
+            &format!("{install} --replace-managed"),
+            "replace user-modified managed files",
+        );
+    }
+}
+
+fn print_app_install_hint(controls: bool, command: &str, purpose: &str) {
+    let hint = if controls {
+        format!(
+            "Use shine install with the original target (control characters; copyable command omitted) to {purpose}."
+        )
+    } else {
+        format!("Run `{command}` to {purpose}.")
+    };
+    println!("  {}", colors::dim(&hint));
 }
 
 pub async fn handle_list(config: &Config) -> Result<()> {
@@ -243,7 +292,10 @@ pub async fn handle_list_with_presets_note(
     print_presets_note: bool,
 ) -> Result<()> {
     if print_presets_note {
-        crate::config::print_presets_note(config);
+        for line in crate::config::presets_source_note_lines(config) {
+            println!("{line}");
+        }
+        println!();
     }
     let categories = metadata::load_active_categories(config, None).await?;
 
@@ -259,6 +311,7 @@ pub async fn handle_list_with_presets_note(
         .map(|c| console::measure_text_width(&escape_controls(&c.name)))
         .max()
         .unwrap_or(0);
+    let description_indent = " ".repeat(4 + name_width);
 
     for cat in &categories {
         let effective_desc = cat.description.as_deref().or_else(|| {
@@ -270,43 +323,32 @@ pub async fn handle_list_with_presets_note(
         });
 
         let name = escape_controls(&cat.name);
-        let name_pad = " ".repeat(name_width.saturating_sub(console::measure_text_width(&name)));
-        let count = cat.files.len() + cat.secret_files.len();
-        let file_count = if count > 1 {
-            format!("  {}", colors::dim(&format!("{count} files")))
+        if let Some(description) = effective_desc
+            .map(escape_controls)
+            .filter(|description| !description.trim().is_empty())
+        {
+            let name_pad =
+                " ".repeat(name_width.saturating_sub(console::measure_text_width(&name)));
+            let mut output = String::new();
+            crate::preset_report::write_wrapped_with_continuation(
+                &mut output,
+                &format!("  {name}{name_pad}  "),
+                &description_indent,
+                &description,
+            );
+            print!("{output}");
         } else {
-            String::new()
-        };
-
-        let desc_part = effective_desc
-            .map(|d| format!("  {}", escape_controls(d)))
-            .unwrap_or_default();
-
-        println!("  {name}{name_pad}{desc_part}{file_count}");
-
-        // Per-file rows for explicit multi-file categories
-        if cat.has_explicit_files && cat.list_mode == AppListMode::Files && cat.files.len() > 1 {
-            for file in &cat.files {
-                let name = escape_controls(&file.source_rel.display().to_string());
-                if let Some(desc) = &file.description {
-                    println!(
-                        "    {}  {}",
-                        colors::dim(&name),
-                        colors::dim(&escape_controls(desc))
-                    );
-                } else {
-                    println!("    {}", colors::dim(&name));
-                }
-            }
+            println!("  {name}");
         }
     }
 
     println!();
-    println!(
-        "{}",
-        colors::dim("Run `shine install app/<CATEGORY>` to install a specific category.")
-    );
-    println!("{}", colors::dim("Run `shine app install` to install all."));
+    for hint in [
+        "View files and status with `shine app info <CATEGORY>`.",
+        "Preview installation with `shine app install <CATEGORY> --dry-run`.",
+    ] {
+        println!("{}", colors::dim(hint));
+    }
 
     Ok(())
 }

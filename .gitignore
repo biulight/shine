@@ -1,6 +1,8 @@
 /target
 /target-review
 /node_modules
+/.pnpm-store/
+/.playwright-mcp/
 /website/node_modules
 /website/build
 /website/.docusaurus

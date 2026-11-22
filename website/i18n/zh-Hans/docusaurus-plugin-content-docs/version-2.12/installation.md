@@ -30,7 +30,7 @@ shine --version
 ```bash
 curl -fsSLo install.sh https://github.com/biulight/shine/releases/latest/download/install.sh
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.11.0 sh install.sh
+SHINE_VERSION=2.12.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -47,7 +47,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```powershell
 Invoke-WebRequest https://github.com/biulight/shine/releases/latest/download/install.ps1 -OutFile install.ps1
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.11.0"; .\install.ps1
+$env:SHINE_VERSION = "2.12.0"; .\install.ps1
 ```
 
 ## 安装 preview
@@ -160,6 +160,8 @@ Unix 上，安装或同步到受保护位置时会请求 `sudo` 授权。但从�
 修改，或引用了另一套 Shine 配置，就无法自动移除，需要检查提示中的文件。此前已完成的清理仍然生效。
 
 程序最后才会移除，且只移除能够确认由 Shine 安装、未经修改的副本。已更换或版本不同的副本需要单独核查。
+在 Unix 上，如果预览提示某个程序需要手动移除，先保留同一构建的另一份可执行副本。
+请管理员移除列出的可执行文件，然后以原用户身份，从保留的副本使用同一配置重新运行 `self uninstall`。
 
 如果通过 Cargo 安装，请使用 Shine 输出的 Cargo 卸载命令。手动下载或缺少匹配回执的旧安装，
 请在受管资源清理完成后按原安装渠道移除程序。在 Windows 上，先关闭正在运行的实例，

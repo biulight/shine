@@ -177,6 +177,8 @@ const LOCKS: &[&str] = &[
 struct Cleanup {
     files: Vec<(PathBuf, String)>,
     loaders: Vec<(PathBuf, String, String)>,
+    linked_profiles: Vec<PathBuf>,
+    protected_copies: Vec<PathBuf>,
     copies: Vec<receipt::CopyReceipt>,
     config_edits: Vec<(PathBuf, String, String)>,
 }
@@ -213,6 +215,7 @@ impl Cleanup {
     async fn capture(config: &Config, runtime: &CoreRuntime<RealHost>, os: &str) -> Result<Self> {
         let mut files = Vec::new();
         let mut loaders = Vec::new();
+        let mut linked_profiles = Vec::new();
         for name in STATE {
             let path = config.shine_dir().join(name);
             if let Some(bytes) = regular_bytes(&path)? {
@@ -236,6 +239,12 @@ impl Cleanup {
             .into_iter()
             .filter(|_| config.shine_dir() == config.home_dir.join(".shine"))
         {
+            if std::fs::symlink_metadata(&path)
+                .is_ok_and(|meta| crate::env::workspace::file_groups::platform::is_link(&meta))
+            {
+                linked_profiles.push(path);
+                continue;
+            }
             if let Some(bytes) = regular_bytes(&path)? {
                 let shell = if path.ends_with(".zshrc") {
                     "zsh"
@@ -252,7 +261,7 @@ impl Cleanup {
             }
         }
         let copies = receipt::load(config)?;
-        receipt::verify(&copies)?;
+        let protected_copies = receipt::verify(&copies)?;
         let mut config_edits = Vec::new();
         let mut paths = vec![config.config_path().to_owned(), config.global_config_path()];
         paths.sort();
@@ -279,11 +288,19 @@ impl Cleanup {
         Ok(Self {
             files,
             loaders,
+            linked_profiles,
+            protected_copies,
             copies,
             config_edits,
         })
     }
     fn display(&self) {
+        for path in &self.linked_profiles {
+            println!(
+                "Retain linked startup file: {}. Review any Sys loading blocks manually.",
+                show(path)
+            );
+        }
         for (p, _, _) in &self.loaders {
             println!("Detach Sys loader: {}", show(p));
         }
@@ -297,7 +314,14 @@ impl Cleanup {
             println!("Clear the recorded self_install_dest in {}", show(p));
         }
         for c in &self.copies {
-            println!("Remove self-installed copy last: {}", show(&c.path));
+            if self.protected_copies.contains(&c.path) {
+                println!(
+                    "Manual removal required for protected program: {}",
+                    show(&c.path)
+                );
+            } else {
+                println!("Remove self-installed copy last: {}", show(&c.path));
+            }
         }
     }
     fn any(&self) -> bool {
@@ -403,6 +427,14 @@ pub async fn handle_self_uninstall(dry_run: bool, yes: bool) -> Result<()> {
     if !current_tracked {
         program_handoff(&current, &preview.copies);
     }
+    if !preview.protected_copies.is_empty() {
+        println!(
+            "Keep a separate copy of this Shine build. Have an administrator remove the listed protected program(s), then rerun self uninstall from the surviving copy as the installation user with the same configuration."
+        );
+        if !dry_run {
+            bail!("protected program requires manual removal before cleanup");
+        }
+    }
     run_domains(&config, &work, true, false).await?;
     #[cfg(windows)]
     if current_tracked {
@@ -438,7 +470,7 @@ pub async fn handle_self_uninstall(dry_run: bool, yes: bool) -> Result<()> {
     );
     let cleanup = Cleanup::capture(&config, &runtime, &os).await?;
     ensure!(
-        preview.copies == cleanup.copies,
+        preview.copies == cleanup.copies && cleanup.protected_copies.is_empty(),
         "self-installed copies changed; retry"
     );
     if cleanup.any() {

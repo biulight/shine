@@ -131,9 +131,34 @@ pub(super) async fn record(config: &Config, src: &Path, dest: &Path) -> Result<(
     .await
 }
 
-pub(super) fn verify(copies: &[CopyReceipt]) -> Result<()> {
+// Check the directory as the invoking user without creating a probe file during preview.
+#[cfg(unix)]
+fn protected_directory(path: &Path) -> Result<bool> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let parent = path.parent().context("installed program has no parent")?;
+    let name = CString::new(parent.as_os_str().as_bytes())?;
+    // SAFETY: name is NUL-terminated and remains alive through access().
+    if unsafe { libc::access(name.as_ptr(), libc::W_OK | libc::X_OK) } == 0 {
+        return Ok(false);
+    }
+    let error = io::Error::last_os_error();
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::EACCES | libc::EPERM | libc::EROFS)
+    ) {
+        return Ok(true);
+    }
+    Err(error).with_context(|| {
+        format!(
+            "checking directory access for {}",
+            escape_controls(&path.display().to_string())
+        )
+    })
+}
+
+pub(super) fn verify(copies: &[CopyReceipt]) -> Result<Vec<PathBuf>> {
     if copies.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     static RUNNING_HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let executable_hash = if let Some(hash) = RUNNING_HASH.get() {
@@ -142,6 +167,10 @@ pub(super) fn verify(copies: &[CopyReceipt]) -> Result<()> {
         let hash = digest(&mut File::open(std::env::current_exe()?)?)?;
         RUNNING_HASH.get_or_init(|| hash)
     };
+    #[cfg(unix)]
+    let mut protected = Vec::new();
+    #[cfg(not(unix))]
+    let protected = Vec::new();
     for receipt in copies {
         let current = observe(&receipt.path)?;
         ensure!(
@@ -154,8 +183,12 @@ pub(super) fn verify(copies: &[CopyReceipt]) -> Result<()> {
             "installed program changed; preserving {}",
             escape_controls(&receipt.path.display().to_string())
         );
+        #[cfg(unix)]
+        if current.is_some() && protected_directory(&receipt.path)? {
+            protected.push(receipt.path.clone());
+        }
     }
-    Ok(())
+    Ok(protected)
 }
 
 pub(super) fn remove(config: &Config, copies: &[CopyReceipt]) -> Result<()> {
@@ -169,9 +202,14 @@ pub(super) fn remove(config: &Config, copies: &[CopyReceipt]) -> Result<()> {
     for receipt in ordered {
         if let Some(current) = observe(&receipt.path)? {
             ensure!(&current == receipt, "installed program changed; retry");
-            std::fs::remove_file(&receipt.path).with_context(|| format!(
-                "could not remove {}; close running instances and retry from another Shine copy with the same configuration",
-                escape_controls(&receipt.path.display().to_string())))?;
+            std::fs::remove_file(&receipt.path).with_context(|| {
+                let path = escape_controls(&receipt.path.display().to_string());
+                if cfg!(windows) {
+                    format!("could not remove {path}; close running instances and retry from another Shine copy with the same configuration")
+                } else {
+                    format!("could not remove {path}; check directory permissions and retry self uninstall as the installation user")
+                }
+            })?;
         }
     }
     if !copies.is_empty() {

@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页对应 Shine 2.11。使用 `shine <COMMAND> --help` 查看已安装版本支持的选项。完整操作流程
+本页对应 Shine 2.12。使用 `shine <COMMAND> --help` 查看已安装版本支持的选项。完整操作流程
 请阅读对应指南；本页只提供便于查找的命令索引。
 
 命令失败信息写入 stderr。设置 `NO_COLOR=1` 可禁用彩色输出。

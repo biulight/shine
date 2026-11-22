@@ -523,12 +523,8 @@ pub fn print_presets_note(config: &Config) {
 }
 
 pub(crate) fn presets_note_lines(config: &Config) -> Vec<String> {
-    let mut lines = Vec::new();
+    let mut lines = presets_source_note_lines(config);
     if config.is_external_presets {
-        lines.push(crate::colors::external_presets_note(config.presets_dir()));
-        if let Some(dir) = config.active_presets_overlay_dir() {
-            lines.push(crate::colors::presets_overlay_note(dir));
-        }
         let deployment = match config.external_shell_mode {
             ExternalShellMode::Snapshot => "snapshot · changes require `shine upgrade`",
             ExternalShellMode::Live => "live · content applies on next invocation",
@@ -536,13 +532,20 @@ pub(crate) fn presets_note_lines(config: &Config) -> Vec<String> {
         lines.push(crate::colors::dim(&crate::colors::shell_deployment_note(
             deployment,
         )));
-        lines.push(String::new());
+    }
+    lines.push(String::new());
+    lines
+}
+
+pub(crate) fn presets_source_note_lines(config: &Config) -> Vec<String> {
+    let source = if config.is_external_presets {
+        crate::colors::external_presets_note(config.presets_dir())
     } else {
-        lines.push(crate::colors::presets_source_note("built-in"));
-        if let Some(dir) = config.active_presets_overlay_dir() {
-            lines.push(crate::colors::presets_overlay_note(dir));
-        }
-        lines.push(String::new());
+        crate::colors::presets_source_note("built-in")
+    };
+    let mut lines = vec![source];
+    if let Some(dir) = config.active_presets_overlay_dir() {
+        lines.push(crate::colors::presets_overlay_note(dir));
     }
     lines
 }

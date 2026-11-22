@@ -274,7 +274,7 @@ async fn handle_available_list(config: &Config, kind: Option<ResourceKind>) -> R
             println!();
             Box::pin(apps::handle_list_with_presets_note(config, false)).await?;
             println!();
-            Box::pin(sys::handle_list(config, false)).await
+            Box::pin(sys::print_list(config, false)).await
         }
     }
 }

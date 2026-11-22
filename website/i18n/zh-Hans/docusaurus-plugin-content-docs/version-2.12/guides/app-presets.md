@@ -16,7 +16,8 @@ shine app info starship
 shine app install starship --dry-run
 ```
 
-安装前先预览目标路径和变更范围，尤其是需要管理员权限的系统目录。`--dry-run` 不会写入应用文件。
+用 `shine app list` 选择类别，再用 `shine app info <CATEGORY>` 查看各文件的状态和目标路径。
+写入需要管理员权限的系统目录前，先预览安装操作。`--dry-run` 不会写入应用文件。
 
 ## 安装与更新
 

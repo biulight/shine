@@ -1,5 +1,29 @@
 # Lessons Learned
 
+## 2026-11-22 — ccenv must clear inherited Fable aliases
+
+- **Symptom**: a provider overlay that omitted `ANTHROPIC_DEFAULT_FABLE_MODEL` could inherit the
+  parent shell's Fable mapping and select a model from a different provider.
+- **Rule**: keep Claude Code's managed model aliases in the fixed cleanup list. Test with an
+  overlay that omits the alias everywhere, since built-in provider keys can mask missing cleanup.
+
+## 2026-11-22 — Check Unix program removal before self-uninstall cleanup
+
+Installing into a protected directory can succeed through elevation. The uninstalling account
+needs write and search permission on the parent to unlink the executable. Check access during
+preview and before cleanup, while the user still has the receipt, configuration and program.
+A symlinked startup file is a separate case. Report it for manual inspection and leave its
+target alone while collecting independently owned state.
+
+## 2026-11-22 — App destination matching must compile on Rust 1.90
+
+- **Symptom**: an `if let` match guard in App destination resolution compiled on the pinned
+  development toolchain and failed the Rust 1.90 MSRV check with `E0658`.
+- **Fix**: match the resolved category root and legacy annotation as a tuple. Keep the category
+  root ahead of the annotation and preserve the default destination fallback.
+- **Verification**: use `cargo +1.90.0 check --locked --workspace` for syntax compatibility and
+  run the existing App destination regressions for behavior.
+
 ## 2026-11-17 — Surge module inventory can include a detail line
 
 - **Symptom**: Surge Mac 6.11.0 listed modules successfully, but both artifact operations rejected
@@ -798,8 +822,8 @@ a previously captured function so removing one false blocker cannot hide the oth
   LF/ESC descriptions and comment-line ESC/TAB bytes as terminal controls. Control-bearing targets
   also entered install hints and lookup-error choices unchanged.
 - **Fix**: reuse the display encoder per name/path/description line, before styling and width
-  measurement. Preserve parsed blank lines, exact lookup/status identity, normal quoting, repair
-  options and failure exits; control-bearing hints request the original operand.
+  measurement. Preserve parsed blank lines in detail views, exact lookup/status identity, normal
+  quoting, repair options and failure exits. Control-bearing hints request the original operand.
 - **Coverage**: real CLI category/command/canonical queries cover paragraph layout, missing and
   ambiguous targets, ordinary installed repair hints, preserved receipts/metadata and Unix names.
 

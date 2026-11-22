@@ -31,7 +31,7 @@ To choose a destination or version, first download the script, then choose an in
 ```bash
 curl -fsSLo install.sh https://github.com/biulight/shine/releases/latest/download/install.sh
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.11.0 sh install.sh
+SHINE_VERSION=2.12.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -49,7 +49,7 @@ To choose a destination or version, first download the script, then choose an in
 ```powershell
 Invoke-WebRequest https://github.com/biulight/shine/releases/latest/download/install.ps1 -OutFile install.ps1
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.11.0"; .\install.ps1
+$env:SHINE_VERSION = "2.12.0"; .\install.ps1
 ```
 
 ## Install preview
@@ -171,6 +171,9 @@ steps stay applied.
 
 Program removal comes last. Shine only removes unchanged copies it can confirm it installed.
 Review any changed or different-version copy separately.
+On Unix, if the preview lists a protected program for manual removal, keep a separate copy of the
+same build first. Have an administrator remove the listed executable, then rerun `self uninstall`
+from the separate copy as your usual user with the same configuration.
 
 For a Cargo installation, use the Cargo uninstall command printed by Shine. For a manual download
 or an older installation without a matching receipt, remove the executable through its original

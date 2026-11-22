@@ -19,7 +19,8 @@ configuredMessage = "Claude Code environment configured for Codex through CLIPro
 # Authentication variables are supplied from credentialKey, not from this table.
 [providers.env]
 ANTHROPIC_BASE_URL = "http://127.0.0.1:8317"
-ANTHROPIC_DEFAULT_OPUS_MODEL = "gpt-6.1-sol"
+ANTHROPIC_DEFAULT_FABLE_MODEL = "gpt-6.2-astra"
+ANTHROPIC_DEFAULT_OPUS_MODEL = "gpt-6.2-sol"
 ANTHROPIC_DEFAULT_SONNET_MODEL = "gpt-6.1-terra"
 ANTHROPIC_DEFAULT_HAIKU_MODEL = "gpt-6-luna"
 CLAUDE_CODE_SUBAGENT_MODEL = "gpt-6.1-terra"

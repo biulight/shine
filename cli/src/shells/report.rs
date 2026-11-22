@@ -134,12 +134,13 @@ pub async fn handle_list_with_presets_note(
         crate::config::print_presets_note(config);
     }
     // A pristine embedded catalog needs no runtime state, including external-code trust.
-    let categories = if !config.is_external_presets && config.active_presets_overlay_dir().is_none()
-    {
-        metadata::load_embedded_categories(None)?
-    } else {
-        metadata::load_active_categories(config, None).await?
-    };
+    let mut categories =
+        if !config.is_external_presets && config.active_presets_overlay_dir().is_none() {
+            metadata::load_embedded_categories(None)?
+        } else {
+            metadata::load_active_categories(config, None).await?
+        };
+    categories.retain(|category| !category.files.is_empty());
 
     if categories.is_empty() {
         println!("{}", colors::dim("No shell preset categories found."));
@@ -172,42 +173,34 @@ pub async fn handle_list_with_presets_note(
             .map(|s| console::measure_text_width(s))
             .max()
             .unwrap_or(0);
-        let gap = 4;
-        let desc_col = max_name + gap;
-        let continuation_indent = " ".repeat(4 + desc_col);
+        let desc_col = max_name + 4;
 
         for (script, name) in cat.files.iter().zip(names.iter()) {
-            let padding = " ".repeat(desc_col - console::measure_text_width(name));
-            match script.description.as_slice() {
-                [] => println!("    {name}"),
-                [first, rest @ ..] => {
-                    let first = escape_controls(first);
-                    println!("    {name}{padding}{first}");
-                    for line in rest {
-                        if line.is_empty() {
-                            println!();
-                        } else {
-                            let line = escape_controls(line);
-                            println!("{continuation_indent}{line}");
-                        }
-                    }
-                }
+            let mut line = format!("    {name}");
+            let summary = script
+                .description
+                .first()
+                .and_then(|description| description.lines().next());
+            if let Some(summary) = summary.filter(|summary| !summary.is_empty()) {
+                let padding = desc_col - console::measure_text_width(name);
+                line.push_str(&" ".repeat(padding));
+                line.push_str(&escape_controls(summary));
             }
-            if script.runtime == crate::bin_links::LinkRuntime::Bun {
-                let status = if bun_available {
-                    colors::green("available")
-                } else {
-                    colors::yellow("not found on PATH")
-                };
-                println!(
-                    "{continuation_indent}{} {status}",
-                    colors::dim("runtime: bun ·")
-                );
+            if !bun_available && script.runtime == crate::bin_links::LinkRuntime::Bun {
+                line.push(' ');
+                line.push_str(&colors::yellow("[Bun missing]"));
             }
-            println!();
+            println!("{line}");
         }
+        println!();
     }
 
+    println!(
+        "{}",
+        colors::dim(
+            "Run `shine shell info <CATEGORY>/<COMMAND>` for details (e.g. `shine shell info proxy/setproxy`)."
+        )
+    );
     println!(
         "{}",
         colors::dim("Run `shine install shell/<CATEGORY>` to install a specific category.")
@@ -228,6 +221,7 @@ pub async fn handle_list_with_presets_note(
 }
 
 pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow::Result<()> {
+    use crate::status::{ShellRow, ShellRowStatus};
     use anyhow::bail;
 
     crate::config::print_presets_note(config);
@@ -236,9 +230,10 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
         bail!("shell info target must not be empty");
     }
 
-    let (category, files) = if let Some(category) = categories.iter().find(|cat| cat.name == target)
+    let (category, files, command) = if let Some(category) =
+        categories.iter().find(|cat| cat.name == target)
     {
-        (category, category.files.iter().collect::<Vec<_>>())
+        (category, category.files.iter().collect::<Vec<_>>(), None)
     } else if let Some((category_name, command_name)) = target.split_once('/') {
         let Some(category) = categories.iter().find(|cat| cat.name == category_name) else {
             bail!(
@@ -256,7 +251,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
                 escape_controls(target)
             );
         };
-        (category, vec![file])
+        (category, vec![file], Some(file.command_name.as_str()))
     } else {
         let matches = categories
             .iter()
@@ -273,7 +268,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
                 "shell preset target not found: {}\n\nRun `shine shell list` to see available presets.",
                 escape_controls(target)
             ),
-            [(category, file)] => (*category, vec![*file]),
+            [(category, file)] => (*category, vec![*file], Some(file.command_name.as_str())),
             _ => {
                 let choices = matches
                     .iter()
@@ -291,114 +286,118 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
     };
 
     let rows = crate::status::build_shell_rows(config).await?;
-    let selected_command = (files.len() == 1).then(|| files[0].command_name.clone());
-    println!("{}", colors::bold(&escape_controls(&category.name)));
+    let category_name = escape_controls(&category.name);
     if let Some(description) = &category.description {
-        println!("  {}", colors::dim(&escape_controls(description)));
+        println!(
+            "{}  {}",
+            colors::bold(&category_name),
+            colors::dim(&escape_controls(description))
+        );
+    } else {
+        println!("{}", colors::bold(&category_name));
     }
 
     let bun_available = crate::platform::command_exists_on_path("bun");
-    let mut any_installed = false;
+    let detail_indent = "       ";
+    let mut needs_install = false;
+    let mut needs_upgrade = false;
+    let mut needs_review = false;
+    let mut has_blocker = false;
     for file in files {
-        let label = format!("{}/{}", category.name, file.command_name);
-        let row = rows.iter().find(|row| row.label == label);
-        any_installed |= row.is_some_and(|row| row.status_text != "not installed");
-        println!();
-        println!("  {}", colors::bold(&escape_controls(&file.command_name)));
+        let row = rows
+            .iter()
+            .find(|row| row.category == category.name && row.command_name == file.command_name);
+        let status = row.map_or(ShellRowStatus::NotInstalled, ShellRow::status);
+        match status {
+            ShellRowStatus::NotInstalled => needs_install = true,
+            ShellRowStatus::UpdateAvail => needs_upgrade = true,
+            ShellRowStatus::Attention | ShellRowStatus::Partial => needs_review = true,
+            ShellRowStatus::UpToDate => {}
+        }
+        has_blocker |= row.is_some_and(|row| row.link_conflict || row.preset_missing);
+
+        let status_text = row.map_or("not installed", |row| row.status_text);
+        let symbol = status.symbol();
         println!(
-            "    {:<12} shell/{}/{}",
-            "Source",
-            escape_controls(&category.name),
-            escape_controls(&file.source_rel.display().to_string())
+            "\n  {}  {}  {}",
+            colors::symbol(symbol),
+            escape_controls(&file.command_name),
+            colors::status_label(&format!("[{status_text}]"), symbol)
         );
-        let runtime = match file.runtime {
-            crate::bin_links::LinkRuntime::Native => "native".to_string(),
-            crate::bin_links::LinkRuntime::Bun if bun_available => "bun (available)".to_string(),
-            crate::bin_links::LinkRuntime::Bun => "bun (not found on PATH)".to_string(),
-        };
-        println!("    {:<12} {runtime}", "Runtime");
-        println!(
-            "    {:<12} {}",
-            "Transforms",
-            if file.transforms.is_empty() {
-                "none".to_string()
-            } else {
-                file.transforms.join(", ")
-            }
-        );
-        println!(
-            "    {:<12} {}",
-            "Environment",
-            if file.env.is_empty() {
-                "none".to_string()
-            } else {
-                file.env
-                    .iter()
-                    .map(crate::env::EnvVarSpec::to_with_arg)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        );
-        println!(
-            "    {:<12} {}",
-            "Status",
-            row.map_or("not installed", |row| row.status_text)
-        );
-        for (index, line) in file.description.iter().enumerate() {
+        for line in &file.description {
+            println!("{detail_indent}{}", colors::dim(&escape_controls(line)));
+        }
+        if command.is_some() {
+            let source = escape_controls(&crate::path_display::format(&file.source_rel));
             println!(
-                "    {:<12} {}",
-                if index == 0 { "Description" } else { "" },
-                escape_controls(line)
+                "{detail_indent}{:<12} shell/{category_name}/{source}",
+                "Source"
             );
+        }
+        if file.runtime == crate::bin_links::LinkRuntime::Bun {
+            let runtime = if bun_available {
+                "bun (available)"
+            } else {
+                "bun (not found on PATH)"
+            };
+            println!("{detail_indent}{:<12} {runtime}", "Runtime");
+        }
+        if !file.transforms.is_empty() {
+            println!(
+                "{detail_indent}{:<12} {}",
+                "Transforms",
+                file.transforms.join(", ")
+            );
+        }
+        if !file.env.is_empty() {
+            let env = file
+                .env
+                .iter()
+                .map(crate::env::EnvVarSpec::to_with_arg)
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("{detail_indent}{:<12} {env}", "Environment");
         }
     }
 
-    println!();
-    if category.name.chars().any(char::is_control)
-        || selected_command
-            .as_deref()
-            .is_some_and(|command| command.chars().any(char::is_control))
-    {
-        let (command, action) = if any_installed {
-            (
-                "shine install",
-                "and --replace-managed to repair this target",
-            )
-        } else {
-            ("shine shell install", "to install this target")
-        };
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "Use {command} with the original target (control characters; copyable command omitted) {action}."
-            ))
-        );
-    } else if any_installed {
-        let repair_target = selected_command.as_ref().map_or_else(
-            || format!("shell/{}", category.name),
-            |command| format!("shell/{}/{command}", category.name),
-        );
-        let repair_target = crate::shell_quote::command_arg(&repair_target);
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "Run `shine install {repair_target} --replace-managed` to repair this target."
-            ))
-        );
+    if !needs_install && !needs_upgrade && !needs_review {
+        return Ok(());
+    }
+    let target = if let Some(command) = command {
+        format!("shell/{}/{command}", category.name)
     } else {
-        let install_target = selected_command.as_ref().map_or_else(
-            || category.name.clone(),
-            |command| format!("{}/{command}", category.name),
-        );
-        let install_target = crate::shell_quote::command_positionals(&[&install_target]);
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "Run `shine shell install {install_target}` to install this target."
-            ))
-        );
+        format!("shell/{}", category.name)
+    };
+    println!();
+    if needs_review {
+        print_shell_info_hint("info", &target, " --diff", "review the reported problems");
+    }
+    if !has_blocker {
+        if needs_install {
+            let purpose = if command.is_some() {
+                "install this command".to_string()
+            } else {
+                format!("install the {category_name} category")
+            };
+            print_shell_info_hint("install", &target, "", &purpose);
+        }
+        if needs_upgrade {
+            print_shell_info_hint("upgrade", &target, "", "apply available updates");
+        }
     }
     Ok(())
+}
+
+fn print_shell_info_hint(command: &str, target: &str, options: &str, purpose: &str) {
+    let hint = if target.chars().any(char::is_control) {
+        format!(
+            "Use shine {command}{options} with the original target (control characters; copyable command omitted) to {purpose}."
+        )
+    } else {
+        let target = crate::shell_quote::command_arg(target);
+        format!("Run `shine {command} {target}{options}` to {purpose}.")
+    };
+    println!("{}", colors::dim(&hint));
 }
 
 #[cfg(test)]

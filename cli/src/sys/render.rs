@@ -1,7 +1,5 @@
 use crate::colors;
 use crate::output::escape_controls;
-use crate::sys::execution::{status_symbol, status_text};
-use crate::sys::run_manifest::SysRunEntry;
 use crate::sys::{LoadedSysPreset, ResolvedSelection, SysDriverKind, SysItem, SysItemMode};
 use anyhow::Result;
 
@@ -76,24 +74,13 @@ fn preview_pacman_preparation(
     }
 }
 
-pub(in crate::sys) fn print_available_item(item: &SysItem, entry: Option<&SysRunEntry>) {
+pub(in crate::sys) fn print_available_item(item: &SysItem) {
     let kind = item_mode_name(item.mode);
-    let status = entry
-        .map(|entry| {
-            let symbol = status_symbol(entry.status);
-            format!(
-                "{} {}",
-                colors::symbol(symbol),
-                colors::status_label(status_text(entry.status), symbol)
-            )
-        })
-        .unwrap_or_else(|| colors::dim("not recorded"));
     println!(
-        "    {:<18} {:<9} {}  {}",
+        "    {:<18} {:<9} {}",
         item.id,
         format!("[{kind}]"),
-        colors::bold(&escape_controls(&item.label)),
-        status
+        colors::bold(&escape_controls(&item.label))
     );
     if !item.description.is_empty() {
         println!("      {}", colors::dim(&escape_controls(&item.description)));

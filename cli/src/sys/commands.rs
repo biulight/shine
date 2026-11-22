@@ -23,6 +23,10 @@ use super::{
 
 pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     crate::config::print_presets_note(config);
+    print_list(config, all).await
+}
+
+pub(crate) async fn print_list(config: &Config, all: bool) -> Result<()> {
     let current_os = if all {
         detect_os_id().await.ok()
     } else {
@@ -42,7 +46,6 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
         bail!("No system preset found for `{current_os}`");
     }
 
-    let run_manifest = runtime.inspect_sys_run_manifest().await?;
     let sys_shell: &str = config.shell_type.into();
     println!("{}\n", colors::bold("System Items"));
     for (index, (os_id, manifest)) in presets.iter().enumerate() {
@@ -50,12 +53,14 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
             println!();
         }
         let is_current = Some(os_id.as_str()) == current_os.as_deref();
-        let current = if is_current {
-            " (current)"
-        } else {
-            " (catalog only)"
-        };
-        println!("  {}{}", colors::bold(os_id), colors::dim(current));
+        if all {
+            let scope = if is_current {
+                " (current)"
+            } else {
+                " (catalog only)"
+            };
+            println!("  {}{}", colors::bold(os_id), colors::dim(scope));
+        }
         if !manifest.description.is_empty() {
             println!(
                 "    {}",
@@ -71,11 +76,7 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
             println!("    {}", colors::dim("No items available."));
         }
         for item in visible {
-            let entry = run_manifest
-                .entries
-                .iter()
-                .find(|entry| entry.os_id == *os_id && entry.item_id == item.id);
-            print_available_item(item, entry);
+            print_available_item(item);
             if all && item.mode == SysItemMode::Init {
                 println!("      Shell integration: {}", shell_scope(item));
             }

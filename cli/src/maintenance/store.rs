@@ -71,8 +71,9 @@ pub(super) async fn save(scope: &Scope, cache: &Cache) -> Result<()> {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use tokio::time::{Instant, timeout};
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn contention_waits_for_release_and_preserves_the_lock_file() {
         let root = crate::test_support::make_temp_dir("shine-maintenance-lock").await;
         let path = root.join("state.lock");
@@ -80,7 +81,7 @@ mod tests {
         let waiter = lock_wait(&path);
         tokio::pin!(waiter);
         assert!(
-            tokio::time::timeout(Duration::from_millis(30), &mut waiter)
+            timeout(Duration::from_millis(30), &mut waiter)
                 .await
                 .is_err()
         );
@@ -96,17 +97,28 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn contention_timeout_and_io_failure_remain_distinct() {
         let root = crate::test_support::make_temp_dir("shine-maintenance-lock-errors").await;
         let path = root.join("state.lock");
         let holder = lock(&path).unwrap();
-        let error = lock_wait(&path).await.unwrap_err();
+        let wait_limit = Duration::from_secs(2);
+        let start = Instant::now();
+        // Allow the final retry to run after the deadline.
+        let error = timeout(wait_limit + Duration::from_millis(20), lock_wait(&path))
+            .await
+            .expect("lock waiter did not stop after the deadline")
+            .unwrap_err();
+        assert!(start.elapsed() >= wait_limit);
         assert!(matches!(
             error.downcast_ref(),
             Some(TryLockError::WouldBlock)
         ));
         assert!(path.is_file());
+        assert!(matches!(
+            lock(&path).unwrap_err().downcast_ref(),
+            Some(TryLockError::WouldBlock)
+        ));
         let error = lock_wait(&root).await.unwrap_err();
         assert!(error.downcast_ref::<std::io::Error>().is_some());
         drop(holder);

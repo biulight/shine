@@ -48,15 +48,15 @@ const config = {
           path: '../docs/manual',
           routeBasePath: '/',
           sidebarPath: require.resolve('./sidebars.js'),
-          lastVersion: '2.11',
+          lastVersion: '2.12',
           versions: {
             current: {
               label: 'Next',
               path: 'next',
               banner: 'unreleased',
             },
-            '2.11': {
-              label: '2.11',
+            '2.12': {
+              label: '2.12',
               path: '',
               banner: 'none',
             },

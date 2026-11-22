@@ -1,7 +1,7 @@
 # 0019 — Bun ccenv with Claude-process scope
 
 - **Status**: accepted
-- **Evidence**: `presets/shell/agent/cc.ts`, `presets/shell/agent/shine.toml`
+- **Evidence**: `presets/shell/agent/cc.ts`, `presets/shell/agent/cc.providers.toml`, `presets/shell/agent/shine.toml`
 - **Supersedes**: the platform-specific sourced `cc.sh` / `cc.ps1` implementation.
 
 ## Context
@@ -15,7 +15,7 @@ Claude-specific variables in the parent shell.
 
 `ccenv` is a cross-platform `runtime = "bun"` command. It selects a provider, builds a clean child
 environment, and always launches Claude; it does not mutate the parent shell. Provider definitions
-live in one TypeScript registry.
+live in the sibling `cc.providers.toml`.
 
 Credentials resolve in this order: tagged `KEY_SECRET`, legacy `KEY_GPG_SECRET`, then plaintext
 `KEY`. Once a secret exists, a decryption failure is terminal and never falls back to another

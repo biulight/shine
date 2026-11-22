@@ -95,7 +95,7 @@ Shell 输入注入要求 `PATH` 中有 `shine`，优先读取 `SOURCE_SECRET`，
 | `metadata_schema_version` | `1`（旧版） | 支持 `1`、`2`、`3`。新建普通预设使用 `2`；声明 `secret_files` 时使用 `3`。 |
 | `description` | 无 | 类别的可读说明。 |
 | `dest` | 必填 | 默认目标根目录，见[路径规则](#platforms-and-paths)。 |
-| `list_mode` | 显式声明 `files` 时为 `files`，否则为 `category` | 选择按 `files` 或 `category` 展示列表。 |
+| `list_mode` | 显式声明 `files` 时为 `files`，否则为 `category` | 控制 App 状态和更新输出按文件或类别分组。可用目录始终按类别展示。 |
 | `files` | 自动发现类别文件 | 显式文件列表。省略时发现除 `shine.toml` 外的文件；`secret_files` 列表非空时不再隐式发现。使用显式条目避免把辅助脚本作为安装目标。 |
 | `secret_files` | `[]` | 基于 workspace 的加密文件组，见[秘密文件](#secret-files)。 |
 | `artifact` | 无 | 显式 apply/remove 操作使用的脚本。 |

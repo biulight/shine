@@ -14,7 +14,7 @@ harder to maintain over time and leaving you to set them up again on another com
 you manage them in one place. It can also store passwords, access keys, and other sensitive
 information encrypted, then provide it on demand when a selected program runs.
 
-This manual describes **Shine 2.11**. Use the version selector for other supported releases or Next.
+This manual describes **Shine 2.12**. Use the version selector for other supported releases or Next.
 For an existing installation, see [Upgrades and migration](./guides/upgrading.md) for your starting version.
 Before upgrading from 1.x, read the [upgrade guide](./guides/upgrade-to-2.md).
 

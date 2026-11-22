@@ -2384,7 +2384,11 @@ fn preset_source_notes_escape_paths_without_changing_effective_layers_or_state()
             "schema_version = 2\n".to_owned()
         };
         fs::write(state.join("config.toml"), &config).unwrap();
-        for args in [vec!["app", "list"], vec!["app", "info", "demo"]] {
+        for args in [
+            vec!["app", "list"],
+            vec!["app", "info", "demo"],
+            vec!["list", "--available", "app"],
+        ] {
             let result = fixture
                 .command()
                 .env_remove("SUDO_USER")
@@ -2403,10 +2407,7 @@ fn preset_source_notes_escape_paths_without_changing_effective_layers_or_state()
                 "{text:?}"
             );
             assert_eq!(text.contains("◈ Presets Overlay"), use_overlay, "{text:?}");
-            assert!(
-                text.contains("snapshot · changes require `shine upgrade`"),
-                "{text:?}"
-            );
+            assert!(!text.contains("◈ Shell Deployment"), "{text:?}");
             assert!(
                 text.contains(if use_overlay {
                     "from-overlay"
@@ -2506,15 +2507,17 @@ fn app_catalog_queries_escape_metadata_without_changing_source_or_install_state(
                 text.contains("DESC\\nFORGED=installed\\u{1b}[31m"),
                 "{text:?}"
             );
-            assert!(text.contains("FILE\\rFAKE\\tVALUE"), "{text:?}");
-            if name != shown_name {
+            assert_eq!(
+                text.contains("FILE\\rFAKE\\tVALUE"),
+                args[1] != "list",
+                "{text:?}"
+            );
+            if name != shown_name && args[1] != "list" {
                 assert!(text.contains("config\\nFORGED=file\\u{1b}.txt"), "{text:?}");
-                if args[1] != "list" {
-                    assert!(
-                        text.contains("~/.config/demo\\nFORGED=path\\u{1b}"),
-                        "{text:?}"
-                    );
-                }
+                assert!(
+                    text.contains("~/.config/demo\\nFORGED=path\\u{1b}"),
+                    "{text:?}"
+                );
             }
             if args[1] == "list" {
                 let width = console::measure_text_width(shown_name).max("short".len());
@@ -2593,12 +2596,7 @@ fn app_catalog_queries_escape_metadata_without_changing_source_or_install_state(
             "{text:?}"
         );
         assert!(text.contains("FILE\\rFAKE\\tVALUE"), "{text:?}");
-        assert!(text.contains("Installed."), "{text:?}");
-        assert!(text.contains("--replace-managed"), "{text:?}");
-        assert_eq!(
-            text.contains("copyable command omitted"),
-            name != shown_name
-        );
+        assert!(text.ends_with("  2 up to date\n"), "{text:?}");
         assert_eq!(fs::read(receipt).unwrap(), before);
         assert_eq!(
             fs::read_to_string(category.join("shine.toml")).unwrap(),
@@ -2655,7 +2653,6 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
             vec!["info", &canonical],
         ] {
             let text = String::from_utf8(run(&args, 0).stdout).unwrap();
-            assert!(text.contains("DESC\\nFORGED=record\\u{1b}"), "{text:?}");
             assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
             assert!(
                 !text.lines().any(|line| line.starts_with("FORGED=")),
@@ -2667,20 +2664,31 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
                     "{text:?}"
                 );
                 assert!(
-                    text.contains(
-                        "comment    COMMENT\\u{1b}[31m\n\n               CONTINUED\\tliteral\n"
-                    ),
+                    text.contains("comment    COMMENT\\u{1b}[31m\n    tool       DESC\n"),
                     "{text:?}"
                 );
+                assert!(!text.contains("CONTINUED"), "{text:?}");
+                assert!(!text.contains("FORGED=record"), "{text:?}");
             } else {
+                assert!(text.contains("DESC\\nFORGED=record\\u{1b}"), "{text:?}");
+                let category_query = args.last() == Some(&name);
+                if category_query {
+                    assert!(
+                        text.contains(
+                            "       COMMENT\\u{1b}[31m\n       \n       CONTINUED\\tliteral\n"
+                        ),
+                        "{text:?}"
+                    );
+                }
                 assert!(
                     text.contains(&format!(
-                        "{shown_name}\n  CATEGORY\\nFORGED=category\\u{{1b}}"
+                        "{shown_name}  CATEGORY\\nFORGED=category\\u{{1b}}"
                     )),
                     "{text:?}"
                 );
-                assert!(
-                    text.contains(&format!("shell/{shown_name}/{script}")),
+                assert_eq!(
+                    text.contains(&format!("Source       shell/{shown_name}/{script}")),
+                    !category_query,
                     "{text:?}"
                 );
                 if name != shown_name {
@@ -2692,13 +2700,9 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
                     );
                     assert!(!text.contains("Run `shine"), "{text:?}");
                 } else {
-                    let target = if args.last() == Some(&name) {
-                        "demo"
-                    } else {
-                        "demo/tool"
-                    };
+                    let target = if category_query { "demo" } else { "demo/tool" };
                     assert!(
-                        text.contains(&format!("Run `shine shell install {target}`")),
+                        text.contains(&format!("Run `shine install shell/{target}`")),
                         "{text:?}"
                     );
                 }
@@ -2744,10 +2748,8 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
             let before = fs::read(&receipt).unwrap();
             let text = String::from_utf8(run(&["shell", "info", "demo/tool"], 0).stdout).unwrap();
             assert!(text.contains("DESC\\nFORGED=record\\u{1b}"), "{text:?}");
-            assert!(
-                text.contains("Run `shine install shell/demo/tool --replace-managed`"),
-                "{text:?}"
-            );
+            assert!(text.contains("  ✓  tool  [up-to-date]"), "{text:?}");
+            assert!(!text.contains("Run `shine"), "{text:?}");
             assert_eq!(fs::read(receipt).unwrap(), before);
         }
         assert_eq!(
@@ -4179,6 +4181,11 @@ async fn sys_shell_selection_filters_all_available_list_routes_but_keeps_full_lo
             }
         }
         if args.contains(&"--all") {
+            let recorded = text
+                .lines()
+                .find(|line| line.trim_start().starts_with("zsh-only "))
+                .unwrap();
+            assert!(recorded.ends_with("zsh-only"), "{recorded}");
             assert!(text.contains("Shell integration: zsh"), "{text}");
             assert!(
                 text.contains("unrestricted (no integration declared)"),
@@ -8925,10 +8932,8 @@ fn self_uninstall_preserves_a_shell_loader_owned_by_another_configuration() {
 }
 
 #[cfg(unix)]
-#[test]
-fn self_uninstall_reviews_owned_copy_and_stops_before_final_cleanup_on_conflict() {
+fn uninstall_manager_path(fixture: &Fixture) -> std::ffi::OsString {
     use std::os::unix::fs::PermissionsExt;
-    let fixture = Fixture::new();
     let tools = fixture.0.join("tools");
     fs::create_dir(&tools).unwrap();
     let (name, answer) = if cfg!(target_os = "macos") {
@@ -8942,10 +8947,115 @@ fn self_uninstall_reviews_owned_copy_and_stops_before_final_cleanup_on_conflict(
     let manager = tools.join(name);
     fs::write(&manager, format!("#!/bin/sh\nprintf '%s\\n' '{answer}'\n")).unwrap();
     fs::set_permissions(manager, fs::Permissions::from_mode(0o755)).unwrap();
-    let paths = std::env::join_paths(
+    std::env::join_paths(
         std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn self_uninstall_preserves_linked_startup_file_and_cleans_owned_state() {
+    let fixture = Fixture::new();
+    let paths = uninstall_manager_path(&fixture);
+    let home = fixture.0.join("home");
+    let state = home.join(".shine");
+    fs::create_dir_all(&state).unwrap();
+    let personal = home.join("personal-zshrc");
+    let link = home.join(".zshrc");
+    fs::write(&personal, "# personal\n").unwrap();
+    std::os::unix::fs::symlink(&personal, &link).unwrap();
+    let key = state.join("app-secret-fingerprint.key");
+    fs::write(&key, [7; 32]).unwrap();
+    for flag in ["--dry-run", "--yes"] {
+        let result = fixture
+            .command()
+            .env("SHINE_CONFIG_DIR", &state)
+            .env("SHELL", "/bin/zsh")
+            .env("PATH", &paths)
+            .args(["self", "uninstall", flag])
+            .output()
+            .unwrap();
+        if flag == "--dry-run" {
+            assert!(result.status.success(), "{result:?}");
+        } else {
+            // The invoking test binary has no self-install receipt.
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("managed cleanup complete"),
+                "{result:?}"
+            );
+        }
+        assert!(
+            String::from_utf8_lossy(&result.stdout)
+                .contains(&format!("Retain linked startup file: {}", link.display())),
+            "{result:?}"
+        );
+        assert_eq!(fs::read_link(&link).unwrap(), personal);
+        assert_eq!(fs::read(&personal).unwrap(), b"# personal\n");
+        assert_eq!(key.exists(), flag == "--dry-run");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn self_uninstall_hands_off_protected_program_before_cleanup() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root can unlink from a mode-0555 directory.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let fixture = Fixture::new();
+    let paths = uninstall_manager_path(&fixture);
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("PATH", &paths)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let parent = fixture.0.join("protected bin");
+    let copy = parent.join("shine");
+    let install = run(&["self", "install", "--dest", copy.to_str().unwrap()]);
+    assert!(install.status.success(), "{install:?}");
+    let state = fixture.0.join("state");
+    fs::write(state.join("app-secret-fingerprint.key"), [9; 32]).unwrap();
+    let before = upgrade_tree_state(&state);
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+    let preview = run(&["self", "uninstall", "--dry-run"]);
+    let apply = run(&["self", "uninstall", "--yes"]);
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(!apply.status.success(), "{apply:?}");
+    for result in [preview, apply] {
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            stdout.contains(&format!(
+                "Manual removal required for protected program: {}",
+                copy.display()
+            )),
+            "{result:?}"
+        );
+    }
+    assert!(copy.is_file());
+    assert_eq!(upgrade_tree_state(&state), before);
+    fs::remove_file(&copy).unwrap();
+    let retry = run(&["self", "uninstall", "--yes"]);
+    assert!(retry.status.success(), "{retry:?}");
+    assert!(!state.join("self-installed.json").exists());
+    assert!(!state.join("app-secret-fingerprint.key").exists());
+    assert!(
+        !fs::read_to_string(state.join("config.toml"))
+            .unwrap()
+            .contains("self_install_dest")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn self_uninstall_reviews_owned_copy_and_stops_before_final_cleanup_on_conflict() {
+    let fixture = Fixture::new();
+    let paths = uninstall_manager_path(&fixture);
     let src = fixture.0.join("src");
     let cat = src.join("app/demo");
     fs::create_dir_all(&cat).unwrap();
