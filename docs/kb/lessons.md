@@ -1,5 +1,12 @@
 # Lessons Learned
 
+## 2026-11-22 — ccenv must clear inherited Fable aliases
+
+- **Symptom**: a provider overlay that omitted `ANTHROPIC_DEFAULT_FABLE_MODEL` could inherit the
+  parent shell's Fable mapping and select a model from a different provider.
+- **Rule**: keep Claude Code's managed model aliases in the fixed cleanup list. Test with an
+  overlay that omits the alias everywhere, since built-in provider keys can mask missing cleanup.
+
 ## 2026-11-22 — Check Unix program removal before self-uninstall cleanup
 
 Installing into a protected directory can succeed through elevation. The uninstalling account

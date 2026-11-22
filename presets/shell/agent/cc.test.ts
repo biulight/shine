@@ -273,6 +273,25 @@ describe("provider environments", () => {
     expect(environment.PATH).toBe("/bin");
   });
 
+  test("clears a stale Fable alias even when the provider config omits it", () => {
+    const custom = parseProviderConfig(customConfig);
+    const environment = buildClaudeEnvironment(
+      providerFromChoice("", custom), "token",
+      { ANTHROPIC_DEFAULT_FABLE_MODEL: "stale" }, custom.providers,
+    );
+    expect(environment.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
+  });
+
+  test("passes Codex's Fable and Opus mappings to Claude", () => {
+    const environment = buildClaudeEnvironment(
+      providerFromChoice("codex", config), "token",
+      { ANTHROPIC_DEFAULT_FABLE_MODEL: "stale", ANTHROPIC_DEFAULT_OPUS_MODEL: "stale" },
+      providers,
+    );
+    expect(environment.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("gpt-6.2-astra");
+    expect(environment.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("gpt-6.2-sol");
+  });
+
   test.each(providers.filter((provider) => provider.enabled))(
     "$id clears stale provider values and applies its complete mapping",
     (provider) => {
