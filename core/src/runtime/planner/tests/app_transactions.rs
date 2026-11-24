@@ -691,11 +691,22 @@ async fn approved_privileged_app_install_journals_static_copy_creation() {
         )
     ));
 
+    // Stall ordinary file execution after the shared preparation has returned.
+    let privileged_guard = runtime.host().acquire_privileged_operation().await.unwrap();
     let mut observer = crate::runtime::NullObserver;
-    runtime
-        .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
-        .await
-        .unwrap();
+    let mut interaction = Interaction;
+    let install =
+        runtime.install_apps_approved(request, &approval, &mut observer, &mut interaction);
+    tokio::pin!(install);
+    std::future::poll_fn(|cx| {
+        assert!(install.as_mut().poll(cx).is_pending());
+        let mut competing_app = std::pin::pin!(runtime.acquire_app_lifecycle_operation());
+        assert!(competing_app.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(privileged_guard);
+    install.await.unwrap();
     let destination = PathBuf::from("/etc/demo/config.toml");
     assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
     assert!(

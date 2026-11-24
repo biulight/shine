@@ -74,17 +74,13 @@ impl<H> CoreRuntime<H>
 where
     H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost,
 {
-    pub async fn install_apps_approved(
+    // The caller holds the App lifecycle lock through the subsequent file actions and receipts.
+    async fn prepare_app_actions_and_apply_secrets(
         &self,
-        request: AppPlanRequest,
+        request: &AppPlanRequest,
         approval: &PlanApprovalV1,
-        observer: &mut impl RuntimeObserver,
         interaction: &mut impl RuntimeInteraction,
-    ) -> Result<AppLifecycleReport> {
-        if request.operation != LifecycleOperation::Install {
-            bail!("approved App install requires an install Plan");
-        }
-        let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
+    ) -> Result<(PlanV1, Vec<ActionIrV1>)> {
         let plan = self.plan_apps_prepared(request.clone()).await?;
         approval.validate(&plan)?;
         if plan.steps.iter().any(|s| {
@@ -104,10 +100,10 @@ where
         {
             bail!("administrator permission was not granted");
         }
-        let prepared_secrets = self.prepare_secrets(&request, &plan).await?;
+        let prepared_secrets = self.prepare_secrets(request, &plan).await?;
         approval.validate(&self.plan_apps_prepared(request.clone()).await?)?;
         let action_irs = self
-            .approved_app_file_action_irs(&request, &plan, approval)
+            .approved_app_file_action_irs(request, &plan, approval)
             .await?;
         // Secret preparation happens before any category destination mutation. Each
         // secret transaction commits independently and retains durable recovery state.
@@ -123,6 +119,23 @@ where
             .lock()
             .map_err(|_| anyhow::anyhow!("secret change lock poisoned"))? =
             self.apply_secrets(prepared_secrets)?;
+        Ok((plan, action_irs))
+    }
+
+    pub async fn install_apps_approved(
+        &self,
+        request: AppPlanRequest,
+        approval: &PlanApprovalV1,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        if request.operation != LifecycleOperation::Install {
+            bail!("approved App install requires an install Plan");
+        }
+        let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
+        let (plan, action_irs) = self
+            .prepare_app_actions_and_apply_secrets(&request, approval, interaction)
+            .await?;
 
         let result = self
             .install_apps_with_approved_actions(
@@ -165,44 +178,9 @@ where
             bail!("approved App uninstall requires an uninstall Plan");
         }
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
-        let plan = self.plan_apps_prepared(request.clone()).await?;
-        approval.validate(&plan)?;
-        if plan.steps.iter().any(|s| {
-            s.resource
-                .as_deref()
-                .is_some_and(|r| r.starts_with("secret:"))
-                && matches!(
-                    s.action,
-                    PlanActionV1::Create | PlanActionV1::Update | PlanActionV1::Remove
-                )
-        }) && plan
-            .permissions
-            .required
-            .contains(&PermissionV1::Administrator)
-            && !self.context().running_as_admin
-            && !interaction.authorize_admin(1).await?
-        {
-            bail!("administrator permission was not granted");
-        }
-        let prepared_secrets = self.prepare_secrets(&request, &plan).await?;
-        approval.validate(&self.plan_apps_prepared(request.clone()).await?)?;
-        let action_irs = self
-            .approved_app_file_action_irs(&request, &plan, approval)
+        let (plan, action_irs) = self
+            .prepare_app_actions_and_apply_secrets(&request, approval, interaction)
             .await?;
-        // Secret preparation happens before any category destination mutation. Each
-        // secret transaction commits independently and retains durable recovery state.
-        if prepared_secrets.as_ref().is_some_and(|p| p.has_changes()) {
-            let manifest =
-                crate::install::AppManifest::load(self.host(), &self.context().shine_dir).await?;
-            manifest
-                .save(self.host(), &self.context().shine_dir)
-                .await?;
-        }
-        *self
-            .secret_changes
-            .lock()
-            .map_err(|_| anyhow::anyhow!("secret change lock poisoned"))? =
-            self.apply_secrets(prepared_secrets)?;
 
         let result = self
             .uninstall_apps_with_approved_actions(
@@ -248,44 +226,9 @@ where
             bail!("approved App upgrade requires an upgrade Plan");
         }
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
-        let plan = self.plan_apps_prepared(request.clone()).await?;
-        approval.validate(&plan)?;
-        if plan.steps.iter().any(|s| {
-            s.resource
-                .as_deref()
-                .is_some_and(|r| r.starts_with("secret:"))
-                && matches!(
-                    s.action,
-                    PlanActionV1::Create | PlanActionV1::Update | PlanActionV1::Remove
-                )
-        }) && plan
-            .permissions
-            .required
-            .contains(&PermissionV1::Administrator)
-            && !self.context().running_as_admin
-            && !interaction.authorize_admin(1).await?
-        {
-            bail!("administrator permission was not granted");
-        }
-        let prepared_secrets = self.prepare_secrets(&request, &plan).await?;
-        approval.validate(&self.plan_apps_prepared(request.clone()).await?)?;
-        let action_irs = self
-            .approved_app_file_action_irs(&request, &plan, approval)
+        let (plan, action_irs) = self
+            .prepare_app_actions_and_apply_secrets(&request, approval, interaction)
             .await?;
-        // Secret preparation happens before any category destination mutation. Each
-        // secret transaction commits independently and retains durable recovery state.
-        if prepared_secrets.as_ref().is_some_and(|p| p.has_changes()) {
-            let manifest =
-                crate::install::AppManifest::load(self.host(), &self.context().shine_dir).await?;
-            manifest
-                .save(self.host(), &self.context().shine_dir)
-                .await?;
-        }
-        *self
-            .secret_changes
-            .lock()
-            .map_err(|_| anyhow::anyhow!("secret change lock poisoned"))? =
-            self.apply_secrets(prepared_secrets)?;
 
         let result = self
             .upgrade_apps(

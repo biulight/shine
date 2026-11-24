@@ -12,6 +12,7 @@ struct Fake {
     fail_receipt: AtomicBool,
     fail_create: AtomicBool,
     fail_applied_journal: AtomicBool,
+    edit_during_decrypt: Option<PathBuf>,
 }
 impl SecretFileIo for Fake {
     fn resolve_permissions(&self, p: &SecretFilePermissions) -> SecretFilePermissions {
@@ -70,6 +71,9 @@ impl SecretFileProvider for Fake {
     fn decrypt<'a>(&'a self, r: &'a FileReleaseRequest) -> SecretFuture<'a> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(path) = &self.edit_during_decrypt {
+                fs::write(path, b"concurrent edit")?;
+            }
             ensure!(
                 !self.fail_decrypt.load(Ordering::SeqCst),
                 "injected decryption failure"
@@ -184,6 +188,7 @@ async fn setup() -> (PathBuf, Arc<Fake>) {
             fail_receipt: AtomicBool::new(false),
             fail_create: AtomicBool::new(false),
             fail_applied_journal: AtomicBool::new(false),
+            edit_during_decrypt: None,
         }),
     )
 }
@@ -251,18 +256,18 @@ async fn service_owner_missing_parents_fail_before_decryption_or_writes() {
         };
         builder = builder.file(path, bytes);
     }
-    let mut context = original.context().clone();
-    // The filesystem check must still run when administrator authorization succeeds.
-    context.running_as_admin = true;
-    let runtime = CoreRuntime::new(RealHost, context, builder.build())
-        .with_secret_file_provider(provider.clone());
-    assert!(
-        install(&runtime, false)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("pre-create secret parent directories")
-    );
+    let snapshot = builder.build();
+    for (running_as_admin, expected_error) in [
+        (false, "administrator permission was not granted"),
+        (true, "pre-create secret parent directories"),
+    ] {
+        let mut context = original.context().clone();
+        context.running_as_admin = running_as_admin;
+        let runtime = CoreRuntime::new(RealHost, context, snapshot.clone())
+            .with_secret_file_provider(provider.clone());
+        let error = install(&runtime, false).await.unwrap_err();
+        assert!(error.to_string().contains(expected_error), "{error:#}");
+    }
     assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
     assert!(!root.join("service").exists());
     assert!(
@@ -544,6 +549,63 @@ async fn secret_adoption_conflict_and_decrypt_failure_do_not_write_configs() {
     install(&runtime, false).await.unwrap();
     assert!(!target.with_extension("shine.bak").exists());
     assert_eq!(runtime.secret_store().unwrap().entries.len(), 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn edit_during_secret_preparation_invalidates_approval_before_writes() {
+    let (root, mut provider) = setup().await;
+    let ordinary = root.join("service/compose.yml");
+    fs::create_dir(root.join("service")).unwrap();
+    Arc::get_mut(&mut provider).unwrap().edit_during_decrypt = Some(ordinary.clone());
+    let runtime = runtime(&root, provider.clone(), "password", true);
+    let error = install(&runtime, false).await.unwrap_err();
+    assert!(
+        error.is::<shine_core::plan::PlanApprovalError>(),
+        "{error:#}"
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fs::read(ordinary).unwrap(), b"concurrent edit");
+    assert!(!root.join("service/secrets/password").exists());
+    assert!(!root.join(".shine/app-manifest.toml").exists());
+    assert!(runtime.secret_store().unwrap().entries.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn ordinary_install_failure_preserves_committed_secret_on_retry() {
+    let (root, provider) = setup().await;
+    let retry = runtime(&root, provider.clone(), "password", true);
+    let secret = root.join("service/secrets/password");
+    // Once the secret is committed, this cache path has a regular file as its parent.
+    let mut context = retry.context().clone();
+    context.presets_dir = secret.join("cache");
+    let blocked = CoreRuntime::new(RealHost, context, retry.presets().clone())
+        .with_secret_file_provider(provider.clone());
+    let error = install(&blocked, false).await.unwrap_err();
+    assert!(
+        format!("{error:#}").contains("app preset cache"),
+        "{error:#}"
+    );
+    let receipt = provider.state("app-secret-manifest.json").unwrap().unwrap();
+    let target = root.join("service/compose.yml");
+    assert_eq!(fs::read(&secret).unwrap(), b"password");
+    assert!(!target.exists());
+    assert!(
+        provider
+            .state("app-secret-operation.json")
+            .unwrap()
+            .is_none()
+    );
+
+    install(&retry, false).await.unwrap();
+    assert_eq!(fs::read(target).unwrap(), b"services: {}");
+    assert_eq!(fs::read(secret).unwrap(), b"password");
+    assert_eq!(
+        provider.state("app-secret-manifest.json").unwrap(),
+        Some(receipt)
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
     fs::remove_dir_all(root).unwrap();
 }
 
