@@ -4,7 +4,7 @@ All workflows live in `.github/workflows/`.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `test.yml` | `workflow_call` only (reused by the others) | Ubuntu runs Bun checks, fmt, `cargo check --all`, clippy `-D warnings`, and `cargo audit`; a blocking Ubuntu x86_64 / macOS arm64 / Windows x86_64 matrix runs `cargo nextest run --workspace --all-features` natively |
+| `test.yml` | `workflow_call` only (reused by the others) | Ubuntu runs Bun checks, fmt, `cargo check --all`, workspace doctests, clippy `-D warnings`, and `cargo audit`. A blocking Ubuntu x86_64 / macOS arm64 / Windows x86_64 matrix runs `cargo nextest run --workspace --all-features` natively. |
 | `msrv.yml` | reusable by releases; push/PR to `release` or `main`, manual | `cargo check --locked --workspace` with Rust 1.90; release asset building and crate publishing wait for it |
 | `ci.yml` | push to `release`; PRs to `release`/`main` | calls `test.yml` |
 | `release.yml` | push of a `v*` tag | test + MSRV → per-platform tarballs and crates.io publish → GitHub Release → six-target cargo-binstall verification → stable `release` → `main` sync PR; RC notes are tag-to-tag increments, while stable notes cover the previous stable release through the new stable tag |
@@ -57,7 +57,7 @@ Notes:
 - The `Preview` release is overwritten daily and marked prerelease with `make_latest: legacy`,
   so it never becomes the "latest" release that `shine update` resolves.
 - The Ubuntu quality job in `test.yml` installs `cargo-llvm-cov`/llvm-tools; coverage tooling is
-  available there. Rust tests run separately on all three supported OS families with `fail-fast`
+  available there. Unit and integration tests run separately on all three supported OS families with `fail-fast`
   disabled so one platform failure does not hide the others. Each matrix job installs the pinned
   Rust and Bun versions and invokes nextest through `mise exec`, so subprocesses launched from
   temporary directories inherit concrete runtime paths instead of context-dependent mise shims.

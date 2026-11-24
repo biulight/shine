@@ -49,6 +49,8 @@ jobs:
         run: cargo fmt -- --check
       - name: Check the package for errors
         run: cargo check --all
+      - name: Run workspace doctests
+        run: cargo test --workspace --all-features --doc
       - name: Verify Preset authoring example
         run: |
           cargo run -- preset schema --format json
