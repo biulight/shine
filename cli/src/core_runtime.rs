@@ -21,17 +21,56 @@ pub(crate) async fn frontend_from_config(
 }
 
 pub(crate) async fn from_config(config: &Config) -> Result<CoreRuntime<RealHost>> {
-    from_config_with_preset_mode(config, config.is_external_presets).await
+    from_config_with_preset_mode(
+        config,
+        config.is_external_presets,
+        config.active_presets_overlay_dir(),
+    )
+    .await
 }
 
 pub(crate) async fn from_installed_presets(config: &Config) -> Result<CoreRuntime<RealHost>> {
-    from_config_with_preset_mode(config, true).await
+    from_config_with_preset_mode(config, true, config.active_presets_overlay_dir()).await
+}
+
+pub(crate) async fn for_shell_catalog(config: &Config) -> Result<CoreRuntime<RealHost>> {
+    let overlay = config.active_presets_overlay_dir();
+    if !config.is_external_presets && overlay.is_none() {
+        return Ok(from_embedded_presets());
+    }
+    from_config_with_preset_mode(config, config.is_external_presets, overlay).await
 }
 
 async fn from_config_with_preset_mode(
     config: &Config,
     is_external_presets: bool,
+    overlay: Option<&std::path::Path>,
 ) -> Result<CoreRuntime<RealHost>> {
+    let context = context_from_config(config, is_external_presets, overlay).await?;
+    let source = if is_external_presets {
+        PresetSnapshotSource::External(context.presets_dir.clone())
+    } else {
+        PresetSnapshotSource::Embedded(embedded_preset_files())
+    };
+    let request = PresetSnapshotRequest {
+        source,
+        overlay_root: context.overlay_dir.clone(),
+    };
+    let service = shine_core::frontend::FrontendService::capture(RealHost, context, request)
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+    Ok(service
+        .into_runtime()
+        .with_secret_file_provider(std::sync::Arc::new(
+            crate::apps::secret_files::Provider::new(config.clone()),
+        )))
+}
+
+async fn context_from_config(
+    config: &Config,
+    is_external_presets: bool,
+    overlay: Option<&std::path::Path>,
+) -> Result<RuntimeContext> {
     let bases = BaseDirs::new().context("resolving platform runtime directories")?;
     // Resolve lexical paths before any child changes its working directory.
     // Do not canonicalize: missing paths and symlink dispatch identities are valid.
@@ -39,16 +78,8 @@ async fn from_config_with_preset_mode(
         std::path::absolute(path).context("resolving absolute runtime path")
     };
     let presets_dir = absolute(config.presets_dir())?;
-    let overlay_root = config
-        .active_presets_overlay_dir()
-        .map(absolute)
-        .transpose()?;
-    let source = if is_external_presets {
-        PresetSnapshotSource::External(presets_dir.clone())
-    } else {
-        PresetSnapshotSource::Embedded(embedded_preset_files())
-    };
-    let context = RuntimeContext {
+    let overlay_root = overlay.map(absolute).transpose()?;
+    Ok(RuntimeContext {
         home_dir: absolute(&config.home_dir)?,
         shine_dir: absolute(config.shine_dir())?,
         presets_dir,
@@ -56,7 +87,7 @@ async fn from_config_with_preset_mode(
         cache_dir: bases.cache_dir().to_path_buf(),
         data_dir: bases.data_dir().to_path_buf(),
         app_default_dest_root: absolute(&config.app_default_dest_root())?,
-        overlay_dir: overlay_root.clone(),
+        overlay_dir: overlay_root,
         platform: RuntimePlatform::current(),
         shell: config.shell_type,
         shell_config_paths: crate::shells::shell_config_paths_for_core(
@@ -78,24 +109,19 @@ async fn from_config_with_preset_mode(
         env: config.env.clone(),
         path_env: std::env::var("PATH").ok(),
         proxy_env: proxy_env(&config.env),
-    };
-    shine_core::frontend::FrontendService::capture(
-        RealHost,
-        context,
-        PresetSnapshotRequest {
-            source,
-            overlay_root,
-        },
-    )
-    .await
-    .map(|service| {
-        service
-            .into_runtime()
-            .with_secret_file_provider(std::sync::Arc::new(
-                crate::apps::secret_files::Provider::new(config.clone()),
-            ))
     })
-    .map_err(shine_core::frontend::FrontendServiceError::into_source)
+}
+
+/// Defer configured runtime inputs, including trust, until after the pristine Shell section.
+pub(crate) async fn into_configured_catalog(
+    config: &Config,
+    catalog: CoreRuntime<RealHost>,
+) -> Result<CoreRuntime<RealHost>> {
+    if catalog.context().is_external_presets || catalog.context().overlay_dir.is_some() {
+        return Ok(catalog);
+    }
+    let context = context_from_config(config, false, None).await?;
+    Ok(CoreRuntime::new(RealHost, context, catalog.into_presets()))
 }
 
 pub(crate) fn from_embedded_presets() -> CoreRuntime<RealHost> {

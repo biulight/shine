@@ -23,26 +23,35 @@ use super::{
 
 pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     crate::config::print_presets_note(config);
-    print_list(config, all).await
-}
-
-pub(crate) async fn print_list(config: &Config, all: bool) -> Result<()> {
     let current_os = if all {
         detect_os_id().await.ok()
     } else {
         Some(detect_os_id().await?)
     };
     let runtime = crate::core_runtime::from_config(config).await?;
-    let mut presets = runtime.available_sys_manifests()?;
+    print_list(
+        config,
+        all,
+        current_os.as_deref(),
+        runtime.available_sys_manifests()?,
+    )
+}
+
+pub(crate) fn print_list(
+    config: &Config,
+    all: bool,
+    current_os: Option<&str>,
+    mut presets: Vec<(String, shine_core::runtime::SysManifest)>,
+) -> Result<()> {
     if !all {
-        presets.retain(|(os_id, _)| Some(os_id.as_str()) == current_os.as_deref());
+        presets.retain(|(os_id, _)| Some(os_id.as_str()) == current_os);
     }
     if presets.is_empty() {
         if all {
             println!("{}", colors::dim("No system presets found."));
             return Ok(());
         }
-        let current_os = current_os.as_deref().unwrap_or("unknown");
+        let current_os = current_os.unwrap_or("unknown");
         bail!("No system preset found for `{current_os}`");
     }
 
@@ -52,7 +61,7 @@ pub(crate) async fn print_list(config: &Config, all: bool) -> Result<()> {
         if index > 0 {
             println!();
         }
-        let is_current = Some(os_id.as_str()) == current_os.as_deref();
+        let is_current = Some(os_id.as_str()) == current_os;
         if all {
             let scope = if is_current {
                 " (current)"

@@ -318,6 +318,11 @@ impl<H> CoreRuntime<H> {
         &self.presets
     }
 
+    /// Transfer captured source bytes and origins independently of the runtime's approval state.
+    pub fn into_presets(self) -> PresetSnapshot {
+        std::sync::Arc::unwrap_or_clone(self.presets)
+    }
+
     pub fn host(&self) -> &H {
         &self.host
     }

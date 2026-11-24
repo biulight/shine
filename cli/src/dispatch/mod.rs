@@ -155,7 +155,7 @@ async fn run_command(cli: Cli) -> Result<()> {
         Commands::Preset { command } => preset::dispatch(&config, command).await,
         Commands::List { available, kind } => {
             if available {
-                handle_available_list(&config, kind).await
+                Box::pin(handle_available_list(&config, kind)).await
             } else {
                 Box::pin(list::handle_list(&config)).await
             }
@@ -270,11 +270,14 @@ async fn handle_available_list(config: &Config, kind: Option<ResourceKind>) -> R
         Some(ResourceKind::Sys) => Box::pin(sys::handle_list(config, false)).await,
         None => {
             config::print_presets_note(config);
-            Box::pin(shells::handle_list_with_presets_note(config, false)).await?;
+            let runtime = cli::core_runtime::for_shell_catalog(config).await?;
+            shells::print_categories(runtime.shell_categories(None)?);
             println!();
-            Box::pin(apps::handle_list_with_presets_note(config, false)).await?;
+            let runtime = cli::core_runtime::into_configured_catalog(config, runtime).await?;
+            apps::print_categories(&runtime.app_categories(None)?);
             println!();
-            Box::pin(sys::print_list(config, false)).await
+            let os = sys::detect_os_id().await?;
+            sys::print_list(config, false, Some(&os), runtime.available_sys_manifests()?)
         }
     }
 }

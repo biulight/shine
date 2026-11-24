@@ -43,6 +43,9 @@ impl Fixture {
         self.run_command(command)
     }
     fn run_command(&self, mut command: Command) -> Output {
+        self.configure_command(&mut command).output().unwrap()
+    }
+    fn configure_command<'a>(&self, command: &'a mut Command) -> &'a mut Command {
         command
             .current_dir(&self.0)
             .env("HOME", self.0.join("home"))
@@ -53,8 +56,6 @@ impl Fixture {
             .env_remove("SHINE_PRESETS")
             .env("NO_COLOR", "1")
             .stdin(Stdio::null())
-            .output()
-            .unwrap()
     }
     fn app(&self, generated: bool) {
         let preset = self.0.join("state/presets/app/demo");
@@ -2200,6 +2201,12 @@ fn embedded_shell_catalog_does_not_read_invalid_trust_but_runtime_paths_still_do
         }
         assert_eq!(fs::read_to_string(&project).unwrap(), project_text);
 
+        let overview = fixture.run(&["list", "--available"]);
+        assert_eq!(overview.status.code(), Some(1));
+        assert!(stdout(&overview).contains("Shell Preset Categories"));
+        assert!(!stdout(&overview).contains("App Preset Categories"));
+        assert!(String::from_utf8_lossy(&overview.stderr).contains(error));
+
         // The exception is only for the pristine embedded catalog, never runtime-backed sources.
         let overlay = fixture.0.join("overlay");
         fs::create_dir(&overlay).unwrap();
@@ -3608,8 +3615,9 @@ async fn available_overview_prints_one_source_header_and_reuses_scoped_catalogs(
     let os = cli::sys::detect_os_id().await.unwrap();
     let sys = state.join("presets/sys").join(os);
     fs::create_dir_all(&sys).unwrap();
+    let sys_manifest = sys.join("shine.toml");
     fs::write(
-        sys.join("shine.toml"),
+        &sys_manifest,
         "version = 2\n[[items]]\nid = 'example'\nlabel = 'Example system item'\nmode = 'managed'\n\
          driver = 'managed-file'\n[items.config]\nsource = 'example.txt'\ntarget = '~/.example'\n",
     )
@@ -3637,6 +3645,72 @@ async fn available_overview_prints_one_source_header_and_reuses_scoped_catalogs(
         assert_eq!(overview.matches(note).count(), 1, "{overview}");
     }
     assert_eq!(overview, format!("{shell}\n{app_body}\n{sys_body}"));
+
+    fs::write(sys_manifest, "[invalid").unwrap();
+    let failed = fixture.run(&["list", "--available"]);
+    assert!(!failed.status.success());
+    assert_eq!(stdout(&failed), format!("{shell}\n{app_body}\n"));
+}
+
+#[tokio::test]
+async fn available_overview_keeps_its_snapshot_when_sources_change_between_sections() {
+    use std::io::{BufRead, BufReader, Read};
+
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::write(
+        state.join("config.toml"),
+        "schema_version = 2\npresets_overlay_dir = 'overlay'\n",
+    )
+    .unwrap();
+    let shell = state.join("presets/shell/demo");
+    fs::create_dir_all(&shell).unwrap();
+    let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+    // Keep Shell writing to the pipe until the parent has changed both later sections.
+    fs::write(
+        shell.join(script),
+        format!("# {}\n", "x".repeat(2 * 1024 * 1024)),
+    )
+    .unwrap();
+    let app = state.join("presets/app/before");
+    let sys = state
+        .join("overlay/sys")
+        .join(cli::sys::detect_os_id().await.unwrap());
+    fs::create_dir_all(&app).unwrap();
+    fs::write(app.join("file.txt"), "config").unwrap();
+    fs::create_dir_all(&sys).unwrap();
+    let manifest = sys.join("shine.toml");
+    let before = "version = 2\ndescription = 'sys-before'\n[[items]]\nid = 'example'\nlabel = 'Example'\nmode = 'managed'\ndriver = 'managed-file'\n[items.config]\nsource = 'file.txt'\ntarget = '~/.example'\n";
+    fs::write(&manifest, before).unwrap();
+    fs::write(sys.join("file.txt"), "sys").unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+    let mut child = fixture
+        .configure_command(&mut command)
+        .args(["list", "--available"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    while line.trim_end() != "Shell Preset Categories" {
+        line.clear();
+        assert_ne!(
+            output.read_line(&mut line).unwrap(),
+            0,
+            "missing Shell section"
+        );
+    }
+    fs::rename(&app, app.with_file_name("after")).unwrap();
+    fs::write(&manifest, before.replace("sys-before", "sys-after")).unwrap();
+    let mut rest = String::new();
+    output.read_to_string(&mut rest).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert!(rest.contains("  before\n") && rest.contains("sys-before"));
+    let next = fixture.run(&["list", "--available"]);
+    success(&next);
+    let text = stdout(&next);
+    assert!(text.contains("  after\n") && text.contains("sys-after"));
 }
 
 #[test]

@@ -133,18 +133,17 @@ pub async fn handle_list_with_presets_note(
     if print_presets_note {
         crate::config::print_presets_note(config);
     }
-    // A pristine embedded catalog needs no runtime state, including external-code trust.
-    let mut categories =
-        if !config.is_external_presets && config.active_presets_overlay_dir().is_none() {
-            metadata::load_embedded_categories(None)?
-        } else {
-            metadata::load_active_categories(config, None).await?
-        };
+    let catalog = crate::core_runtime::for_shell_catalog(config).await?;
+    print_categories(catalog.shell_categories(None)?);
+    Ok(())
+}
+
+pub(crate) fn print_categories(mut categories: Vec<metadata::ShellCategory>) {
     categories.retain(|category| !category.files.is_empty());
 
     if categories.is_empty() {
         println!("{}", colors::dim("No shell preset categories found."));
-        return Ok(());
+        return;
     }
 
     println!("{}\n", colors::bold("Shell Preset Categories"));
@@ -216,8 +215,6 @@ pub async fn handle_list_with_presets_note(
             "After installation, commands are available directly by name (e.g. `setproxy`)."
         )
     );
-
-    Ok(())
 }
 
 pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow::Result<()> {

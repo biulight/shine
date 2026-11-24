@@ -11,6 +11,7 @@ mod upgrade;
 pub use build::{handle_build_approved, handle_unbuild_approved};
 #[doc(hidden)]
 pub use info::handle_list_with_presets_note;
+pub(crate) use info::print_categories;
 pub use info::{handle_info, handle_list};
 pub use install::handle_install_approved;
 pub use metadata::{

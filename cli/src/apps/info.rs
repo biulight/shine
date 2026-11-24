@@ -298,10 +298,14 @@ pub async fn handle_list_with_presets_note(
         println!();
     }
     let categories = metadata::load_active_categories(config, None).await?;
+    print_categories(&categories);
+    Ok(())
+}
 
+pub(crate) fn print_categories(categories: &[metadata::AppCategory]) {
     if categories.is_empty() {
         println!("{}", colors::dim("No app preset categories found."));
-        return Ok(());
+        return;
     }
 
     println!("{}\n", colors::bold("App Preset Categories"));
@@ -313,7 +317,7 @@ pub async fn handle_list_with_presets_note(
         .unwrap_or(0);
     let description_indent = " ".repeat(4 + name_width);
 
-    for cat in &categories {
+    for cat in categories {
         let effective_desc = cat.description.as_deref().or_else(|| {
             if cat.files.len() == 1 {
                 cat.files[0].description.as_deref()
@@ -349,8 +353,6 @@ pub async fn handle_list_with_presets_note(
     ] {
         println!("{}", colors::dim(hint));
     }
-
-    Ok(())
 }
 
 #[cfg(test)]

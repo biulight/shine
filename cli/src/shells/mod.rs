@@ -23,6 +23,7 @@ pub(crate) use install::{
 pub use recovery::handle_recover_approved;
 #[doc(hidden)]
 pub use report::handle_list_with_presets_note;
+pub(crate) use report::print_categories;
 pub use report::{ShellUpgradeReport, handle_info, handle_list};
 pub use uninstall::handle_uninstall_approved;
 

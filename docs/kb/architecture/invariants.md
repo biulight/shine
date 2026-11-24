@@ -80,8 +80,10 @@ bugs. Check this list before changing the modules named in each entry.
   Global failure labels, detailed status columns and recorded Sys change fields encode controls at
   rendering; widths use the escaped strings. Manual-refresh hints omit copyable commands when
   category/source operands contain controls, without changing the original selected refresh set.
-  The available overview prints its Preset notes once, then reuses the Shell command list, App
-  category summaries, and Sys items. The App-only filter matches `app list`, including its notes.
+  The available overview captures the base and active overlay once per invocation. It prints
+  its Preset notes once and reads Shell, App and Sys metadata from that same snapshot in order.
+  A later section's error preserves earlier output. The App-only filter matches `app list`,
+  including its notes.
   Available Shell catalogs use the active snapshot, including built-in-plus-overlay sources.
   Without an external source or active overlay, the embedded catalog retains its state-independent
   metadata path; an invalid trust store must not block listing or change its successful exit.
