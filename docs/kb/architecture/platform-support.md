@@ -1,234 +1,51 @@
-# Platform Support Assessment
+# Platform support assessment
 
-Last assessed: 2026-08-30
+Reviewed at `4e2f98a5` on 2026-11-25. The Sys manifests define what ships for each OS or
+distribution. The release and CI matrices identify the binary targets and native test hosts.
 
-This document records the current implementation coverage and the remaining gaps across macOS,
-Ubuntu, and Windows. It is an implementation reference, not a public compatibility promise. Verify
-the relevant code, presets, CI workflows, and public manual again before changing behavior or
-announcing support.
+## Built-in Sys presets
 
-The assessment is based on repository code and workflows. It does not establish end-to-end
-bootstrap, package-provider, DNS, terminal, service-manager or remote-SSH smoke coverage.
-
-## Arch Linux bootstrap addition (2026-11-14)
-
-Official x86_64 Arch Linux now has a separate `sys/arch` preset with the default and only
-`minimal` selection: Neovim, fzf, bat, eza, and zoxide. Native pacman installation reuses the
-approved bootstrap executor. Bash/Zsh loaders, profile enable/disable, and self-uninstall use
-Arch-specific paths and sentinels. The older three-platform matrix below is not an Arch capability
-promise: Arch derivatives, ARM, AUR, Rust tooling, and managed split DNS are outside this addition.
-Users complete full-system updates themselves; bootstrap never runs `-Sy` or `-Syu`.
-Native package-manager installation still requires separate Arch acceptance; local fixture tests
-exercise the execution and profile paths without installing system software.
-
-## Executive summary
-
-Shine has a genuine cross-platform core rather than a Unix implementation that merely compiles on
-Windows. Configuration, environment handling, manifest-tracked install/uninstall, shell preset
-lifecycle, self-update, task execution, and most status/update flows have explicit Windows paths.
-Windows shims, PowerShell profiles, path comparison, CRLF/BOM handling, WinGet proxying, and NRPT
-split DNS are implemented deliberately.
-
-The overall maturity remains uneven:
-
-| Platform | Current maturity | Main strengths | Main gaps |
+| Platform and manifest | Default selection and installation method | Managed profile shells | Built-in split DNS |
 | --- | --- | --- | --- |
-| macOS | Highest | Broadest built-in sys preset, Homebrew/Cask integration, zsh profile, launchd service install, Secure Enclave/Touch ID, native split DNS | Managed system profile targets zsh; some tty behavior requires real-terminal verification |
-| Ubuntu | High | Rich server/developer bootstrap, bash and zsh profiles, minimal server profile, systemd user service, systemd-resolved safety checks | More installer logic lives in per-item scripts; no built-in Rust bootstrap |
-| Windows | Medium-high core, lower advanced coverage | PowerShell shims and profiles, WinGet, Windows path and line-ending handling, NRPT split DNS, Windows OpenSSH environment wrapper, persistent HTTP task, native Rust CI | No Windows-remote transfer or secret broker, no terminal OSC theme detection, and thinner editor bootstrap |
+| [macOS](../../../presets/sys/macos/shine.toml) | `recommended` includes Rust. Tools use Homebrew, Homebrew Cask, or item-owned installers. | Zsh | Per-domain files under `/etc/resolver` |
+| [Ubuntu](../../../presets/sys/ubuntu/shine.toml) | `recommended` includes Rust via rustup and Docker Engine. Items use APT or item-owned installers. `minimal` is the smaller server selection. | Bash, Zsh | systemd-resolved with the local stub enabled |
+| [Arch Linux](../../../presets/sys/arch/shine.toml) | Official x86_64 Arch Linux. The only profile is `minimal`, using pacman. The user completes a full system update before installation. | Bash, Zsh | No built-in item |
+| [Windows](../../../presets/sys/windows/shine.toml) | `recommended` includes Rust and Neovim. Software items use WinGet. | PowerShell 7 and Windows PowerShell 5.1 | Name Resolution Policy Table (NRPT) |
 
-The highest-priority remaining cross-platform engineering gap is:
+Use `shine sys list --all` to inspect the active catalog across operating systems and shells.
+For the shipped profile contents, see the [built-in selections](../../manual/built-in-presets/index.md#system-presets).
+A bootstrap profile selects installation items. `shine sys init` refreshes shell integration
+independently of package installation. Where provided, `split-dns` is a managed resource
+applied with `shine sys apply split-dns`. [Sys initialization](../decisions/0172-independent-sys-init.md) ·
+[Split DNS prerequisites](../../manual/built-in-presets/split-dns.md)
 
-1. Native unit tests now run on Ubuntu, macOS, and Windows, but executable Sys scripts, package
-   providers, services, DNS, terminals, and SSH still need more real-OS smoke coverage than the
-   in-memory and platform-gated suites can provide.
+## Other platform boundaries
 
-## Capability matrix
-
-`Full` means the feature has an intentional implementation for the platform. `Partial` means the
-core path works but the platform lacks a related integration or advanced mode. This table describes
-the repository at the assessment date, not every possible external preset.
-
-| Capability | macOS | Ubuntu | Windows | Notes |
-| --- | --- | --- | --- | --- |
-| Official binary and install script | Full | Full | Full | Release assets cover x86_64 and aarch64; GNU Linux binaries target Ubuntu 22.04 / glibc 2.35 |
-| Self install and upgrade | Full | Full | Full | Unix can use `sudo`; Windows requires an already elevated terminal for protected destinations |
-| Config, env, workspace, and task lifecycle | Full | Full | Full | Secret backend availability still depends on installed external tools |
-| Shell preset lifecycle | Full | Full | Full | Unix uses symlinks or managed launchers; Windows uses marked `.ps1` and `.cmd` shims |
-| Built-in shell commands | Full | Full | Partial | All shared commands are available except Unix-only `copyfile`; platform-specific proxy scripts exist |
-| App lifecycle engine | Full | Full | Full | Copy, transforms, JSON merge, generators, hooks, artifacts, backup, upgrade, and uninstall are shared |
-| Built-in App/Shell availability filtering | Full | Full | Full | Exact `macos`/`linux`/`windows` selectors are supported; `unix` remains a compatibility group, and a generated bilingual manual block is conformance-tested against runtime metadata |
-| Dynamic completions | Bash/Zsh | Bash/Zsh | PowerShell | Fish and Elvish profiles exist in generic shell code but dynamic completion registration is not provided |
-| Sys bootstrap | 21 items | 17 items | 14 items | Counts include the independent managed `split-dns` item |
-| Package provider | Homebrew/Cask | APT, Homebrew, scripts | WinGet | Ubuntu uses the largest number of item-owned compatibility scripts |
-| Managed split DNS | Full | Full | Full | Uses `/etc/resolver`, systemd-resolved drop-in, and NRPT respectively |
-| Terminal theme auto-detection | Full | Full | Partial | OSC query is Unix-only; Windows can consume an existing or explicitly supplied theme value |
-| SSH to a POSIX remote | Full | Full | Full as local initiator | Requires a compatible Shine on the POSIX remote |
-| SSH to a Windows remote | Partial | Partial | Partial | Safely injects selected environment values through PowerShell |
-| SSH transfer and on-demand secret broker | Full for POSIX remote | Full for POSIX remote | No Windows-remote mode | Windows remote mode has no compatible transfer/control channel |
-| Secure Enclave/Touch ID age identity | Full | Not applicable | Missing by design | Windows Hello integration was deferred to an external age plugin in ADR 0032 |
-
-## System preset differences
-
-The HTTP server and service installation commands are removed (ADR 0107). `shine clear serve`
-only removes legacy launchd, systemd user, or current-user Task Scheduler registrations. Its
-process contracts and failure handling are tested with simulated hosts. On 2026-10-11, manual
-macOS validation confirmed the legacy-service reminder on `shine list` and successful
-`shine clear serve` cleanup; a subsequent read-only check confirmed the old launchd plist was
-absent. Native Linux/Windows service-manager cleanup remains unverified.
-Maintenance checks use inline registration inspection and a detached, read-only native service
-probe. Actual CLI background survival, later-call reminders and invalidation are tested on macOS
-with a PTY and fake service managers; native Linux/Windows smoke behavior remains unverified.
-
-### Common coverage
-
-All three built-in sys presets provide Rust, Neovim, Yazi, Starship, zoxide, Atuin, fzf, bat, eza,
-ZeroTier, split DNS, Bun, pnpm, and mise. Package installation is presence-oriented: Shine
-bootstraps missing software but does not own third-party version upgrades.
-
-### macOS
-
-The macOS preset contains 21 items. In addition to the common set it includes Homebrew, AstroNvim,
-nvm, Fastfetch, and several zsh plugins. Most installation is declarative through Homebrew or
-Homebrew Cask, with scripts reserved for Homebrew, Rust, and AstroNvim compatibility flows. The
-generated managed system profile targets zsh.
-
-### Ubuntu
-
-The Ubuntu preset contains 17 items and provides `recommended`, `all`, and `minimal` profiles. The
-minimal profile is useful for servers and deliberately omits prompt, history-sync, JavaScript, and
-Homebrew tooling. The default profile includes Rust through the official rustup installer. Ubuntu
-supports both bash and zsh managed profiles.
-
-Ubuntu has the richest script-based bootstrap surface. AstroNvim, Atuin, Yazi, Starship, zoxide,
-zsh-vi-mode, bat, eza, Bun, pnpm, mise, Homebrew, and ZeroTier use item-owned scripts, while Neovim
-and fzf use APT. Rust uses the same official rustup bootstrap model as macOS. This gives better
-control over upstream versions and compatibility, but also creates the highest ongoing maintenance
-and external-download test burden.
-
-### Windows
-
-The Windows preset contains 14 items and provides `required`, `recommended`, and `all` profiles.
-It uses declarative WinGet packages and PowerShell profile fragments. Rust and Neovim are included,
-while AstroNvim is not. WinGet proxy support passes an explicit `--proxy` argument because WinGet
-does not honor the standard proxy environment variables by itself.
-
-Windows profile integration intentionally updates both PowerShell 7 and Windows PowerShell 5.1
-profile files and preserves an existing leading BOM. Shell launchers use managed `.ps1` and `.cmd`
-files instead of depending on Windows symlink privileges.
-
-## Confirmed gaps and risks
-
-### Closed 2026-08-27: App presets can express an exact operating system
-
-ADR 0034 added exact `macos`, `linux`, and `windows` selectors while retaining `unix` as the
-macOS/Linux compatibility group. App destination maps prefer an exact branch over `unix`, App and
-Shell file filters share the same vocabulary, and host-independent validation checks all three
-effective OS branches plus every explicitly declared destination. The built-in Surge category now
-has only a macOS destination and is absent from runtime App candidates on Linux and Windows.
-
-### Closed 2026-08-30: CI executes native macOS and Windows Rust tests
-
-The reusable test workflow now runs `cargo nextest run --all-features` on Ubuntu x86_64, macOS
-arm64, and Windows x86_64. Platform-gated modules therefore compile and execute on their owning OS
-during normal CI; release packaging remains responsible for the additional asset targets.
-
-The matrix closes the previous compile-only gap, but it is not a substitute for smoke tests against
-external package managers, administrator facilities, real terminals, service managers, DNS, or
-remote SSH peers.
-
-The closed matrix criteria are:
-
-- Pull requests run native Rust tests on Ubuntu, macOS, and Windows x86_64.
-- Platform-specific tests compile and execute on their owning OS.
-- Release cross-builds remain responsible for the additional aarch64 asset targets.
-
-Windows managed shim/profile tests now execute on Windows. Real-terminal-only macOS behavior and
-external-system smoke coverage remain documented follow-ups rather than matrix blockers.
-
-### P2: Windows remote SSH is intentionally feature-reduced
-
-Windows remote mode safely selects PowerShell, injects environment values, and loads the normal
-interactive profile. It does not provide `shine local` upload/download/status or the on-demand
-secret broker because those depend on the POSIX transfer/control channel.
-
-Before expanding this area, decide whether Windows remote support is intended to remain a focused
-environment-forwarding mode or reach parity with POSIX remotes. A parity implementation needs a
-separate security and transport design; it should not reuse POSIX shell syntax or assume Unix-domain
-sockets.
-
-### P2: Terminal theme synchronization is not symmetric
-
-The OSC 11 terminal query implementation is Unix-only. Managed macOS and Ubuntu profiles can detect
-and publish the terminal theme automatically. Windows may use an already exported
-`SHINE_TERMINAL_THEME`, `COLORFGBG`, or an explicitly configured value, but does not query the
-terminal through the same path.
-
-Treat this as a usability gap, not a core correctness gap. Any Windows implementation needs
-real-terminal verification comparable to the macOS `/dev/tty` investigation recorded in
-`lessons.md`.
-
-### P2: Built-in bootstrap profiles are not feature-equivalent
-
-Raw item counts are not themselves a compatibility goal because each OS has different package and
-shell needs. All three default `recommended` profiles now share a Rust toolchain, Neovim editor, and
-the common terminal-tool baseline. The remaining useful parity gaps are:
-
-- Windows has no AstroNvim bootstrap.
-- Windows lacks a server-oriented minimal profile.
-- Ubuntu's large script surface needs more integration coverage than declarative providers.
-
-Add items only when their detection, installation ownership, profile integration, proxy behavior,
-and non-upgrade semantics can be tested. Do not force identical profile membership merely to make
-the counts match.
-
-## Remaining implementation sequence
-
-Native macOS/Windows Rust jobs and Ubuntu/Windows persistent service integrations are complete.
-The remaining order is:
-
-1. Decide the target scope for Windows remote SSH, then either document the intentional boundary or
-   design a secure Windows transfer/broker transport.
-2. Add real-OS integration coverage for the highest-risk Ubuntu scripts and provider/service/DNS
-   boundaries without putting credentials or broad machine mutation into ordinary unit CI.
-3. Fill remaining high-value sys preset gaps, starting with a decision on Windows AstroNvim and a
-   server-oriented Windows profile, with platform smoke tests.
-4. Reassess Windows terminal theme detection after the higher-impact correctness and integration
-   gaps are closed.
-
-## Cross-platform definition of done
-
-For a change that claims support on one or more of these platforms:
-
-1. Encode availability in metadata or an explicit platform boundary; do not rely on a destination
-   path or external command failing on the wrong OS.
-2. Unit-test platform-independent parsing for every supported branch.
-3. Run platform-gated tests on the owning OS in CI.
-4. Verify install, status/update, upgrade, and uninstall behavior, including modified-user-file and
-   dry-run cases where applicable.
-5. Verify native path syntax, line endings, profile location, executable suffixes, and privilege
-   behavior.
-6. Add a real-OS smoke test for external package managers, services, DNS, terminals, or SSH where a
-   unit test cannot reproduce the OS contract.
-7. Update both public manual locales in the same change for any user-visible compatibility or
-   command/schema change.
-8. Regenerate the built-in preset platform capability block when App destinations or App/Shell
-   file selectors change; the Rust conformance test checks both manual locales.
-9. Update this assessment when a listed gap is closed or its intended scope changes.
-
-## Evidence map
-
-| Area | Authoritative implementation or documentation |
+| Area | What to check |
 | --- | --- |
-| Platform and release-target mapping | [`cli/src/platform.rs`](../../../cli/src/platform.rs) |
-| App platform filtering | [`core/src/runtime/app_metadata.rs`](../../../core/src/runtime/app_metadata.rs) |
-| Shell launchers and Windows shims | [`cli/src/bin_links.rs`](../../../cli/src/bin_links.rs) |
-| Shell and PowerShell profile locations | [`cli/src/shells/mod.rs`](../../../cli/src/shells/mod.rs), [`cli/src/shells/profile.rs`](../../../cli/src/shells/profile.rs) |
-| System preset manifests | [`presets/sys/macos/shine.toml`](../../../presets/sys/macos/shine.toml), [`presets/sys/ubuntu/shine.toml`](../../../presets/sys/ubuntu/shine.toml), [`presets/sys/windows/shine.toml`](../../../presets/sys/windows/shine.toml) |
-| Package provider routing | [`core/src/runtime/sys_bootstrap.rs`](../../../core/src/runtime/sys_bootstrap.rs) |
-| Cross-platform split DNS | [`core/src/runtime/sys.rs`](../../../core/src/runtime/sys.rs) |
-| Terminal theme resolution | [`cli/src/theme/mod.rs`](../../../cli/src/theme/mod.rs) |
-| SSH platform boundary | [`cli/src/ssh/mod.rs`](../../../cli/src/ssh/mod.rs), [`docs/manual/guides/ssh-transfer.md`](../../manual/guides/ssh-transfer.md) |
-| Test workflow | [`.github/workflows/test.yml`](../../../.github/workflows/test.yml) |
-| Release asset matrix | [`.github/workflows/package-assets.yml`](../../../.github/workflows/package-assets.yml) |
-| Windows Hello decision | [`decisions/0032-defer-windows-hello-to-external-age-plugin.md`](../decisions/0032-defer-windows-hello-to-external-age-plugin.md) |
+| Self-install and upgrade | On Unix, installing a copy at a protected path can request `sudo`. Self-upgrade needs permission to replace the running executable in its directory. On Windows, use an appropriately privileged terminal for protected locations. [Installation guide](../../manual/installation.md) |
+| App and Shell presets | The [generated availability table](../../manual/built-in-presets/index.md#platform-support) lists shipped App categories and Shell commands for macOS, Linux and Windows. The [conformance test](../../../tests/builtin_presets/docs.rs) compares both manual locales with Core discovery. Use the Sys manifests above for distribution-specific support. |
+| Shell integration | Unix uses symlinks or managed launchers. Windows uses marked PowerShell and CMD shims. Automatic completion registration supports Bash, Zsh and PowerShell. [Launcher implementation](../../../core/src/runtime/launcher.rs) · [Completion registration](../../../core/src/runtime/profile.rs) |
+| Terminal theme | Windows can use an explicit theme or environment hints. The OSC 11 background-color query requires a Unix terminal. [Theme resolution](../../../cli/src/theme/mod.rs) |
+| SSH | macOS, Linux and Windows can initiate a session to a compatible POSIX remote with file transfer and on-demand secret release. With `--remote-shell windows`, Shine forwards selected environment values through PowerShell. Transfer and on-demand release require a POSIX remote. [SSH transport and remote modes](../../manual/guides/ssh-transfer.md) |
+| Hardware-backed identities | Touch ID uses the macOS Secure Enclave with `age-plugin-se`. Phone authorization on macOS and Windows uses the experimental external age plugin. Shine has no built-in Windows Hello backend. [Identity setup](../../manual/guides/environment.md#use-age-identities) · [Windows Hello decision](../decisions/0032-defer-windows-hello-to-external-age-plugin.md) |
+| Legacy HTTP service | Shine 2.4.0 retired the server and its installation commands. `shine clear serve` stops and removes the old launchd, systemd user or Windows Task Scheduler registration and preserves published files. [Cleanup implementation](../../../cli/src/legacy_serve.rs) · [Migration guide](../../manual/guides/upgrading.md#retire-an-older-local-http-service) |
+
+## Verification coverage
+
+| Evidence | What it establishes |
+| --- | --- |
+| [Workspace test workflow](../../../.github/workflows/test.yml) | The native Rust test targets are Ubuntu x86_64, macOS arm64 and Windows x86_64. Offline installer tests also run on all three OS families. |
+| [Release packaging](../../../.github/workflows/package-assets.yml) | The matrix builds x86_64 and aarch64 archives for macOS, GNU/Linux and Windows. Linux archives are checked against Ubuntu 22.04 / glibc 2.35. The x86_64 binary runs natively and aarch64 runs under QEMU for version, help and schema checks. |
+| [Stable release verification](../../../.github/workflows/release.yml) | The `verify-binstall` job checks package resolution for all six targets and installs and runs the binary on the three native test architectures. |
+| [Arch preset regressions](../../../tests/builtin_presets/arch.rs) | Fixtures exercise the pacman invocation, detection, reruns and shell integration. Live package installation, mirrors and signatures require separate acceptance on official x86_64 Arch. [Arch scope](../decisions/0167-arch-minimal-bootstrap.md) |
+
+For a compatibility claim about an external integration, record the host, operation and observed
+result. The 2026-10-11 macOS check observed removal of the legacy launchd
+registration. Native Linux and Windows service-manager
+cleanup still need their own smoke results. Apply the same distinction to privileged DNS
+changes, package installations, terminal probes, SSH peers and hardware authorization.
+
+When support changes, update the owning manifest or platform implementation and its regression
+coverage. Refresh the generated App/Shell table in both manual locales when availability changes.
+Update this assessment when a platform boundary or the evidence for it changes.
