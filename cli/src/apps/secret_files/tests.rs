@@ -3,6 +3,8 @@ use base64::Engine as _;
 use shine_core::lifecycle::LifecycleOperation;
 use shine_core::plan::PlanApprovalV1;
 use shine_core::runtime::*;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 struct Fake {
@@ -11,21 +13,24 @@ struct Fake {
     fail_decrypt: AtomicBool,
     fail_receipt: AtomicBool,
     fail_create: AtomicBool,
+    fail_rollback_access: AtomicBool,
     fail_applied_journal: AtomicBool,
     edit_during_decrypt: Option<PathBuf>,
+}
+impl SecretFileObservation for Fake {
+    fn observe(&self, p: &Path) -> Result<Option<SecretObservation>> {
+        self.io.observe(p)
+    }
+    fn state(&self, n: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        self.io.state(n)
+    }
 }
 impl SecretFileIo for Fake {
     fn resolve_permissions(&self, p: &SecretFilePermissions) -> SecretFilePermissions {
         self.io.resolve_permissions(p)
     }
-    fn observe(&self, p: &Path) -> Result<Option<SecretObservation>> {
-        self.io.observe(p)
-    }
     fn fingerprint(&self, b: &[u8]) -> Result<String> {
         self.io.fingerprint(b)
-    }
-    fn state(&self, n: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
-        self.io.state(n)
     }
     fn save_state(&self, n: &str, b: Option<&[u8]>) -> Result<()> {
         if n == "app-secret-operation.json"
@@ -53,6 +58,13 @@ impl SecretFileIo for Fake {
             "injected create failure"
         );
         self.io.create(p, b, m)
+    }
+    fn check_rollback_access(&self, p: &Path) -> Result<()> {
+        ensure!(
+            !self.fail_rollback_access.load(Ordering::SeqCst),
+            "rollback access denied"
+        );
+        self.io.check_rollback_access(p)
     }
     fn set_permissions(&self, p: &Path, m: &SecretFilePermissions) -> Result<()> {
         self.io.set_permissions(p, m)
@@ -123,8 +135,8 @@ workspace='shine.workspace.toml'
 file_group='credentials'
 mode='production'
 auto_decrypt={auto}
-unix_mode='0400'
-"#
+{unix_mode}"#,
+        unix_mode = if cfg!(unix) { "unix_mode='0400'\n" } else { "" }
     );
     let workspace = r#"version=3
 [env]
@@ -156,6 +168,14 @@ target='secrets/password'
     );
     CoreRuntime::new(RealHost, context, snapshot).with_secret_file_provider(provider)
 }
+fn private_replacement(path: &Path, bytes: impl AsRef<[u8]>) {
+    let mut file = platform::create_private(path).unwrap();
+    file.write_all(bytes.as_ref()).unwrap();
+    #[cfg(unix)]
+    file.set_permissions(fs::Permissions::from_mode(0o400))
+        .unwrap();
+}
+
 fn request(operation: LifecycleOperation) -> AppPlanRequest {
     AppPlanRequest {
         operation,
@@ -187,6 +207,7 @@ async fn setup() -> (PathBuf, Arc<Fake>) {
             fail_decrypt: AtomicBool::new(false),
             fail_receipt: AtomicBool::new(false),
             fail_create: AtomicBool::new(false),
+            fail_rollback_access: AtomicBool::new(false),
             fail_applied_journal: AtomicBool::new(false),
             edit_during_decrypt: None,
         }),
@@ -194,8 +215,80 @@ async fn setup() -> (PathBuf, Arc<Fake>) {
 }
 
 #[tokio::test]
+async fn secret_status_requires_observation_and_never_needs_decryption() {
+    let (root, provider) = setup().await;
+    let configured = runtime(&root, provider.clone(), "first", true);
+    let bare = || {
+        CoreRuntime::new(
+            RealHost,
+            configured.context().clone(),
+            configured.presets().clone(),
+        )
+    };
+    let service = shine_core::frontend::FrontendService::new(bare());
+    assert_eq!(
+        service
+            .read_only()
+            .inspect_apps(vec!["demo".into()])
+            .await
+            .unwrap_err()
+            .code,
+        "frontend_app_secret_observation_unavailable"
+    );
+
+    let observed = bare().with_secret_file_observer(provider.clone());
+    let service = shine_core::frontend::FrontendService::new(observed);
+    for expected in [
+        InspectionFileStatus::NotInstalled,
+        InspectionFileStatus::UpToDate,
+    ] {
+        let inspections = service.inspect_apps(vec!["demo".into()]).await.unwrap();
+        let secret = inspections
+            .files
+            .iter()
+            .find(|file| file.assessment_diagnostic == Some("app_secret_content_redacted"))
+            .unwrap();
+        assert_eq!(secret.status, expected);
+        assert_eq!(
+            secret.source_path,
+            root.join("presets/app/demo/encrypted/password.enc")
+        );
+        assert!(secret.current_content.is_none() && secret.desired_content.is_none());
+        if expected == InspectionFileStatus::NotInstalled {
+            let error = install(service.runtime(), false).await.unwrap_err();
+            assert!(
+                error.to_string().contains("provider is unavailable"),
+                "{error:#}"
+            );
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+            install(&configured, false).await.unwrap();
+        }
+    }
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        bare()
+            .plan_apps(request(LifecycleOperation::Install))
+            .await
+            .is_err()
+    );
+    let inventory = shine_core::frontend::InventoryRequest::for_kind(
+        shine_core::frontend::CapabilityKindV1::App,
+    );
+    let bare_service = shine_core::frontend::FrontendService::new(bare());
+    assert_eq!(
+        bare_service
+            .read_only()
+            .inventory(inventory)
+            .await
+            .unwrap_err()
+            .code,
+        "frontend_app_secret_observation_unavailable"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn missing_applied_identity_blocks_creation_and_update_recovery() {
-    use std::os::unix::fs::PermissionsExt;
     for update in [false, true] {
         for replaced in [false, true] {
             let (root, provider) = setup().await;
@@ -216,8 +309,7 @@ async fn missing_applied_identity_blocks_creation_and_update_recovery() {
             let target = root.join("service/secrets/password");
             if replaced {
                 let replacement = root.join("service/secrets/replacement");
-                fs::write(&replacement, "new").unwrap();
-                fs::set_permissions(&replacement, fs::Permissions::from_mode(0o400)).unwrap();
+                private_replacement(&replacement, "new");
                 fs::rename(replacement, &target).unwrap();
             }
             let before = provider.observe(&target).unwrap();
@@ -242,6 +334,7 @@ async fn missing_applied_identity_blocks_creation_and_update_recovery() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn service_owner_missing_parents_fail_before_decryption_or_writes() {
     let (root, provider) = setup().await;
@@ -286,9 +379,10 @@ async fn service_owner_missing_parents_fail_before_decryption_or_writes() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn service_owner_requires_traversable_existing_parents() {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::MetadataExt;
     // Use the shared temporary root, rather than a per-user 0700 temp directory.
     let root = fs::canonicalize("/tmp")
         .unwrap()
@@ -348,11 +442,13 @@ async fn secret_install_update_preserve_uninstall_and_redaction() {
     );
     let target = root.join("service/secrets/password");
     assert_eq!(fs::read(&target).unwrap(), b"initial-password");
-    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
     assert_eq!(
         fs::metadata(&target).unwrap().permissions().mode() & 0o777,
         0o400
     );
+    #[cfg(windows)]
+    platform::verify_acl(&target).unwrap();
     install(&first, false).await.unwrap();
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
     let second = runtime(&root, provider.clone(), "rotated-password", true);
@@ -386,6 +482,7 @@ async fn secret_install_update_preserve_uninstall_and_redaction() {
         .await
         .unwrap();
     assert_eq!(fs::read(&target).unwrap(), b"rotated-password");
+    #[cfg(unix)]
     fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(&target, b"local-change").unwrap();
     install(&second, false).await.unwrap();
@@ -412,11 +509,11 @@ async fn secret_install_update_preserve_uninstall_and_redaction() {
 
 #[tokio::test]
 async fn full_app_cleanup_keeps_schema_guard_for_modified_secret() {
-    use std::os::unix::fs::PermissionsExt;
     let (root, provider) = setup().await;
     let runtime = runtime(&root, provider.clone(), "original", true);
     install(&runtime, false).await.unwrap();
     let target = root.join("service/secrets/password");
+    #[cfg(unix)]
     fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(&target, b"user edit").unwrap();
     let receipt = provider.state("app-secret-manifest.json").unwrap();
@@ -542,12 +639,105 @@ async fn secret_adoption_conflict_and_decrypt_failure_do_not_write_configs() {
     provider.fail_decrypt.store(false, Ordering::SeqCst);
     fs::create_dir_all(root.join("service/secrets")).unwrap();
     let target = root.join("service/secrets/password");
-    fs::write(&target, b"different").unwrap();
+    private_replacement(&target, b"different");
     assert!(install(&runtime, true).await.is_err());
     assert!(!root.join("service/compose.yml").exists());
-    fs::write(&target, b"password").unwrap();
+    fs::remove_file(&target).unwrap();
+    private_replacement(&target, b"password");
+    #[cfg(unix)]
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+    let calls = provider.calls.load(Ordering::SeqCst);
+    provider.fail_rollback_access.store(true, Ordering::SeqCst);
+    assert!(
+        install(&runtime, false)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("rollback access denied")
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), calls);
+    assert!(
+        provider
+            .state("app-secret-operation.json")
+            .unwrap()
+            .is_none()
+    );
+    assert!(!root.join("service/compose.yml").exists());
+    provider.fail_rollback_access.store(false, Ordering::SeqCst);
     install(&runtime, false).await.unwrap();
     assert!(!target.with_extension("shine.bak").exists());
+    assert_eq!(runtime.secret_store().unwrap().entries.len(), 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn removal_preflight_failure_preserves_the_secret_and_its_receipt() {
+    let (root, provider) = setup().await;
+    let runtime = runtime(&root, provider.clone(), "password", true);
+    install(&runtime, false).await.unwrap();
+    let target = root.join("service/secrets/password");
+    let store = runtime.secret_store().unwrap();
+    let request = request(LifecycleOperation::Uninstall);
+    let plan = runtime.plan_apps(request.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+
+    provider.fail_rollback_access.store(true, Ordering::SeqCst);
+    let error = runtime
+        .uninstall_apps_approved(
+            request.clone(),
+            &approval,
+            &mut NullObserver,
+            &mut Interaction,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("rollback access denied"));
+    assert!(
+        provider
+            .state("app-secret-operation.json")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(runtime.secret_store().unwrap(), store);
+    assert_eq!(fs::read(&target).unwrap(), b"password");
+
+    provider.fail_rollback_access.store(false, Ordering::SeqCst);
+    runtime
+        .uninstall_apps_approved(request, &approval, &mut NullObserver, &mut Interaction)
+        .await
+        .unwrap();
+    assert!(!target.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn secret_adoption_rejects_inherited_acl_even_when_content_matches() {
+    let (root, provider) = setup().await;
+    let runtime = runtime(&root, provider.clone(), "password", true);
+    let target = root.join("service/secrets/password");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, b"password").unwrap();
+    assert!(platform::verify_acl(&target).is_err());
+    let error = install(&runtime, false).await.unwrap_err();
+    assert!(
+        format!("{error:#}").contains("private path ACL"),
+        "{error:#}"
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fs::read(&target).unwrap(), b"password");
+    assert!(runtime.secret_store().unwrap().entries.is_empty());
+    assert!(
+        provider
+            .state("app-secret-operation.json")
+            .unwrap()
+            .is_none()
+    );
+    assert!(!root.join("service/compose.yml").exists());
+
+    fs::remove_file(&target).unwrap();
+    private_replacement(&target, b"password");
+    install(&runtime, false).await.unwrap();
     assert_eq!(runtime.secret_store().unwrap().entries.len(), 1);
     fs::remove_dir_all(root).unwrap();
 }
@@ -715,9 +905,7 @@ async fn recovery_preserves_replaced_destination() {
     assert!(install(&updated, false).await.is_err());
     let target = root.join("service/secrets/password");
     let replacement = root.join("service/secrets/replacement");
-    fs::write(&replacement, "new").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&replacement, fs::Permissions::from_mode(0o400)).unwrap();
+    private_replacement(&replacement, "new");
     fs::rename(replacement, &target).unwrap();
     let plan = updated.plan_app_operation_recovery().await.unwrap();
     assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
@@ -773,9 +961,9 @@ async fn removed_secret_declaration_requires_explicit_prune() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn interrupted_permission_repair_protects_rollback_and_restores_original() {
-    use std::os::unix::fs::PermissionsExt;
     let (root, provider) = setup().await;
     let runtime = runtime(&root, provider.clone(), "password", true);
     install(&runtime, false).await.unwrap();
@@ -807,7 +995,6 @@ async fn interrupted_permission_repair_protects_rollback_and_restores_original()
 
 #[tokio::test]
 async fn initial_secret_receipt_failure_recovers_only_the_created_file() {
-    use std::os::unix::fs::PermissionsExt;
     for replaced in [false, true] {
         let (root, provider) = setup().await;
         let runtime = runtime(&root, provider.clone(), "new", true);
@@ -816,8 +1003,7 @@ async fn initial_secret_receipt_failure_recovers_only_the_created_file() {
         let target = root.join("service/secrets/password");
         if replaced {
             let replacement = root.join("service/secrets/replacement");
-            fs::write(&replacement, "new").unwrap();
-            fs::set_permissions(&replacement, fs::Permissions::from_mode(0o400)).unwrap();
+            private_replacement(&replacement, "new");
             fs::rename(replacement, &target).unwrap();
         }
         let plan = runtime.plan_app_operation_recovery().await.unwrap();

@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 use zeroize::Zeroizing;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests;
 
 pub(crate) struct Provider {
@@ -194,21 +194,7 @@ fn write_private(
     }
     result
 }
-impl SecretFileIo for Provider {
-    fn resolve_permissions(&self, permissions: &SecretFilePermissions) -> SecretFilePermissions {
-        #[cfg(unix)]
-        {
-            SecretFilePermissions {
-                uid: Some(permissions.uid.unwrap_or(unsafe { libc::geteuid() })),
-                gid: Some(permissions.gid.unwrap_or(unsafe { libc::getegid() })),
-                mode: permissions.mode,
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            permissions.clone()
-        }
-    }
+impl SecretFileObservation for Provider {
     fn observe(&self, path: &Path) -> Result<Option<SecretObservation>> {
         check(path)?;
         match fs::symlink_metadata(path) {
@@ -250,9 +236,6 @@ impl SecretFileIo for Provider {
             identity,
         }))
     }
-    fn fingerprint(&self, bytes: &[u8]) -> Result<String> {
-        keyed_fingerprint(&self.key()?, bytes)
-    }
     fn state(&self, name: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
         ensure!(
             matches!(
@@ -262,6 +245,25 @@ impl SecretFileIo for Provider {
             "invalid secret state name"
         );
         private_read(&self.config.shine_dir().join(name))
+    }
+}
+impl SecretFileIo for Provider {
+    fn resolve_permissions(&self, permissions: &SecretFilePermissions) -> SecretFilePermissions {
+        #[cfg(unix)]
+        {
+            SecretFilePermissions {
+                uid: Some(permissions.uid.unwrap_or(unsafe { libc::geteuid() })),
+                gid: Some(permissions.gid.unwrap_or(unsafe { libc::getegid() })),
+                mode: permissions.mode,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            permissions.clone()
+        }
+    }
+    fn fingerprint(&self, bytes: &[u8]) -> Result<String> {
+        keyed_fingerprint(&self.key()?, bytes)
     }
     fn save_state(&self, name: &str, bytes: Option<&[u8]>) -> Result<()> {
         self.state(name)?;
@@ -321,6 +323,14 @@ impl SecretFileIo for Provider {
     fn create(&self, path: &Path, bytes: &[u8], permissions: &SecretFilePermissions) -> Result<()> {
         self.check_target(path, permissions)?;
         write_private(path, bytes, permissions, false)
+    }
+    fn check_rollback_access(&self, path: &Path) -> Result<()> {
+        #[cfg(windows)]
+        platform::verify_acl(path)?;
+        // Unix can restrict the file in place after journaling its original mode.
+        #[cfg(not(windows))]
+        let _ = path;
+        Ok(())
     }
     fn set_permissions(&self, path: &Path, permissions: &SecretFilePermissions) -> Result<()> {
         check(path)?;

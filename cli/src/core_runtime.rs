@@ -8,33 +8,75 @@ use crate::config::Config;
 use anyhow::{Context, Result};
 use directories::BaseDirs;
 use shine_core::runtime::{
-    CoreRuntime, PresetSnapshotRequest, PresetSnapshotSource, RealHost, RuntimeContext,
-    RuntimePlatform, capture_embedded_preset_snapshot,
+    CoreRuntime, PresetSnapshot, PresetSnapshotRequest, PresetSnapshotSource, RealHost,
+    RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot, capture_preset_snapshot,
 };
 
-pub(crate) async fn frontend_from_config(
+pub(crate) type ConfiguredFrontend = shine_core::frontend::FrontendService<RealHost>;
+
+pub(crate) async fn inspect_app_files(
+    service: &mut ConfiguredFrontend,
+    categories: Vec<String>,
+    run_generators: bool,
+) -> Result<Vec<shine_core::runtime::AppFileInspection>> {
+    let inspection = if run_generators {
+        let store = crate::trust::load_store_in(&service.runtime().context().shine_dir).await?;
+        service.replace_persistent_trust_grants(store.grants);
+        service
+            .inspect_apps_with_options(
+                shine_core::runtime::AppInspectionOptions {
+                    categories,
+                    run_generators,
+                },
+                &mut shine_core::runtime::NullObserver,
+            )
+            .await
+    } else {
+        service.inspect_apps(categories).await
+    };
+    Ok(inspection
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
+        .files)
+}
+
+pub(crate) async fn frontend_from_config(config: &Config) -> Result<ConfiguredFrontend> {
+    frontend_with_overlay(config, config.active_presets_overlay_dir()).await
+}
+
+pub(crate) async fn frontend_with_overlay(
     config: &Config,
-) -> Result<shine_core::frontend::FrontendService<RealHost>> {
-    from_config(config)
-        .await
-        .map(shine_core::frontend::FrontendService::new)
+    overlay: Option<&std::path::Path>,
+) -> Result<ConfiguredFrontend> {
+    let runtime = from_config_with_preset_mode(config, config.is_external_presets, overlay).await?;
+    Ok(observing_frontend(config, runtime))
+}
+
+fn observing_frontend(config: &Config, runtime: CoreRuntime<RealHost>) -> ConfiguredFrontend {
+    ConfiguredFrontend::new(runtime.with_secret_file_observer(std::sync::Arc::new(
+        crate::apps::secret_files::Provider::new(config.clone()),
+    )))
 }
 
 pub(crate) async fn from_config(config: &Config) -> Result<CoreRuntime<RealHost>> {
-    from_config_with_preset_mode(
+    let runtime = from_config_with_preset_mode(
         config,
         config.is_external_presets,
         config.active_presets_overlay_dir(),
     )
-    .await
+    .await?;
+    Ok(runtime.with_secret_file_provider(std::sync::Arc::new(
+        crate::apps::secret_files::Provider::new(config.clone()),
+    )))
 }
 
 pub(crate) async fn from_installed_presets(config: &Config) -> Result<CoreRuntime<RealHost>> {
     from_config_with_preset_mode(config, true, config.active_presets_overlay_dir()).await
 }
 
-pub(crate) async fn for_shell_catalog(config: &Config) -> Result<CoreRuntime<RealHost>> {
-    let overlay = config.active_presets_overlay_dir();
+pub(crate) async fn for_shell_catalog(
+    config: &Config,
+    overlay: Option<&std::path::Path>,
+) -> Result<CoreRuntime<RealHost>> {
     if !config.is_external_presets && overlay.is_none() {
         return Ok(from_embedded_presets());
     }
@@ -47,23 +89,71 @@ async fn from_config_with_preset_mode(
     overlay: Option<&std::path::Path>,
 ) -> Result<CoreRuntime<RealHost>> {
     let context = context_from_config(config, is_external_presets, overlay).await?;
-    let source = if is_external_presets {
-        PresetSnapshotSource::External(context.presets_dir.clone())
+    let snapshot = capture_source(
+        &context.presets_dir,
+        is_external_presets,
+        context.overlay_dir.as_deref(),
+    )
+    .await?;
+    Ok(CoreRuntime::new(RealHost, context, snapshot))
+}
+
+async fn capture_source(
+    presets_dir: &std::path::Path,
+    external: bool,
+    overlay: Option<&std::path::Path>,
+) -> Result<PresetSnapshot> {
+    let source = if external {
+        PresetSnapshotSource::External(presets_dir.to_owned())
     } else {
         PresetSnapshotSource::Embedded(embedded_preset_files())
     };
-    let request = PresetSnapshotRequest {
-        source,
-        overlay_root: context.overlay_dir.clone(),
-    };
-    let service = shine_core::frontend::FrontendService::capture(RealHost, context, request)
-        .await
-        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
-    Ok(service
-        .into_runtime()
-        .with_secret_file_provider(std::sync::Arc::new(
-            crate::apps::secret_files::Provider::new(config.clone()),
-        )))
+    capture_preset_snapshot(
+        &RealHost,
+        PresetSnapshotRequest {
+            source,
+            overlay_root: overlay.map(ToOwned::to_owned),
+        },
+    )
+    .await
+}
+
+/// The compatibility report precedes trust loading; carry its exact source into the query phase.
+pub(crate) struct UpdatePresets {
+    pub(crate) snapshot: PresetSnapshot,
+    pub(crate) overlay: Option<std::path::PathBuf>,
+}
+
+impl UpdatePresets {
+    pub(crate) async fn capture(config: &Config) -> Result<Self> {
+        let overlay = config
+            .active_presets_overlay_dir()
+            .map(std::path::absolute)
+            .transpose()?;
+        let snapshot = capture_source(
+            &std::path::absolute(config.presets_dir())?,
+            config.is_external_presets,
+            overlay.as_deref(),
+        )
+        .await?;
+        Ok(Self { snapshot, overlay })
+    }
+
+    pub(crate) fn managed_overlay(&self, config: &Config) -> Option<&std::path::Path> {
+        self.overlay
+            .as_deref()
+            .filter(|_| config.presets_overlay_dir_override.is_none())
+    }
+
+    pub(crate) async fn into_frontend(self, config: &Config) -> Result<ConfiguredFrontend> {
+        let context =
+            context_from_config(config, config.is_external_presets, self.overlay.as_deref())
+                .await?;
+        Ok(observing_frontend(
+            config,
+            CoreRuntime::new(RealHost, context, self.snapshot),
+        ))
+    }
 }
 
 async fn context_from_config(
@@ -101,7 +191,7 @@ async fn context_from_config(
         is_external_presets,
         trust_grants: crate::trust::load_store(config).await?.grants,
         linux_split_dns_ready: systemd_resolved_stub_active(),
-        running_as_admin: cfg!(windows) || std::env::var("USER").is_ok_and(|user| user == "root"),
+        running_as_admin: !RealHost::needs_unix_elevation(),
         captured_unix_time: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -186,6 +276,26 @@ fn proxy_env(
 mod tests {
     use super::*;
     use shine_core::runtime::{PlanningInputVersions, SysBootstrapPlanRequest};
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runtime_admin_identity_follows_effective_uid_without_login_environment() {
+        let _guard = crate::test_support::env_lock();
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let config = Config::new_for_test(&root);
+        let is_root = unsafe { libc::geteuid() } == 0;
+        for login in [None, Some(if is_root { "ordinary" } else { "root" })] {
+            // SAFETY: the shared environment guard serializes and restores test mutations.
+            unsafe {
+                match login {
+                    Some(value) => std::env::set_var("USER", value),
+                    None => std::env::remove_var("USER"),
+                }
+            }
+            let context = context_from_config(&config, false, None).await.unwrap();
+            assert_eq!(context.running_as_admin, is_root);
+        }
+    }
 
     #[tokio::test]
     async fn runtime_captures_resolved_environment_once_without_initializing_state() {

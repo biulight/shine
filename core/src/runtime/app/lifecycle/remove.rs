@@ -42,7 +42,9 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                 .await?;
         }
         if !request.dry_run
-            && (had_selected_entries || !request.purge || !self.secret_store()?.entries.is_empty())
+            && (had_selected_entries
+                || !request.purge
+                || !self.observed_secret_store().await?.entries.is_empty())
         {
             save_manifest(&self.host, &self.context.shine_dir, &state.manifest).await?;
         }
@@ -396,8 +398,8 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                 .await?
                 .entries
                 .is_empty()
-                || !self.secret_store()?.entries.is_empty()
-                || self.secret_journal()?.is_some()
+                || !self.observed_secret_store().await?.entries.is_empty()
+                || self.secret_journal().await?.is_some()
                 || self.app_operation_journal_bytes().await?.is_some()
             {
                 return Ok(());

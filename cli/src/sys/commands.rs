@@ -10,7 +10,7 @@ use super::execution::{
     bootstrap_outcome_lines, item_install_start_line, print_item_outcome, print_run_header,
     print_sys_summary, status_text, sys_item_label_width,
 };
-use super::managed::managed_updates;
+use super::managed::managed_inspection_for_os;
 use super::render::{
     driver_name, item_mode_name, print_available_item, print_dry_run, print_shell_mismatch,
     shell_scope,
@@ -22,18 +22,18 @@ use super::{
 };
 
 pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
-    crate::config::print_presets_note(config);
+    let overlay = crate::config::print_presets_note_and_get_overlay(config);
     let current_os = if all {
         detect_os_id().await.ok()
     } else {
         Some(detect_os_id().await?)
     };
-    let runtime = crate::core_runtime::from_config(config).await?;
+    let service = crate::core_runtime::frontend_with_overlay(config, overlay).await?;
     print_list(
         config,
         all,
         current_os.as_deref(),
-        runtime.available_sys_manifests()?,
+        service.runtime().available_sys_manifests()?,
     )
 }
 
@@ -127,9 +127,10 @@ pub(crate) fn print_list(
 }
 
 pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
-    crate::config::print_presets_note(config);
+    let overlay = crate::config::print_presets_note_and_get_overlay(config);
     let os_id = detect_os_id().await?;
-    let runtime = crate::core_runtime::from_config(config).await?;
+    let service = crate::core_runtime::frontend_with_overlay(config, overlay).await?;
+    let runtime = service.runtime();
     let presets = runtime.available_sys_manifests()?;
     let manifest = presets
         .iter()
@@ -244,8 +245,9 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     );
     if item.mode == SysItemMode::Managed
         && entry.is_some()
-        && let Some(update) = managed_updates(config)
+        && let Some(update) = managed_inspection_for_os(&service, &os_id)
             .await?
+            .updates
             .into_iter()
             .find(|update| update.item_id == item.id)
     {

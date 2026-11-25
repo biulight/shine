@@ -19,7 +19,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let mut result = self
             .observe_app_inspections(assessments, &manifest, AppInspectionMode::Deferred)
             .await?;
-        result.extend(self.inspect_secret_files(&categories)?);
+        result.extend(self.inspect_secret_files(&categories).await?);
         Ok(result)
     }
     /// Receipt-owned resources absent from the effective App metadata. No code is evaluated.
@@ -58,6 +58,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             .filter(|category| selected.is_empty() || selected.contains(&category.name))
             .collect::<Vec<_>>();
         let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
+        if self.secret_observer().is_none()
+            && categories
+                .iter()
+                .any(|category| !category.secret_files.is_empty())
+        {
+            return Err(crate::runtime::secret_files::managed::SecretObservationUnavailable.into());
+        }
         Ok((categories, manifest))
     }
     async fn observe_app_inspections(
@@ -91,8 +98,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 },
                 None => None,
             };
+            let source_path = self.preset_source_path(
+                "app",
+                &assessment.category.name,
+                &assessment.file.source_rel,
+            );
             let mut inspection = project_app_inspection(
                 assessment,
+                source_path,
                 direct_entry,
                 source_entry,
                 current_content,
@@ -151,13 +164,14 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         let mut result = self
             .observe_app_inspections(assessments, &manifest, AppInspectionMode::Evaluated)
             .await?;
-        result.extend(self.inspect_secret_files(&categories)?);
+        result.extend(self.inspect_secret_files(&categories).await?);
         Ok(result)
     }
 }
 
 fn project_app_inspection(
     assessment: AssessedAppFile,
+    source_path: PathBuf,
     direct_entry: Option<AppEntry>,
     source_entry: Option<AppEntry>,
     current_content: Option<Vec<u8>>,
@@ -248,6 +262,7 @@ fn project_app_inspection(
     Ok(AppFileInspection {
         category: assessment.category,
         file: assessment.file,
+        source_path,
         destination: Some(assessment.destination),
         status,
         manifest_entry: entry,

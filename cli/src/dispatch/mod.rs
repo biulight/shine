@@ -270,8 +270,8 @@ async fn handle_available_list(config: &Config, kind: Option<ResourceKind>) -> R
         Some(ResourceKind::Shell) => Box::pin(shells::handle_list(config)).await,
         Some(ResourceKind::Sys) => Box::pin(sys::handle_list(config, false)).await,
         None => {
-            config::print_presets_note(config);
-            let runtime = cli::core_runtime::for_shell_catalog(config).await?;
+            let overlay = config::print_presets_note_and_get_overlay(config);
+            let runtime = cli::core_runtime::for_shell_catalog(config, overlay).await?;
             shells::print_categories(runtime.shell_categories(None)?);
             println!();
             let runtime = cli::core_runtime::into_configured_catalog(config, runtime).await?;

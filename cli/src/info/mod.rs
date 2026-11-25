@@ -3,6 +3,7 @@ mod render;
 mod resolve;
 
 use crate::config::Config;
+use crate::core_runtime::{ConfiguredFrontend, frontend_from_config};
 use crate::output::escape_controls;
 use crate::status::FileStatus;
 use crate::{apps, colors, path_display, shells};
@@ -23,7 +24,7 @@ pub(crate) async fn print_app_inspection_diff(
 pub(crate) struct UpdateDiffs {
     app_files: Vec<collect::AppInfoFile>,
     shell_files: Vec<collect::ShellInfoFile>,
-    shell_frontend: shine_core::frontend::FrontendService<shine_core::runtime::RealHost>,
+    frontend: ConfiguredFrontend,
 }
 
 type ShellContent<'a> = (PathBuf, Option<&'a [u8]>, Option<&'a [u8]>);
@@ -43,32 +44,19 @@ impl ShellDiffState<'_> {
 }
 
 impl UpdateDiffs {
-    pub(crate) async fn collect(config: &Config, run_generators: bool) -> Result<Self> {
-        let app_files = collect::collect_app_files(config, run_generators, Vec::new()).await?;
-        Self::with_app_files(config, app_files).await
-    }
-
     pub(crate) async fn collect_with_app_inspections(
-        config: &Config,
+        frontend: ConfiguredFrontend,
         inspections: Vec<shine_core::runtime::AppFileInspection>,
     ) -> Result<Self> {
-        Self::with_app_files(
-            config,
-            collect::app_info_files_from_inspections(inspections),
-        )
-        .await
-    }
-
-    async fn with_app_files(config: &Config, app_files: Vec<collect::AppInfoFile>) -> Result<Self> {
-        let shell_frontend = crate::core_runtime::frontend_from_config(config).await?;
-        let inspections = shell_frontend
+        let app_files = collect::app_info_files_from_inspections(inspections);
+        let inspections = frontend
             .inspect_shells()
             .await
             .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
         Ok(Self {
             app_files,
             shell_files: collect::shell_info_files_from_inspections(inspections.files),
-            shell_frontend,
+            frontend,
         })
     }
 
@@ -96,7 +84,7 @@ impl UpdateDiffs {
         let category = &file.category.name;
         if !state.snapshots.contains_key(category) {
             let files = self
-                .shell_frontend
+                .frontend
                 .runtime()
                 .inspect_shell_snapshot_changes(category)
                 .await?;
@@ -245,17 +233,21 @@ pub async fn handle_update_target(
     target: &str,
     run_generators: bool,
 ) -> Result<()> {
-    handle_update_target_with_verbosity(config, target, run_generators, false).await
+    let overlay = crate::config::print_presets_note_and_get_overlay(config);
+    let service = crate::core_runtime::frontend_with_overlay(config, overlay).await?;
+    handle_update_target_with_verbosity(config, service, target, run_generators, false).await
 }
 
 pub(crate) async fn handle_update_target_with_verbosity(
     config: &Config,
+    mut service: ConfiguredFrontend,
     target: &str,
     run_generators: bool,
     verbose: bool,
 ) -> Result<()> {
-    crate::config::print_presets_note(config);
-    let mut diffs = UpdateDiffs::collect(config, false).await?;
+    let inspections =
+        crate::core_runtime::inspect_app_files(&mut service, Vec::new(), false).await?;
+    let mut diffs = UpdateDiffs::collect_with_app_inspections(service, inspections).await?;
 
     if diffs.app_files.is_empty() && diffs.shell_files.is_empty() {
         bail!("nothing installed yet. Run `shine shell install` or `shine app install`.");
@@ -268,7 +260,8 @@ pub(crate) async fn handle_update_target_with_verbosity(
         if categories.is_empty() {
             bail!("--run-generators requires an App target");
         }
-        let mut inspections = collect::collect_app_inspections(config, true, categories).await?;
+        let mut inspections =
+            crate::core_runtime::inspect_app_files(&mut diffs.frontend, categories, true).await?;
         // Match the installed target projection before rendering any sibling assessments.
         inspections
             .retain(|file| file.status != FileStatus::NotInstalled && file.destination.is_some());
@@ -424,8 +417,9 @@ pub async fn handle_info(
     verbose: bool,
     run_generators: bool,
 ) -> Result<()> {
-    let mut app_files = collect::collect_app_files(config, false, Vec::new()).await?;
-    let shell_files = collect::collect_shell_files(config).await?;
+    let mut service = frontend_from_config(config).await?;
+    let mut app_files = collect::collect_app_files(&mut service, false, Vec::new()).await?;
+    let shell_files = collect::collect_shell_files(&service).await?;
 
     let candidates = resolve::build_candidates(&app_files, &shell_files);
     let refs = match resolve::resolve_target(target, &candidates) {
@@ -436,8 +430,15 @@ pub async fn handle_info(
                     "--verbose requires an installed target; --diff for an available App also requires --run-generators",
                 ));
             }
-            return handle_available_info(config, target, installed_error, run_generators, diff)
-                .await;
+            return handle_available_info(
+                config,
+                &mut service,
+                target,
+                installed_error,
+                run_generators,
+                diff,
+            )
+            .await;
         }
     };
 
@@ -446,9 +447,12 @@ pub async fn handle_info(
         if categories.is_empty() {
             bail!("--run-generators requires an App target");
         }
-        app_files = collect::collect_app_files(config, true, categories).await?;
+        app_files = collect::collect_app_files(&mut service, true, categories).await?;
     }
-    crate::config::print_presets_note(config);
+    crate::config::print_presets_note_with_overlay(
+        config,
+        service.runtime().context().overlay_dir.as_deref(),
+    );
 
     let mut first = true;
     for item in &refs {
@@ -513,6 +517,7 @@ pub async fn handle_info(
 
 async fn handle_available_info(
     config: &Config,
+    service: &mut ConfiguredFrontend,
     target: &str,
     installed_error: anyhow::Error,
     run_generators: bool,
@@ -521,43 +526,62 @@ async fn handle_available_info(
     if target.trim().is_empty() {
         return Err(installed_error);
     }
-    if let Some(rest) = target.strip_prefix("app/") {
+    let (is_app, operand) = if let Some(rest) = target.strip_prefix("app/") {
         let category = rest.split('/').next().unwrap_or_default();
         if category.is_empty() || rest.contains('/') {
             return Err(installed_error);
         }
-        return Box::pin(apps::handle_info(config, category, run_generators, diff)).await;
-    }
-    if let Some(rest) = target.strip_prefix("shell/") {
+        (true, category)
+    } else if let Some(rest) = target.strip_prefix("shell/") {
         if rest.is_empty() {
             return Err(installed_error);
         }
         if run_generators {
             bail!("--run-generators requires an App target");
         }
-        return Box::pin(shells::handle_info(config, rest)).await;
-    }
+        (false, rest)
+    } else {
+        let app_matches = service
+            .runtime()
+            .app_categories(Some(target))?
+            .into_iter()
+            .any(|category| category.name == target);
+        let shell_categories = service.runtime().shell_categories(None)?;
+        let shell_matches = shell_categories.iter().any(|category| {
+            category.name == target
+                || category
+                    .files
+                    .iter()
+                    .any(|file| file.command_name == target)
+        });
 
-    let app_matches = apps::load_active_categories(config, Some(target))
-        .await?
-        .into_iter()
-        .any(|category| category.name == target);
-    let shell_categories = shells::metadata::load_active_categories(config, None).await?;
-    let shell_matches = shell_categories.iter().any(|category| {
-        category.name == target
-            || category
-                .files
-                .iter()
-                .any(|file| file.command_name == target)
-    });
-
-    match (app_matches, shell_matches) {
-        (true, false) => Box::pin(apps::handle_info(config, target, run_generators, diff)).await,
-        (false, true) if run_generators => bail!("--run-generators requires an App target"),
-        (false, true) => Box::pin(shells::handle_info(config, target)).await,
-        (true, true) => {
-            bail!("ambiguous available target `{target}`; use `app/{target}` or `shell/{target}`")
+        match (app_matches, shell_matches) {
+            (true, false) => (true, target),
+            (false, true) if run_generators => bail!("--run-generators requires an App target"),
+            (false, true) => (false, target),
+            (true, true) => {
+                bail!(
+                    "ambiguous available target `{target}`; use `app/{target}` or `shell/{target}`"
+                )
+            }
+            (false, false) => return Err(installed_error),
         }
-        (false, false) => Err(installed_error),
+    };
+    if is_app {
+        apps::print_info_note(config, service.runtime().context().overlay_dir.as_deref());
+        Box::pin(apps::print_info(
+            config,
+            service,
+            operand,
+            run_generators,
+            diff,
+        ))
+        .await
+    } else {
+        crate::config::print_presets_note_with_overlay(
+            config,
+            service.runtime().context().overlay_dir.as_deref(),
+        );
+        Box::pin(shells::print_info(service, operand)).await
     }
 }

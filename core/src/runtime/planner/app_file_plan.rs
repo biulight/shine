@@ -35,7 +35,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         steps: &mut Vec<PlanStepV1>,
     ) -> Result<bool> {
         let destination = self.app_destination(inputs.category, file)?;
-        if self.secret_store()?.entries.iter().any(|e| {
+        if self.observed_secret_store().await?.entries.iter().any(|e| {
             super::super::secret_files::path_key(&e.target)
                 == super::super::secret_files::path_key(&destination)
         }) {

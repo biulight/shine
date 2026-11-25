@@ -6,10 +6,10 @@
 
 mod shell;
 pub(crate) use shell::ShellRowStatus;
+pub(crate) use shell::inspect_shell_rows;
 pub use shell::{ShellRow, build_shell_rows};
 
 use crate::apps::{AppCategory, AppListMode};
-use crate::config::Config;
 use crate::path_display;
 use anyhow::Result;
 use shine_core::lifecycle::LifecycleResultV1;
@@ -43,7 +43,7 @@ pub struct AppRow {
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn build_app_rows_with_lifecycle_options(
-    config: &Config,
+    service: &mut crate::core_runtime::ConfiguredFrontend,
     categories: &[AppCategory],
     run_generators: bool,
 ) -> Result<(
@@ -51,28 +51,23 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
     LifecycleResultV1,
     Vec<shine_core::runtime::AppFileInspection>,
 )> {
-    let runtime = crate::core_runtime::from_config(config).await?;
     let selected = categories
         .iter()
         .map(|category| category.name.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let inspections = shine_core::frontend::FrontendService::new(runtime)
-        .inspect_apps_with_options(
-            shine_core::runtime::AppInspectionOptions {
-                run_generators,
-                categories: categories
-                    .iter()
-                    .map(|category| category.name.clone())
-                    .collect(),
-            },
-            &mut shine_core::runtime::NullObserver,
-        )
-        .await
-        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
-        .files
-        .into_iter()
-        .filter(|file| selected.contains(file.category.name.as_str()))
-        .collect::<Vec<_>>();
+    let inspections = crate::core_runtime::inspect_app_files(
+        service,
+        categories
+            .iter()
+            .map(|category| category.name.clone())
+            .collect(),
+        run_generators,
+    )
+    .await?
+    .into_iter()
+    .filter(|file| selected.contains(file.category.name.as_str()))
+    .collect::<Vec<_>>();
+    let home_dir = &service.runtime().context().home_dir;
     let mut rows = Vec::new();
     let lifecycle = shine_core::frontend::app_inspection_lifecycle(&inspections);
 
@@ -103,7 +98,7 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
                     dest: inspection
                         .destination
                         .as_ref()
-                        .map(|path| path_display::format_home(path, &config.home_dir)),
+                        .map(|path| path_display::format_home(path, home_dir)),
                     status_text: app_action_status_text(
                         status_text,
                         upgrade_available,
@@ -118,12 +113,12 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
             let statuses = files.iter().map(|file| file.status).collect::<Vec<_>>();
             let status = shine_core::frontend::app_category_status(&statuses);
             let destination = if let Some(root) = &category.destination_root {
-                Some(path_display::format_tilde_path(root, &config.home_dir))
+                Some(path_display::format_tilde_path(root, home_dir))
             } else if files.len() == 1 {
                 files[0]
                     .destination
                     .as_ref()
-                    .map(|path| path_display::format_home(path, &config.home_dir))
+                    .map(|path| path_display::format_home(path, home_dir))
             } else {
                 None
             };
@@ -934,7 +929,10 @@ mod tests {
             metadata_is_overlay: false,
         };
 
-        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &[category], false)
+        let mut service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&mut service, &[category], false)
             .await
             .unwrap();
 
@@ -1015,7 +1013,10 @@ mod tests {
             metadata_is_overlay: false,
         };
 
-        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &[category], false)
+        let mut service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&mut service, &[category], false)
             .await
             .unwrap();
 
@@ -1040,7 +1041,10 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         let categories = crate::apps::load_embedded_categories(Some("docker-engine")).unwrap();
-        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &categories, false)
+        let mut service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&mut service, &categories, false)
             .await
             .unwrap();
 
@@ -1067,7 +1071,10 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         let categories = crate::apps::load_embedded_categories(Some("docker-desktop")).unwrap();
-        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &categories, false)
+        let mut service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&mut service, &categories, false)
             .await
             .unwrap();
 

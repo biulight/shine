@@ -166,24 +166,25 @@ pub(crate) async fn handle_upgrade_managed_target_with_result_approved(
 }
 
 pub async fn managed_updates(config: &Config) -> Result<Vec<SysUpdateRow>> {
-    managed_inspection(config)
+    let os_id = detect_os_id().await?;
+    let service = crate::core_runtime::frontend_from_config(config).await?;
+    managed_inspection_for_os(&service, &os_id)
         .await
         .map(|inspection| inspection.updates)
 }
 
 pub(crate) async fn managed_inspection(
-    config: &Config,
+    service: &crate::core_runtime::ConfiguredFrontend,
 ) -> Result<shine_core::frontend::SysInspection> {
     let os_id = detect_os_id().await?;
-    managed_inspection_for_os(config, &os_id).await
+    managed_inspection_for_os(service, &os_id).await
 }
 
-async fn managed_inspection_for_os(
-    config: &Config,
+pub(super) async fn managed_inspection_for_os(
+    service: &crate::core_runtime::ConfiguredFrontend,
     os_id: &str,
 ) -> Result<shine_core::frontend::SysInspection> {
-    let runtime = crate::core_runtime::from_config(config).await?;
-    shine_core::frontend::FrontendService::new(runtime)
+    service
         .inspect_sys(os_id)
         .await
         .map_err(shine_core::frontend::FrontendServiceError::into_source)
@@ -802,11 +803,14 @@ target = {:?}
         fs::write(os_dir.join("first.txt"), "first v2")
             .await
             .unwrap();
+        let service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
         let shine_core::frontend::SysInspection {
             updates,
             lifecycle: update_lifecycle,
             ..
-        } = managed_inspection_for_os(&config, "fakeos").await.unwrap();
+        } = managed_inspection_for_os(&service, "fakeos").await.unwrap();
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].item_id, "first");
         assert_eq!(updates[0].details, ["Content: changed"]);
@@ -853,11 +857,14 @@ target = {:?}
             &second_manifest_before
         );
 
+        let service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
         let shine_core::frontend::SysInspection {
             updates: current_updates,
             lifecycle: current_lifecycle,
             ..
-        } = managed_inspection_for_os(&config, "fakeos").await.unwrap();
+        } = managed_inspection_for_os(&service, "fakeos").await.unwrap();
         assert!(current_updates.is_empty());
         assert!(
             current_lifecycle
@@ -966,9 +973,12 @@ resource = "/etc/resolver/private.example"
             .env
             .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.3".to_string());
 
+        let service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
         let shine_core::frontend::SysInspection {
             updates, lifecycle, ..
-        } = managed_inspection_for_os(&config, "macos").await.unwrap();
+        } = managed_inspection_for_os(&service, "macos").await.unwrap();
 
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].item_id, "split-dns");

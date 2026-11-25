@@ -246,6 +246,11 @@ impl RuntimePlatform {
     }
 }
 
+enum SecretFileAccess {
+    Observation(std::sync::Arc<dyn secret_files::SecretFileObservation>),
+    Provider(std::sync::Arc<dyn secret_files::SecretFileProvider>),
+}
+
 /// Frontend-neutral runtime facade. Domain executors are added behind this
 /// facade as their Phase 2 slices migrate.
 pub struct CoreRuntime<H> {
@@ -253,7 +258,7 @@ pub struct CoreRuntime<H> {
     analysis_source: std::sync::OnceLock<crate::plan::SnapshotDigestV1>,
     pub(crate) operation_code_grants: Vec<crate::trust::TrustGrantV1>,
     secret_changes: std::sync::Mutex<std::collections::BTreeSet<String>>,
-    secret_provider: Option<std::sync::Arc<dyn secret_files::SecretFileProvider>>,
+    secret_access: Option<SecretFileAccess>,
     host: H,
     installer_color: bool,
     installer_progress: (bool, Option<u16>),
@@ -265,7 +270,7 @@ impl<H> CoreRuntime<H> {
     pub fn new(host: H, context: RuntimeContext, presets: PresetSnapshot) -> Self {
         Self {
             operation_code_grants: Vec::new(),
-            secret_provider: None,
+            secret_access: None,
             secret_changes: std::sync::Mutex::new(Default::default()),
             analysis: CodeAnalysisSession::default(),
             analysis_source: std::sync::OnceLock::new(),
@@ -281,8 +286,37 @@ impl<H> CoreRuntime<H> {
         mut self,
         provider: std::sync::Arc<dyn secret_files::SecretFileProvider>,
     ) -> Self {
-        self.secret_provider = Some(provider);
+        self.secret_access = Some(SecretFileAccess::Provider(provider));
         self
+    }
+
+    pub fn with_secret_file_observer(
+        mut self,
+        observer: std::sync::Arc<dyn secret_files::SecretFileObservation>,
+    ) -> Self {
+        self.secret_access = Some(SecretFileAccess::Observation(observer));
+        self
+    }
+
+    fn secret_observer(&self) -> Option<&dyn secret_files::SecretFileObservation> {
+        match self.secret_access.as_ref()? {
+            SecretFileAccess::Observation(io) => Some(io.as_ref()),
+            SecretFileAccess::Provider(io) => Some(io.as_ref()),
+        }
+    }
+
+    fn secret_provider(&self) -> Option<&dyn secret_files::SecretFileProvider> {
+        match self.secret_access.as_ref()? {
+            SecretFileAccess::Observation(_) => None,
+            SecretFileAccess::Provider(io) => Some(io.as_ref()),
+        }
+    }
+
+    pub(crate) fn replace_persistent_trust_grants(
+        &mut self,
+        grants: Vec<crate::trust::TrustGrantV1>,
+    ) {
+        self.context.trust_grants = grants;
     }
 
     pub fn context(&self) -> &RuntimeContext {
@@ -316,6 +350,15 @@ impl<H> CoreRuntime<H> {
 
     pub fn presets(&self) -> &PresetSnapshot {
         &self.presets
+    }
+
+    /// Local source label, using the installed preset cache path for embedded resources.
+    fn preset_source_path(&self, kind: &str, category: &str, source: &std::path::Path) -> PathBuf {
+        let logical = format!("{kind}/{category}/{}", path_text::preset_path(source));
+        self.presets()
+            .origin(&logical)
+            .and_then(|origin| origin.physical_path.clone())
+            .unwrap_or_else(|| self.context().presets_dir.join(logical))
     }
 
     /// Transfer captured source bytes and origins independently of the runtime's approval state.

@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-11-25 — Keep one update source and refresh execution trust
+
+A separate compatibility capture could report migration requirements for a different revision
+than the installed-status query. Sharing the whole runtime across static inspection and explicit
+generator evaluation also retained revoked grants. Capture the effective source once for the
+update and reload persistent trust when entering the evaluation phase.
+
+## 2026-11-25 — Unix login names can disagree with process privileges
+
+A missing or stale `USER` could send installers and privileged file writes down the wrong
+path. Both authorization and execution use the effective UID. The runtime assembly regression
+exercises a missing login name and one that contradicts the process identity.
+
 ## 2026-11-22 — ccenv must clear inherited Fable aliases
 
 - **Symptom**: a provider overlay that omitted `ANTHROPIC_DEFAULT_FABLE_MODEL` could inherit the

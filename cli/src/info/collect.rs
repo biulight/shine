@@ -1,15 +1,17 @@
 use crate::apps::{AppCategory, AppFile};
+#[cfg(test)]
 use crate::config::Config;
+use crate::core_runtime::ConfiguredFrontend;
 use crate::shells::metadata::ShellCategory;
 use crate::status::{FileStatus, UpdateChange};
 use anyhow::Result;
-use shine_core::runtime::NullObserver;
 use std::path::PathBuf;
 
 #[derive(Clone)]
 pub(crate) struct AppInfoFile {
     pub(crate) category: AppCategory,
     pub(crate) file: AppFile,
+    pub(crate) source_path: PathBuf,
     pub(crate) destination: PathBuf,
     pub(crate) status: FileStatus,
     pub(crate) manifest_entry: Option<crate::install_core::AppEntry>,
@@ -38,32 +40,13 @@ pub(super) struct ShellInfoFile {
 }
 
 pub(super) async fn collect_app_files(
-    config: &Config,
+    service: &mut ConfiguredFrontend,
     run_generators: bool,
     categories: Vec<String>,
 ) -> Result<Vec<AppInfoFile>> {
     Ok(app_info_files_from_inspections(
-        collect_app_inspections(config, run_generators, categories).await?,
+        crate::core_runtime::inspect_app_files(service, categories, run_generators).await?,
     ))
-}
-
-pub(super) async fn collect_app_inspections(
-    config: &Config,
-    run_generators: bool,
-    categories: Vec<String>,
-) -> Result<Vec<shine_core::runtime::AppFileInspection>> {
-    let runtime = crate::core_runtime::from_config(config).await?;
-    Ok(shine_core::frontend::FrontendService::new(runtime)
-        .inspect_apps_with_options(
-            shine_core::runtime::AppInspectionOptions {
-                run_generators,
-                categories,
-            },
-            &mut NullObserver,
-        )
-        .await
-        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
-        .files)
 }
 
 pub(super) fn app_info_files_from_inspections(
@@ -82,6 +65,7 @@ pub(crate) fn app_info_file_from_inspection(
     Some(AppInfoFile {
         category: file.category,
         file: file.file,
+        source_path: file.source_path,
         destination: file.destination?,
         status: file.status,
         manifest_entry: file.manifest_entry,
@@ -94,10 +78,11 @@ pub(crate) fn app_info_file_from_inspection(
     })
 }
 
-pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfoFile>> {
-    let runtime = crate::core_runtime::from_config(config).await?;
+pub(super) async fn collect_shell_files(
+    service: &ConfiguredFrontend,
+) -> Result<Vec<ShellInfoFile>> {
     Ok(shell_info_files_from_inspections(
-        shine_core::frontend::FrontendService::new(runtime)
+        service
             .inspect_shells()
             .await
             .map_err(shine_core::frontend::FrontendServiceError::into_source)?
@@ -143,7 +128,12 @@ mod tests {
         let config = Config::new_for_test(&dir);
         tokio::fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        let files = collect_app_files(&config, false, Vec::new()).await.unwrap();
+        let mut service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
+        let files = collect_app_files(&mut service, false, Vec::new())
+            .await
+            .unwrap();
         assert!(files.iter().all(|file| file.category.name != "docker"));
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
@@ -184,7 +174,10 @@ mod tests {
             .await
             .unwrap();
 
-        let files = collect_shell_files(&config).await.unwrap();
+        let service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
+        let files = collect_shell_files(&service).await.unwrap();
         assert!(files.iter().any(|file| file.file.command_name == "one"));
         assert!(files.iter().all(|file| file.file.command_name != "two"));
 

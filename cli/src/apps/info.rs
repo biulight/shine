@@ -15,23 +15,29 @@ pub async fn handle_info(
     run_generators: bool,
     diff: bool,
 ) -> Result<()> {
-    for line in crate::config::presets_source_note_lines(config) {
+    let overlay = config.active_presets_overlay_dir();
+    print_info_note(config, overlay);
+    let mut frontend = crate::core_runtime::frontend_with_overlay(config, overlay).await?;
+    print_info(config, &mut frontend, category, run_generators, diff).await
+}
+
+pub(crate) fn print_info_note(config: &Config, overlay: Option<&Path>) {
+    for line in crate::config::presets_source_note_lines(config, overlay) {
         println!("{line}");
     }
     println!();
-    let mut observer = shine_core::runtime::NullObserver;
-    let frontend = crate::core_runtime::frontend_from_config(config).await?;
-    let inspections = frontend
-        .inspect_apps_with_options(
-            shine_core::runtime::AppInspectionOptions {
-                run_generators,
-                categories: vec![category.to_string()],
-            },
-            &mut observer,
-        )
-        .await
-        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
-        .files;
+}
+
+pub(crate) async fn print_info(
+    config: &Config,
+    frontend: &mut crate::core_runtime::ConfiguredFrontend,
+    category: &str,
+    run_generators: bool,
+    diff: bool,
+) -> Result<()> {
+    let inspections =
+        crate::core_runtime::inspect_app_files(frontend, vec![category.to_owned()], run_generators)
+            .await?;
     let selected = inspections
         .iter()
         .filter(|inspection| inspection.category.name == category)
@@ -291,13 +297,12 @@ pub async fn handle_list_with_presets_note(
     config: &Config,
     print_presets_note: bool,
 ) -> Result<()> {
+    let overlay = config.active_presets_overlay_dir();
     if print_presets_note {
-        for line in crate::config::presets_source_note_lines(config) {
-            println!("{line}");
-        }
-        println!();
+        print_info_note(config, overlay);
     }
-    let categories = metadata::load_active_categories(config, None).await?;
+    let service = crate::core_runtime::frontend_with_overlay(config, overlay).await?;
+    let categories = service.runtime().app_categories(None)?;
     print_categories(&categories);
     Ok(())
 }

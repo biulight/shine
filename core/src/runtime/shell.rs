@@ -745,18 +745,6 @@ impl<H> CoreRuntime<H> {
             .collect()
     }
 
-    pub(in crate::runtime) fn desired_shell_source_path(
-        &self,
-        category: &str,
-        source_rel: &Path,
-    ) -> PathBuf {
-        let logical = format!("shell/{category}/{}", shell_logical_path(source_rel));
-        self.presets()
-            .origin(&logical)
-            .and_then(|origin| origin.physical_path.clone())
-            .unwrap_or_else(|| self.context().presets_dir.join(logical))
-    }
-
     pub(super) fn shell_deployment_source_path(
         &self,
         category: &str,
@@ -771,7 +759,7 @@ impl<H> CoreRuntime<H> {
                 .join(category)
                 .join(source_rel)
         } else {
-            self.desired_shell_source_path(category, source_rel)
+            self.preset_source_path("shell", category, source_rel)
         }
     }
 
@@ -961,7 +949,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         }
         for category in categories {
             for file in &category.files {
-                let source = self.desired_shell_source_path(&category.name, &file.source_rel);
+                let source = self.preset_source_path("shell", &category.name, &file.source_rel);
                 let transforms = self.effective_shell_transforms(file, &source).await?;
                 if !transforms.is_empty() {
                     let bytes = self

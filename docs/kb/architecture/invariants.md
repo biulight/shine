@@ -57,15 +57,24 @@ bugs. Check this list before changing the modules named in each entry.
   become a live provider or split-DNS probe. Explicit App generator evaluation retains its separate
   trusted entry point and execution bounds. Shared report projection preserves safe errors,
   category selection, status priority and observation order; it grants no approval (ADR 0129).
+- **App secret observation is explicit.** Status for a declared secret file requires a
+  fingerprint and private-state reader. Inventory and recovery may establish absent state
+  through Host metadata. Existing private state requires its reader. A frontend with only
+  secret observation cannot decrypt or commit secret resources
+  ([ADR 0174](../decisions/0174-app-secret-observation.md)).
 - **Incomplete observations and profile attention keep their CLI meaning.** A failed release
   check cannot produce an unqualified `Nothing to update` footer. Explicit Sys profile commands
   render `NeedsAction` as attention rather than enabled/disabled success, and distinguish no-op
   outcomes. Both policies retain their existing non-fatal exit behavior; rendering never changes
   approval, profile merge publication, receipt order or recovery.
 - **CLI list presentation preserves query and output timing.** List/update/status query results
-  and borrowed view projections are local presentation data. Update retains its separate Shell
-  row/lifecycle captures and queries all domains before printing attention. Status prints the
-  Preset note and Shell attention before App/Sys queries; later errors cannot erase that output.
+  and borrowed view projections are local presentation data. Each command uses one effective
+  Preset snapshot for update compatibility, category selection, inspections and detailed diffs.
+  The released embedded migration baseline is independent. Explicit generator evaluation reloads
+  persistent trust before executing against those same captured bytes. Update derives Shell
+  lifecycle outcomes from the inspected rows and queries all domains before printing attention.
+  Status prints the Preset note and Shell attention before App/Sys queries; later errors cannot
+  erase that output.
   Diff reads stay at their original presentation boundary. Manual refresh and upgrade hints remain
   distinct, generator evaluation stays opt-in, and evaluation failures render before nonzero exit.
   Detailed Shell update diffs compare the entire category snapshot against the captured effective
@@ -563,6 +572,9 @@ bugs. Check this list before changing the modules named in each entry.
   receipt `version` is independent of `sys-manifest.toml`'s schema version.
   App and Sys readers share only their domain-owned in-memory schema normalization; each reader
   retains its original bytes, parsing diagnostics and IO behavior (ADR 0145).
+- **Unix privilege routing uses effective UID.** Runtime assembly, administrator confirmation,
+  privileged Host operations and self-install fallback share the native UID check. Windows
+  drivers own their elevation prompts.
 - **Bootstrap preparation precedes every installer and administrator prompt.** Validate persistent
   state, preflight all selected items and compose selected profile inputs first. Keep fixed provider
   invocation/preview policy separate from Host execution; optional version probes belong only to

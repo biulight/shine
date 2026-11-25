@@ -1,6 +1,7 @@
 //! Configuration and release checks, explicit generator evaluation and independent error policies.
 
 use crate::config::Config;
+use crate::core_runtime::UpdatePresets;
 use crate::generator_review::GeneratorCheckFailure;
 use crate::update_check::UpdateStatus;
 use crate::{colors, info, list, update_check, version};
@@ -14,12 +15,50 @@ pub async fn handle_update(
     refresh_release: bool,
     run_generators: bool,
 ) -> Result<()> {
-    let compatibility = crate::preset_migration::active_compatibility_plan(target).await?;
+    let presets = UpdatePresets::capture(config).await?;
+    handle_captured_update(
+        config,
+        presets,
+        target,
+        diff,
+        verbose,
+        refresh_release,
+        run_generators,
+    )
+    .await
+}
+
+async fn handle_captured_update(
+    config: &Config,
+    presets: UpdatePresets,
+    target: Option<&str>,
+    diff: bool,
+    verbose: bool,
+    refresh_release: bool,
+    run_generators: bool,
+) -> Result<()> {
+    let compatibility = crate::preset_migration::compatibility_from_snapshot(
+        &presets.snapshot,
+        presets.managed_overlay(config),
+        target,
+    )
+    .await?;
     let migration_required = crate::preset_migration::compatibility_required(&compatibility);
     crate::preset_migration::print_compatibility(&compatibility);
 
+    if target.is_some() || verbose {
+        crate::config::print_presets_note_with_overlay(config, presets.overlay.as_deref());
+    }
+    let frontend = presets.into_frontend(config).await;
     if let Some(target) = target {
-        info::handle_update_target_with_verbosity(config, target, run_generators, verbose).await?;
+        info::handle_update_target_with_verbosity(
+            config,
+            frontend?,
+            target,
+            run_generators,
+            verbose,
+        )
+        .await?;
         if migration_required {
             bail!(
                 "{}",
@@ -30,19 +69,31 @@ pub async fn handle_update(
     }
 
     let generator_overview = verbose && run_generators && !diff;
-    let config_updates = if verbose {
-        match Box::pin(list::handle_status_list(config, diff, run_generators)).await {
-            Ok(()) => {
-                if !generator_overview {
-                    println!();
-                }
-                Ok(true)
+    let config_updates = async {
+        let service = frontend?;
+        if verbose {
+            Box::pin(list::status_with_frontend(
+                config,
+                service,
+                diff,
+                run_generators,
+            ))
+            .await?;
+            if !generator_overview {
+                println!();
             }
-            Err(error) => Err(error),
+            Ok(true)
+        } else {
+            Box::pin(list::update_with_frontend(
+                config,
+                service,
+                diff,
+                run_generators,
+            ))
+            .await
         }
-    } else {
-        Box::pin(list::handle_update_list(config, diff, run_generators)).await
-    };
+    }
+    .await;
     let (mut printed_update, config_update_error) = match config_updates {
         Ok(printed) => (printed, None),
         Err(error)

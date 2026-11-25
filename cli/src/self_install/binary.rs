@@ -229,9 +229,8 @@ async fn install_binary_with_elevation(
     match install_binary_atomically(src, dest) {
         Ok(()) => Ok(()),
         Err(e)
-            if !cfg!(windows)
-                && has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied)
-                && !std::env::var("USER").is_ok_and(|user| user == "root") =>
+            if has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied)
+                && shine_core::runtime::RealHost::needs_unix_elevation() =>
         {
             let _lock = crate::admin_fs::admin_lock().await?;
             install_binary_privileged(src, dest).await

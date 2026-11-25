@@ -214,6 +214,8 @@ before installing.
 
 - An unmanaged target is adopted only if its content matches the decrypted file. Different content
   is a conflict even with `--replace-managed`; no plaintext `.shine.bak` is created.
+  On Windows, the installing user must own the existing file. Disable permission inheritance
+  and keep a single allow entry for that user before retrying.
 - Later local edits are preserved unless explicitly replaced. Uninstall removes unchanged secret
   files and preserves local edits. Turning off automatic decryption pauses creation and updates but
   leaves existing files managed. Removing a declaration requires `upgrade --prune-stale` to remove

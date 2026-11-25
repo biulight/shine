@@ -16,11 +16,6 @@ pub(super) async fn print_app_file(
     verbose: bool,
 ) -> Result<()> {
     let label = escape_controls(&fallback_app_label(&item.category, &item.file));
-    let source_path = config.preset_path(
-        Path::new("app")
-            .join(&item.category.name)
-            .join(&item.file.source_rel),
-    );
 
     println!("{}", colors::bold(&format!("App Config: {label}")));
     if let Some(desc) = &item.file.description {
@@ -31,7 +26,10 @@ pub(super) async fn print_app_file(
     println!(
         "{}       {}",
         colors::dim("Source"),
-        escape_controls(&path_display::format_home(&source_path, &config.home_dir))
+        escape_controls(&path_display::format_home(
+            &item.source_path,
+            &config.home_dir
+        ))
     );
     println!(
         "{}  {}",

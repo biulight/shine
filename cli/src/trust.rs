@@ -14,7 +14,11 @@ use std::path::{Path, PathBuf};
 const TRUST_STORE_FILE: &str = "trust.toml";
 
 pub(crate) async fn load_store(config: &Config) -> Result<TrustStoreV1> {
-    load_store_path(&trust_store_path(config)).await
+    load_store_in(config.shine_dir()).await
+}
+
+pub(crate) async fn load_store_in(shine_dir: &Path) -> Result<TrustStoreV1> {
+    load_store_path(&shine_dir.join(TRUST_STORE_FILE)).await
 }
 
 async fn external_code_requirements(

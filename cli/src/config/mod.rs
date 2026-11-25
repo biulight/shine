@@ -517,13 +517,27 @@ impl AsRef<Path> for Config {
 /// shell deployment mode. This makes built-in, external, and overlay-backed
 /// runs report provenance with the same vocabulary.
 pub fn print_presets_note(config: &Config) {
-    for line in presets_note_lines(config) {
+    print_presets_note_and_get_overlay(config);
+}
+
+pub(crate) fn print_presets_note_and_get_overlay(config: &Config) -> Option<&Path> {
+    let overlay = config.active_presets_overlay_dir();
+    print_presets_note_with_overlay(config, overlay);
+    overlay
+}
+
+pub(crate) fn print_presets_note_with_overlay(config: &Config, overlay: Option<&Path>) {
+    for line in presets_note_lines_with_overlay(config, overlay) {
         println!("{line}");
     }
 }
 
 pub(crate) fn presets_note_lines(config: &Config) -> Vec<String> {
-    let mut lines = presets_source_note_lines(config);
+    presets_note_lines_with_overlay(config, config.active_presets_overlay_dir())
+}
+
+fn presets_note_lines_with_overlay(config: &Config, overlay: Option<&Path>) -> Vec<String> {
+    let mut lines = presets_source_note_lines(config, overlay);
     if config.is_external_presets {
         let deployment = match config.external_shell_mode {
             ExternalShellMode::Snapshot => "snapshot · changes require `shine upgrade`",
@@ -537,14 +551,14 @@ pub(crate) fn presets_note_lines(config: &Config) -> Vec<String> {
     lines
 }
 
-pub(crate) fn presets_source_note_lines(config: &Config) -> Vec<String> {
+pub(crate) fn presets_source_note_lines(config: &Config, overlay: Option<&Path>) -> Vec<String> {
     let source = if config.is_external_presets {
         crate::colors::external_presets_note(config.presets_dir())
     } else {
         crate::colors::presets_source_note("built-in")
     };
     let mut lines = vec![source];
-    if let Some(dir) = config.active_presets_overlay_dir() {
+    if let Some(dir) = overlay {
         lines.push(crate::colors::presets_overlay_note(dir));
     }
     lines

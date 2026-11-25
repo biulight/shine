@@ -25,6 +25,9 @@ secret receipts or journals. A missing or changed durable key blocks existing ow
 No plaintext fingerprint enters public reports. Missing configuration is not permission to
 reconstruct or discard secret ownership.
 
+On Windows, preparation checks an existing target's private ACL before scheduling replacement or
+removal. The commit verifies it again before moving the file to the rollback path.
+
 The private secret manifest and journal use version 2. Before secret mutation, App manifest v2
 is persisted so older clients fail closed. A per-file journal binds preimage identity, content
 fingerprint and permissions, desired receipt and observed applied identity. Updates first restrict the old file to installation-user private access, then rename it to a

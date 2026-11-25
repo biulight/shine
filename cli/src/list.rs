@@ -5,14 +5,14 @@ use projection::*;
 #[cfg(test)]
 use render::app_status_summary_parts;
 
-use crate::apps::load_active_categories;
 use crate::colors;
 use crate::config::Config;
+use crate::core_runtime::{ConfiguredFrontend, frontend_from_config};
 use crate::info::UpdateDiffs;
 use crate::output;
 use crate::status::{
     AppRow, FileStatus, ShellRow, ShellRowStatus, build_app_rows_with_lifecycle_options,
-    build_shell_rows,
+    inspect_shell_rows,
 };
 use crate::sys;
 use anyhow::{Context, Result};
@@ -22,27 +22,82 @@ use shine_core::frontend::{
 use std::collections::{BTreeMap, BTreeSet};
 
 pub async fn handle_update_list(config: &Config, diff: bool, run_generators: bool) -> Result<bool> {
-    let inputs = query::collect_update(config, run_generators).await?;
-    render::update(config, inputs, diff, run_generators).await
+    let service = frontend_from_config(config).await?;
+    update_with_frontend(config, service, diff, run_generators).await
+}
+
+pub(crate) async fn update_with_frontend(
+    config: &Config,
+    mut service: ConfiguredFrontend,
+    diff: bool,
+    run_generators: bool,
+) -> Result<bool> {
+    let inputs = query::collect_update(&mut service, run_generators).await?;
+    render::update(config, service, inputs, diff, run_generators).await
 }
 
 pub async fn handle_status_list(config: &Config, diff: bool, run_generators: bool) -> Result<()> {
-    crate::config::print_presets_note(config);
-    let shell_rows = build_shell_rows(config).await?;
+    let overlay = crate::config::print_presets_note_and_get_overlay(config);
+    let service = crate::core_runtime::frontend_with_overlay(config, overlay).await?;
+    status_with_frontend(config, service, diff, run_generators).await
+}
+
+pub(crate) async fn status_with_frontend(
+    config: &Config,
+    mut service: ConfiguredFrontend,
+    diff: bool,
+    run_generators: bool,
+) -> Result<()> {
+    let shell_rows = inspect_shell_rows(&service).await?;
     render::status_shell_attention(&shell_rows);
-    let inputs = query::collect_status(config, shell_rows, run_generators).await?;
-    render::status(config, inputs, diff, run_generators).await
+    let inputs = query::collect_status(&mut service, shell_rows, run_generators).await?;
+    render::status(config, service, inputs, diff, run_generators).await
 }
 
 pub async fn handle_list(config: &Config) -> Result<()> {
-    crate::config::print_presets_note(config);
-    let inputs = query::collect_inventory(config).await?;
+    let overlay = crate::config::print_presets_note_and_get_overlay(config);
+    let service = crate::core_runtime::frontend_with_overlay(config, overlay).await?;
+    let inputs = query::collect_inventory(&service).await?;
     render::inventory(inputs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn update_and_status_keep_the_captured_app_catalog_when_the_source_changes() {
+        let root = crate::test_support::make_temp_dir("list-source-snapshot").await;
+        let mut config = Config::new_for_test(&root);
+        config.is_external_presets = true;
+        let category = config.presets_dir().join("app/demo");
+        std::fs::create_dir_all(&category).unwrap();
+        std::fs::write(
+            category.join("shine.toml"),
+            "metadata_schema_version=2\ndest='~/demo'\n[[files]]\nsource='file'\n",
+        )
+        .unwrap();
+        std::fs::write(category.join("file"), "captured").unwrap();
+        let mut service = frontend_from_config(&config).await.unwrap();
+        std::fs::write(category.join("shine.toml"), "invalid = [").unwrap();
+        let update = query::collect_update(&mut service, false).await.unwrap();
+        let status = query::collect_status(&mut service, update.shell_rows, false)
+            .await
+            .unwrap();
+        for files in [&update.app_inspections, &status.app_inspections] {
+            assert!(files.iter().any(|file| file.category.name == "demo"
+                && file.file.source_rel == std::path::Path::new("file")));
+        }
+        assert!(
+            frontend_from_config(&config)
+                .await
+                .unwrap()
+                .runtime()
+                .app_categories(None)
+                .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn shell_row(status_text: &'static str, is_installed: bool) -> ShellRow {
         ShellRow {

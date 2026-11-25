@@ -652,6 +652,20 @@ impl ProcessHost for RealHost {
 }
 
 impl RealHost {
+    /// Unix drivers use sudo when the process lacks effective root privileges.
+    /// Windows drivers handle elevation separately.
+    pub fn needs_unix_elevation() -> bool {
+        #[cfg(unix)]
+        {
+            // SAFETY: geteuid takes no arguments and returns the process's effective UID.
+            unsafe { libc::geteuid() != 0 }
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
     fn run_process<'a>(
         &'a self,
         request: ProcessRequest,
@@ -901,7 +915,7 @@ impl PrivilegedFileSystemHost for RealHost {
         to: &'a Path,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            if !cfg!(unix) || std::env::var("USER").is_ok_and(|user| user == "root") {
+            if !RealHost::needs_unix_elevation() {
                 tokio::fs::rename(from, to).await?;
                 return Ok(());
             }
@@ -1106,7 +1120,7 @@ async fn elevated_powershell(script: &str) -> anyhow::Result<()> {
 }
 
 async fn privileged_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
-    if !cfg!(unix) || std::env::var("USER").is_ok_and(|user| user == "root") {
+    if !RealHost::needs_unix_elevation() {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -1148,7 +1162,7 @@ async fn privileged_set_mode(path: &Path, mode: u32) -> anyhow::Result<()> {
     }
     #[cfg(unix)]
     {
-        if std::env::var("USER").is_ok_and(|user| user == "root") {
+        if !RealHost::needs_unix_elevation() {
             use std::os::unix::fs::PermissionsExt;
             tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).await?;
             return Ok(());
@@ -1167,7 +1181,7 @@ async fn privileged_set_mode(path: &Path, mode: u32) -> anyhow::Result<()> {
 }
 
 async fn privileged_remove(path: &Path) -> anyhow::Result<()> {
-    if !cfg!(unix) || std::env::var("USER").is_ok_and(|user| user == "root") {
+    if !RealHost::needs_unix_elevation() {
         match tokio::fs::remove_file(path).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1187,7 +1201,7 @@ async fn privileged_remove(path: &Path) -> anyhow::Result<()> {
 }
 
 async fn restart_systemd_resolved() -> anyhow::Result<()> {
-    let status = if std::env::var("USER").is_ok_and(|user| user == "root") {
+    let status = if !RealHost::needs_unix_elevation() {
         tokio::process::Command::new("systemctl")
             .args(["restart", "systemd-resolved"])
             .status()

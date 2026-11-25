@@ -11,8 +11,8 @@ mod upgrade;
 pub use build::{handle_build_approved, handle_unbuild_approved};
 #[doc(hidden)]
 pub use info::handle_list_with_presets_note;
-pub(crate) use info::print_categories;
 pub use info::{handle_info, handle_list};
+pub(crate) use info::{print_categories, print_info, print_info_note};
 pub use install::handle_install_approved;
 pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
@@ -520,11 +520,12 @@ mod tests {
                 .find(|entry| entry.source == "app/other/config.json")
                 .unwrap();
 
-        let categories = metadata::load_active_categories(&config, None)
+        let mut service = crate::core_runtime::frontend_from_config(&config)
             .await
             .unwrap();
+        let categories = service.runtime().app_categories(None).unwrap();
         let (_rows, update, _) =
-            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, false)
+            crate::status::build_app_rows_with_lifecycle_options(&mut service, &categories, false)
                 .await
                 .unwrap();
         let pending = update
@@ -580,11 +581,12 @@ mod tests {
             toml::to_string(&other_manifest_before).unwrap()
         );
 
-        let categories = metadata::load_active_categories(&config, None)
+        let mut service = crate::core_runtime::frontend_from_config(&config)
             .await
             .unwrap();
+        let categories = service.runtime().app_categories(None).unwrap();
         let (_rows, after_upgrade, _) =
-            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, false)
+            crate::status::build_app_rows_with_lifecycle_options(&mut service, &categories, false)
                 .await
                 .unwrap();
         assert!(after_upgrade.outcomes.iter().any(|outcome| {

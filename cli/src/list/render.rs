@@ -178,6 +178,7 @@ fn app_status_run_hint(row: &AppLifecycleStatus) -> String {
 
 pub(super) async fn update(
     config: &Config,
+    service: ConfiguredFrontend,
     inputs: UpdateInputs,
     diff: bool,
     run_generators: bool,
@@ -224,7 +225,10 @@ pub(super) async fn update(
         return Ok(false);
     }
 
-    crate::config::print_presets_note(config);
+    crate::config::print_presets_note_with_overlay(
+        config,
+        service.runtime().context().overlay_dir.as_deref(),
+    );
     print_shell_attention(&shell_attention);
     print_missing_app_sources(&missing_sources);
     print_app_analysis(
@@ -275,7 +279,7 @@ pub(super) async fn update(
         return Ok(true);
     }
 
-    let update_diffs = query::collect_diffs(config, app_inspections).await?;
+    let update_diffs = UpdateDiffs::collect_with_app_inspections(service, app_inspections).await?;
     let mut shell_diff_state = crate::info::ShellDiffState::default();
 
     if !update_shell.is_empty() {
@@ -387,6 +391,7 @@ pub(super) fn status_shell_attention(shell_rows: &[ShellRow]) {
 }
 pub(super) async fn status(
     config: &Config,
+    service: ConfiguredFrontend,
     inputs: StatusInputs,
     diff: bool,
     run_generators: bool,
@@ -431,7 +436,7 @@ pub(super) async fn status(
         None
     };
     let update_diffs = if diff {
-        Some(query::collect_diffs(config, app_inspections).await?)
+        Some(UpdateDiffs::collect_with_app_inspections(service, app_inspections).await?)
     } else {
         None
     };

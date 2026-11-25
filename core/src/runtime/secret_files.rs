@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 pub(crate) mod managed;
-pub use managed::{SecretEntry, SecretFileIo, SecretObservation, SecretStore};
+pub use managed::{
+    SecretEntry, SecretFileIo, SecretFileObservation, SecretObservation, SecretStore,
+};
 
 pub type SecretFuture<'a> = std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<Vec<zeroize::Zeroizing<Vec<u8>>>>> + Send + 'a>,

@@ -15,7 +15,7 @@ pub async fn ensure_admin(action_count: usize) -> Result<bool> {
         // PowerShell process. Authorization happens when that batch starts.
         return Ok(true);
     }
-    if std::env::var("USER").is_ok_and(|user| user == "root") {
+    if !shine_core::runtime::RealHost::needs_unix_elevation() {
         AUTHORIZED.store(true, Ordering::Release);
         return Ok(true);
     }

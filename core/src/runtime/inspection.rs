@@ -55,6 +55,8 @@ impl InspectionChange {
 pub struct AppFileInspection {
     pub category: AppCategory,
     pub file: AppFile,
+    /// Local preset source (the ciphertext for a managed secret), for trusted CLI output.
+    pub source_path: PathBuf,
     pub destination: Option<PathBuf>,
     pub status: InspectionFileStatus,
     pub manifest_entry: Option<AppEntry>,

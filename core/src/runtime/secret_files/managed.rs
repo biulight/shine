@@ -14,16 +14,33 @@ pub struct SecretObservation {
     pub identity: String,
 }
 
-/// Primitives only. The domain owns release selection, conflict rules and recovery.
-pub trait SecretFileIo: Send + Sync {
-    fn resolve_permissions(&self, permissions: &SecretFilePermissions) -> SecretFilePermissions;
+#[derive(Debug)]
+pub(crate) struct SecretObservationUnavailable;
+
+impl std::fmt::Display for SecretObservationUnavailable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("App secret file observation is unavailable")
+    }
+}
+
+impl std::error::Error for SecretObservationUnavailable {}
+
+/// Read access to private receipts, journals, and keyed target fingerprints.
+pub trait SecretFileObservation: Send + Sync {
     fn observe(&self, path: &Path) -> Result<Option<SecretObservation>>;
-    fn fingerprint(&self, bytes: &[u8]) -> Result<String>;
     fn state(&self, name: &str) -> Result<Option<Zeroizing<Vec<u8>>>>;
+}
+
+/// Primitives only. The domain owns release selection, conflict rules and recovery.
+pub trait SecretFileIo: SecretFileObservation {
+    fn resolve_permissions(&self, permissions: &SecretFilePermissions) -> SecretFilePermissions;
+    fn fingerprint(&self, bytes: &[u8]) -> Result<String>;
     fn save_state(&self, name: &str, bytes: Option<&[u8]>) -> Result<()>;
     fn prepare_key(&self) -> Result<()>;
     fn lock_paths(&self, paths: &[PathBuf]) -> Result<Box<dyn Send>>;
     fn create(&self, path: &Path, bytes: &[u8], permissions: &SecretFilePermissions) -> Result<()>;
+    /// Check whether an existing target can be secured before moving it aside.
+    fn check_rollback_access(&self, path: &Path) -> Result<()>;
     fn set_permissions(&self, path: &Path, permissions: &SecretFilePermissions) -> Result<()>;
     fn rename(&self, from: &Path, to: &Path) -> Result<()>;
     fn remove(&self, path: &Path) -> Result<()>;
@@ -55,7 +72,7 @@ impl Default for SecretStore {
     }
 }
 impl SecretStore {
-    pub fn load(io: &dyn SecretFileProvider) -> Result<Self> {
+    pub fn load(io: &dyn SecretFileObservation) -> Result<Self> {
         let Some(bytes) = io.state(STORE)? else {
             return Ok(Self::default());
         };
@@ -74,7 +91,7 @@ impl SecretStore {
         }
         Ok(state)
     }
-    fn save(&self, io: &dyn SecretFileProvider) -> Result<()> {
+    fn save(&self, io: &dyn SecretFileIo) -> Result<()> {
         io.save_state(STORE, Some(&serde_json::to_vec(self)?))
     }
 }
@@ -153,25 +170,47 @@ pub(crate) fn matches(entry: &SecretEntry, observation: &SecretObservation) -> b
     entry.fingerprint == observation.fingerprint && entry.permissions == observation.permissions
 }
 
+impl<H: crate::runtime::FileSystemObservationHost> CoreRuntime<H> {
+    async fn require_absent_without_secret_observer(&self, path: &Path) -> Result<()> {
+        match self.host().metadata(path).await {
+            Err(error) if error.is_not_found() => Ok(()),
+            Err(error) => Err(error.into_anyhow("checking App secret state")),
+            Ok(_) => Err(SecretObservationUnavailable.into()),
+        }
+    }
+
+    pub(crate) async fn observed_secret_store(&self) -> Result<SecretStore> {
+        if let Some(io) = self.secret_observer() {
+            return SecretStore::load(io);
+        }
+        self.require_absent_without_secret_observer(&self.context().shine_dir.join(STORE))
+            .await?;
+        Ok(SecretStore::default())
+    }
+
+    pub(crate) async fn secret_observe(&self, path: &Path) -> Result<Option<SecretObservation>> {
+        if let Some(io) = self.secret_observer() {
+            return io.observe(path);
+        }
+        self.require_absent_without_secret_observer(path).await?;
+        Ok(None)
+    }
+
+    pub(crate) async fn secret_journal(&self) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        if let Some(io) = self.secret_observer() {
+            return io.state(JOURNAL);
+        }
+        self.require_absent_without_secret_observer(&self.context().shine_dir.join(JOURNAL))
+            .await?;
+        Ok(None)
+    }
+}
+
 impl<H> CoreRuntime<H> {
     pub fn secret_store(&self) -> Result<SecretStore> {
-        match &self.secret_provider {
-            Some(io) => SecretStore::load(io.as_ref()),
-            None => Ok(SecretStore::default()),
-        }
+        SecretStore::load(self.secret_observer().ok_or(SecretObservationUnavailable)?)
     }
-    pub(crate) fn secret_observe(&self, path: &Path) -> Result<Option<SecretObservation>> {
-        match &self.secret_provider {
-            Some(io) => io.observe(path),
-            None => Ok(None),
-        }
-    }
-    pub(crate) fn secret_journal(&self) -> Result<Option<Zeroizing<Vec<u8>>>> {
-        match &self.secret_provider {
-            Some(io) => io.state(JOURNAL),
-            None => Ok(None),
-        }
-    }
+
     pub fn app_file_release_requests(
         &self,
         category: &AppCategory,
@@ -270,12 +309,15 @@ impl<H> CoreRuntime<H> {
         };
         self.app_destination(category, &file)
     }
+}
+
+impl<H: crate::runtime::FileSystemObservationHost> CoreRuntime<H> {
     pub(crate) async fn prepare_secrets(
         &self,
         request: &AppPlanRequest,
         plan: &crate::plan::PlanV1,
     ) -> Result<Option<PreparedSecrets>> {
-        let store = self.secret_store()?;
+        let store = self.observed_secret_store().await?;
         let categories = if request.operation == LifecycleOperation::Uninstall {
             Vec::new()
         } else {
@@ -285,8 +327,7 @@ impl<H> CoreRuntime<H> {
             return Ok(None);
         }
         let io = self
-            .secret_provider
-            .as_ref()
+            .secret_provider()
             .context("App secret file provider is unavailable")?;
         ensure!(
             io.state(JOURNAL)?.is_none(),
@@ -359,6 +400,9 @@ impl<H> CoreRuntime<H> {
                         {
                             continue;
                         }
+                    }
+                    if before.is_some() {
+                        io.check_rollback_access(&target)?;
                     }
                     desired.push((file, target, previous, before));
                 }
@@ -471,6 +515,9 @@ impl<H> CoreRuntime<H> {
             if before.as_ref().is_some_and(|o| !matches(entry, o)) && !request.force {
                 continue;
             }
+            if before.is_some() {
+                io.check_rollback_access(&entry.target)?;
+            }
             pending.push(Pending {
                 target: entry.target.clone(),
                 previous: Some(entry.clone()),
@@ -498,15 +545,12 @@ impl<H> CoreRuntime<H> {
         let Some(prepared) = prepared else {
             return Ok(BTreeSet::new());
         };
-        let io = self
-            .secret_provider
-            .as_ref()
-            .context("secret provider missing")?;
+        let io = self.secret_provider().context("secret provider missing")?;
         if prepared.pending.is_empty() {
             return Ok(BTreeSet::new());
         }
         io.prepare_key()?;
-        let mut store = SecretStore::load(io.as_ref())?;
+        let mut store = SecretStore::load(io)?;
         let mut changed = BTreeSet::new();
         for item in prepared.pending {
             ensure!(
@@ -571,7 +615,7 @@ impl<H> CoreRuntime<H> {
                 }
                 store.entries.retain(|e| e.target != journal.target);
             }
-            store.save(io.as_ref())?;
+            store.save(io)?;
             ensure!(
                 io.observe(&journal.target)? == journal.applied,
                 "secret changed after receipt commit; recovery required"
@@ -591,8 +635,8 @@ impl<H> CoreRuntime<H> {
         Ok(changed)
     }
 
-    fn secret_recovery_facts(&self) -> Result<Option<RecoveryFacts>> {
-        let Some(bytes) = self.secret_journal()? else {
+    async fn secret_recovery_facts(&self) -> Result<Option<RecoveryFacts>> {
+        let Some(bytes) = self.secret_journal().await? else {
             return Ok(None);
         };
         let journal: Journal =
@@ -603,7 +647,7 @@ impl<H> CoreRuntime<H> {
                 && journal.rollback == rollback_path(&journal.target),
             "invalid secret recovery contract"
         );
-        let store = self.secret_store()?;
+        let store = self.observed_secret_store().await?;
         let receipt = store.entries.iter().find(|e| e.target == journal.target);
         let committed = receipt == journal.desired.as_ref()
             && (journal.previous != journal.desired || journal.applied.is_some());
@@ -611,8 +655,8 @@ impl<H> CoreRuntime<H> {
             committed || receipt == journal.previous.as_ref(),
             "secret receipt changed; recovery blocked"
         );
-        let current = self.secret_observe(&journal.target)?;
-        let rollback = self.secret_observe(&journal.rollback)?;
+        let current = self.secret_observe(&journal.target).await?;
+        let rollback = self.secret_observe(&journal.rollback).await?;
         Ok(Some(RecoveryFacts {
             journal,
             store,
@@ -622,7 +666,7 @@ impl<H> CoreRuntime<H> {
         }))
     }
 
-    pub(crate) fn plan_secret_recovery(&self) -> Result<Option<crate::plan::PlanV1>> {
+    pub(crate) async fn plan_secret_recovery(&self) -> Result<Option<crate::plan::PlanV1>> {
         use crate::plan::*;
         let Some(RecoveryFacts {
             journal,
@@ -630,7 +674,7 @@ impl<H> CoreRuntime<H> {
             current,
             rollback,
             committed,
-        }) = self.secret_recovery_facts()?
+        }) = self.secret_recovery_facts().await?
         else {
             return Ok(None);
         };
@@ -703,21 +747,19 @@ impl<H> CoreRuntime<H> {
         )))
     }
 
-    pub(crate) fn recover_secrets(
+    pub(crate) async fn recover_secrets(
         &self,
         approval: &crate::plan::PlanApprovalV1,
     ) -> Result<crate::runtime::AppRecoveryReportV1> {
-        let io = self
-            .secret_provider
-            .as_ref()
-            .context("secret provider missing")?;
-        let Some(RecoveryFacts { journal, .. }) = self.secret_recovery_facts()? else {
+        let io = self.secret_provider().context("secret provider missing")?;
+        let Some(RecoveryFacts { journal, .. }) = self.secret_recovery_facts().await? else {
             bail!("no secret recovery journal");
         };
         let _paths = io.lock_paths(&[journal.target.clone(), journal.rollback.clone()])?;
         approval.validate(
             &self
-                .plan_secret_recovery()?
+                .plan_secret_recovery()
+                .await?
                 .context("secret journal disappeared")?,
         )?;
         let RecoveryFacts {
@@ -727,7 +769,8 @@ impl<H> CoreRuntime<H> {
             committed,
             ..
         } = self
-            .secret_recovery_facts()?
+            .secret_recovery_facts()
+            .await?
             .context("secret journal disappeared")?;
         if committed {
             if rollback.is_some() {
@@ -842,13 +885,15 @@ impl<H> CoreRuntime<H> {
         )
         .with_diagnostic_code("app_secret_file")
     }
+}
 
-    pub(crate) fn inspect_secret_files(
+impl<H: crate::runtime::FileSystemObservationHost> CoreRuntime<H> {
+    pub(crate) async fn inspect_secret_files(
         &self,
         categories: &[AppCategory],
     ) -> Result<Vec<crate::runtime::AppFileInspection>> {
         use crate::runtime::{AppFileInspection, InspectionChange, InspectionFileStatus as Status};
-        let store = self.secret_store()?;
+        let store = self.observed_secret_store().await?;
         let mut result = Vec::new();
         for category in categories {
             for file in &category.secret_files {
@@ -857,7 +902,7 @@ impl<H> CoreRuntime<H> {
                     .entries
                     .iter()
                     .find(|e| e.category == category.name && e.source == file.source);
-                let current = self.secret_observe(&destination)?;
+                let current = self.secret_observe(&destination).await?;
                 let status = match (entry, &current) {
                     (None, _) => Status::NotInstalled,
                     (Some(_), None) => Status::Missing,
@@ -872,6 +917,7 @@ impl<H> CoreRuntime<H> {
                     _ => Status::UpToDate,
                 };
                 result.push(AppFileInspection {
+                    source_path: self.preset_source_path("app", &category.name, &file.source),
                     category: category.clone(),
                     file: AppFile {
                         source_rel: PathBuf::from(format!("secret:{}", file.target.display())),

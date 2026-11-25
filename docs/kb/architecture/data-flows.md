@@ -335,8 +335,15 @@ regressions use `read_minimal_config_file`; global-only initialization uses the 
 The CLI list facade delegates ordered observations to `list/query.rs`, pure grouping and action
 selection to `list/projection.rs`, and output to `list/render.rs`. Global and targeted update share
 `generator_review.rs` to present the captured App generator assessments. Local query results retain App
-inspections for diff collection without re-evaluation. Simple Shell inventory projects only
-available/installed targets; a receipt can establish installation even when its launcher is missing.
+inspections for diff collection without re-evaluation. The command captures the effective
+Preset once, including its overlay. Update compatibility reads that snapshot before trust
+loading and compares it to the embedded migration baseline. Catalog selection, explicit
+generator evaluation, App source labels and detailed Shell diffs consume the same snapshot.
+The source note uses the overlay selected for capture, even if the checkout appears or disappears later. Before generator
+evaluation the CLI reloads the trust store for the captured Shine directory. Filesystem
+observations still run at their respective query and display phases. Mutation preparation takes
+a fresh snapshot after review. Simple Shell inventory projects only available/installed targets;
+a receipt can establish installation even when its launcher is missing.
 Managed Sys inventory uses the frontend's OS/managed receipt filter; its former test-only runtime
 query has been removed (ADR 0134). Update derives Shell display rows and lifecycle outcomes from one inspection, then queries
 App, Sys and missing sources before output; status prints its initial note and Shell

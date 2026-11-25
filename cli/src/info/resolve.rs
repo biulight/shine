@@ -264,6 +264,7 @@ mod tests {
 
     fn app_file(category: &str, source: &str, dest: &str) -> AppInfoFile {
         AppInfoFile {
+            source_path: PathBuf::from(source),
             category: crate::apps::AppCategory {
                 secret_files: Vec::new(),
                 name: category.to_string(),

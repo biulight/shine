@@ -1,4 +1,4 @@
-//! Ordered CLI observations. Preserve capture count, error contexts and generator opt-in.
+//! Ordered CLI observations. All domains read from the same captured preset source.
 use super::*;
 use shine_core::{
     lifecycle::LifecycleResultV1,
@@ -29,7 +29,7 @@ pub(super) struct InventoryInputs {
 }
 
 async fn build_update_app_rows(
-    config: &Config,
+    service: &mut ConfiguredFrontend,
     categories: &[crate::apps::AppCategory],
     run_generators: bool,
 ) -> Result<(
@@ -38,10 +38,10 @@ async fn build_update_app_rows(
     Vec<shine_core::runtime::AppFileInspection>,
 )> {
     if !run_generators {
-        return build_app_rows_with_lifecycle_options(config, categories, false).await;
+        return build_app_rows_with_lifecycle_options(service, categories, false).await;
     }
     let (static_rows, static_lifecycle, static_inspections) =
-        build_app_rows_with_lifecycle_options(config, categories, false).await?;
+        build_app_rows_with_lifecycle_options(service, categories, false).await?;
     let installed = static_rows
         .iter()
         .filter(|row| row.file_status != FileStatus::NotInstalled)
@@ -55,29 +55,33 @@ async fn build_update_app_rows(
     if selected.is_empty() {
         return Ok((static_rows, static_lifecycle, static_inspections));
     }
-    build_app_rows_with_lifecycle_options(config, &selected, true).await
+    build_app_rows_with_lifecycle_options(service, &selected, true).await
 }
 
-async fn missing_app_sources(config: &Config) -> Result<Vec<(String, String)>> {
-    crate::core_runtime::frontend_from_config(config)
-        .await?
+async fn missing_app_sources(service: &ConfiguredFrontend) -> Result<Vec<(String, String)>> {
+    service
         .missing_app_sources()
         .await
         .map_err(FrontendServiceError::into_source)
 }
 
-pub(super) async fn collect_update(config: &Config, run_generators: bool) -> Result<UpdateInputs> {
-    let shell_rows = build_shell_rows(config).await?;
+pub(super) async fn collect_update(
+    service: &mut ConfiguredFrontend,
+    run_generators: bool,
+) -> Result<UpdateInputs> {
+    let shell_rows = inspect_shell_rows(service).await?;
     let shell_lifecycle = crate::shells::shell_update_lifecycle_from_rows(&shell_rows);
-    let cats = load_active_categories(config, None)
-        .await
+    let cats = service
+        .runtime()
+        .app_categories(None)
         .context("loading active App Presets for update")?;
     let (app_rows, app_lifecycle, app_inspections) =
-        build_update_app_rows(config, &cats, run_generators).await?;
-    let update_sys = sys::managed_updates(config)
+        build_update_app_rows(service, &cats, run_generators).await?;
+    let update_sys = sys::managed_inspection(service)
         .await
-        .context("checking managed Sys Presets for update")?;
-    let missing_sources = missing_app_sources(config).await?;
+        .context("checking managed Sys Presets for update")?
+        .updates;
+    let missing_sources = missing_app_sources(service).await?;
     Ok(UpdateInputs {
         shell_rows,
         shell_lifecycle,
@@ -91,19 +95,20 @@ pub(super) async fn collect_update(config: &Config, run_generators: bool) -> Res
 
 // Status prints Shell attention before loading App/Sys; the facade owns that boundary.
 pub(super) async fn collect_status(
-    config: &Config,
+    service: &mut ConfiguredFrontend,
     shell_rows: Vec<ShellRow>,
     run_generators: bool,
 ) -> Result<StatusInputs> {
-    let cats = load_active_categories(config, None)
-        .await
+    let cats = service
+        .runtime()
+        .app_categories(None)
         .context("loading active App Presets for status")?;
     let (app_rows, _, app_inspections) =
-        build_update_app_rows(config, &cats, run_generators).await?;
-    let sys = sys::managed_inspection(config)
+        build_update_app_rows(service, &cats, run_generators).await?;
+    let sys = sys::managed_inspection(service)
         .await
         .context("checking managed Sys Presets for status")?;
-    let missing_sources = missing_app_sources(config).await?;
+    let missing_sources = missing_app_sources(service).await?;
     Ok(StatusInputs {
         shell_rows,
         app_rows,
@@ -113,15 +118,7 @@ pub(super) async fn collect_status(
     })
 }
 
-pub(super) async fn collect_diffs(
-    config: &Config,
-    app_inspections: Vec<AppFileInspection>,
-) -> Result<UpdateDiffs> {
-    UpdateDiffs::collect_with_app_inspections(config, app_inspections).await
-}
-
-pub(super) async fn collect_inventory(config: &Config) -> Result<InventoryInputs> {
-    let service = crate::core_runtime::frontend_from_config(config).await?;
+pub(super) async fn collect_inventory(service: &ConfiguredFrontend) -> Result<InventoryInputs> {
     let shell_inventory = service
         .inventory(InventoryRequest::for_kind(CapabilityKindV1::Shell))
         .await
@@ -150,7 +147,7 @@ pub(super) async fn collect_inventory(config: &Config) -> Result<InventoryInputs
         .map_err(FrontendServiceError::into_source)?;
     let installed_sys = installed_sys_items_from_inventory(&sys_inventory);
 
-    let missing_sources = missing_app_sources(config).await?;
+    let missing_sources = missing_app_sources(service).await?;
     let installed_shell = sorted_names(installed_shell);
     let installed_app = sorted_names(installed_app);
     let installed_sys = sorted_names(installed_sys);

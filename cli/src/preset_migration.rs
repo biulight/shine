@@ -128,16 +128,18 @@ pub async fn handle_migrate(
 }
 
 pub async fn active_compatibility_plan(target: Option<&str>) -> Result<PresetMigrationPlan> {
-    let MigrationInputs {
-        snapshot,
-        scope,
-        mut selected,
-        managed_overlay,
-        ..
-    } = migration_inputs(None).await?;
-    if let Some(target) = target {
+    let inputs = migration_inputs(None).await?;
+    compatibility_from_snapshot(&inputs.snapshot, inputs.managed_overlay.as_deref(), target).await
+}
+
+pub(crate) async fn compatibility_from_snapshot(
+    snapshot: &PresetSnapshot,
+    managed_overlay: Option<&Path>,
+    target: Option<&str>,
+) -> Result<PresetMigrationPlan> {
+    let selected = if let Some(target) = target {
         let canonical = if let Some(item) = target.strip_prefix("sys/") {
-            let mut categories = sys_categories_for_item(&snapshot, item);
+            let mut categories = sys_categories_for_item(snapshot, item);
             if categories.is_empty() {
                 let os_id = crate::sys::detect_os_id().await?;
                 let active = format!("sys/{os_id}");
@@ -162,7 +164,7 @@ pub async fn active_compatibility_plan(target: Option<&str>) -> Result<PresetMig
             if categories.len() == 1 {
                 categories
             } else {
-                let sys_categories = sys_categories_for_item(&snapshot, target);
+                let sys_categories = sys_categories_for_item(snapshot, target);
                 if sys_categories.is_empty() {
                     BTreeSet::from([target.to_string()])
                 } else {
@@ -170,21 +172,23 @@ pub async fn active_compatibility_plan(target: Option<&str>) -> Result<PresetMig
                 }
             }
         };
-        selected = Some(canonical);
-    }
+        Some(canonical)
+    } else {
+        None
+    };
     let current = capture_embedded_preset_snapshot(core_runtime::embedded_preset_files());
     let legacy = legacy_metadata_hashes();
     let mut plan = plan_preset_migration(
-        &snapshot,
-        scope,
+        snapshot,
+        "active",
         selected.as_ref(),
         Some(PresetMigrationBaseline {
             current: &current,
             legacy_metadata_sha256: &legacy,
         }),
     );
-    validate_candidate(&snapshot, &mut plan).await;
-    if let Some(root) = managed_overlay.as_deref() {
+    validate_candidate(snapshot, &mut plan).await;
+    if let Some(root) = managed_overlay {
         mark_managed_overlay_read_only(&mut plan, root);
     }
     Ok(plan)

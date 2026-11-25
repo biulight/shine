@@ -221,7 +221,6 @@ impl RuntimeObserver for RefreshObserver {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::apps::metadata;
     use crate::apps::{
         handle_install_approved, handle_upgrade_installed_target_with_result_approved,
     };
@@ -358,10 +357,11 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             .await
             .unwrap();
 
-        let categories = metadata::load_active_categories(&config, Some("sample"))
+        let mut service = crate::core_runtime::frontend_from_config(&config)
             .await
             .unwrap();
-        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &categories, false)
+        let categories = service.runtime().app_categories(Some("sample")).unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&mut service, &categories, false)
             .await
             .unwrap();
         assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
@@ -415,11 +415,12 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             .await
             .unwrap();
 
-        let categories = metadata::load_active_categories(&config, Some("sample"))
+        let mut service = crate::core_runtime::frontend_from_config(&config)
             .await
             .unwrap();
+        let categories = service.runtime().app_categories(Some("sample")).unwrap();
         let (rows, _, _) =
-            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, false)
+            crate::status::build_app_rows_with_lifecycle_options(&mut service, &categories, false)
                 .await
                 .unwrap();
         assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
@@ -463,6 +464,45 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
     }
 
     #[tokio::test]
+    async fn generator_evaluation_uses_current_trust_with_the_captured_preset() {
+        let root = crate::test_support::make_temp_dir("shine-generator-trust-refresh").await;
+        let config = write_fixture(&root, false).await;
+        handle_install_approved(&config, Some("sample"), false, false, true)
+            .await
+            .unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
+        let mut service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
+        let categories = service.runtime().app_categories(Some("sample")).unwrap();
+        build_app_rows_with_lifecycle_options(&mut service, &categories, false)
+            .await
+            .unwrap();
+        let app_dir = config.presets_dir().join("app/sample");
+        crate::trust::handle_revoke(&config, "app/sample")
+            .await
+            .unwrap();
+        let (_, _, files) = build_app_rows_with_lifecycle_options(&mut service, &categories, true)
+            .await
+            .unwrap();
+        assert_eq!(files[0].status, FileStatus::GeneratorTrustRequired);
+        assert_eq!(fs::read(app_dir.join("first.runs")).await.unwrap(), b"x");
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
+        fs::write(app_dir.join("first.sh"), b"exit 99\n")
+            .await
+            .unwrap();
+        let (_, _, files) = build_app_rows_with_lifecycle_options(&mut service, &categories, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            files[0].desired_content.as_deref(),
+            Some(b"first-v1\n".as_slice())
+        );
+        assert_eq!(fs::read(app_dir.join("first.runs")).await.unwrap(), b"xx");
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn explicit_generator_evaluation_updates_status_without_writing_destination() {
         let root = crate::test_support::make_temp_dir("shine-generator-evaluation").await;
         let config = write_fixture(&root, false).await;
@@ -477,11 +517,12 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             .unwrap();
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
-        let categories = metadata::load_active_categories(&config, Some("sample"))
+        let mut service = crate::core_runtime::frontend_from_config(&config)
             .await
             .unwrap();
+        let categories = service.runtime().app_categories(Some("sample")).unwrap();
         let (rows, lifecycle, _) =
-            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, true)
+            crate::status::build_app_rows_with_lifecycle_options(&mut service, &categories, true)
                 .await
                 .unwrap();
         assert_eq!(rows[0].file_status, FileStatus::UpdateAvail);

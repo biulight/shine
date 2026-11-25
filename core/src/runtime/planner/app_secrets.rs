@@ -3,7 +3,7 @@ use super::*;
 use crate::runtime::secret_files::managed::{matches, rollback_path, source_version};
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
-    pub(super) fn plan_app_secrets(
+    pub(super) async fn plan_app_secrets(
         &self,
         request: &AppPlanRequest,
         manifest: &AppManifest,
@@ -11,11 +11,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         permissions: &mut PermissionAccumulator,
         steps: &mut Vec<PlanStepV1>,
     ) -> Result<usize> {
-        let store = self.secret_store()?;
+        let store = self.observed_secret_store().await?;
         state.bytes("secret-manifest", Some(&serde_json::to_vec(&store)?))?;
         state.bytes(
             "secret-journal",
-            self.secret_journal()?.as_deref().map(|v| v.as_slice()),
+            self.secret_journal()
+                .await?
+                .as_deref()
+                .map(|v| v.as_slice()),
         )?;
         let mut active = BTreeSet::new();
         let categories = if request.operation == LifecycleOperation::Uninstall {
@@ -44,9 +47,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     .entries
                     .iter()
                     .find(|e| e.category == category.name && e.source == file.source);
-                let current = self.secret_observe(&target)?;
+                let current = self.secret_observe(&target).await?;
                 let rollback = rollback_path(&target);
-                let rollback_state = self.secret_observe(&rollback)?;
+                let rollback_state = self.secret_observe(&rollback).await?;
                 state.bytes(
                     format!("secret-target:{}", target.display()),
                     Some(&serde_json::to_vec(&(
@@ -134,7 +137,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             {
                 continue;
             }
-            let current = self.secret_observe(&entry.target)?;
+            let current = self.secret_observe(&entry.target).await?;
             state.bytes(
                 format!("secret-receipt:{}", entry.target.display()),
                 Some(&serde_json::to_vec(&(entry, &current))?),

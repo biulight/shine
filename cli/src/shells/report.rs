@@ -130,10 +130,11 @@ pub async fn handle_list_with_presets_note(
     config: &crate::config::Config,
     print_presets_note: bool,
 ) -> anyhow::Result<()> {
+    let overlay = config.active_presets_overlay_dir();
     if print_presets_note {
-        crate::config::print_presets_note(config);
+        crate::config::print_presets_note_with_overlay(config, overlay);
     }
-    let catalog = crate::core_runtime::for_shell_catalog(config).await?;
+    let catalog = crate::core_runtime::for_shell_catalog(config, overlay).await?;
     print_categories(catalog.shell_categories(None)?);
     Ok(())
 }
@@ -218,11 +219,19 @@ pub(crate) fn print_categories(mut categories: Vec<metadata::ShellCategory>) {
 }
 
 pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow::Result<()> {
+    let overlay = crate::config::print_presets_note_and_get_overlay(config);
+    let service = crate::core_runtime::frontend_with_overlay(config, overlay).await?;
+    print_info(&service, target).await
+}
+
+pub(crate) async fn print_info(
+    service: &crate::core_runtime::ConfiguredFrontend,
+    target: &str,
+) -> anyhow::Result<()> {
     use crate::status::{ShellRow, ShellRowStatus};
     use anyhow::bail;
 
-    crate::config::print_presets_note(config);
-    let categories = metadata::load_active_categories(config, None).await?;
+    let categories = service.runtime().shell_categories(None)?;
     if target.trim().is_empty() {
         bail!("shell info target must not be empty");
     }
@@ -282,7 +291,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
         }
     };
 
-    let rows = crate::status::build_shell_rows(config).await?;
+    let rows = crate::status::inspect_shell_rows(service).await?;
     let category_name = escape_controls(&category.name);
     if let Some(description) = &category.description {
         println!(

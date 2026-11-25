@@ -115,8 +115,14 @@ impl From<ShellFileInspection> for ShellRow {
 
 /// Build Shell rows without changing inspection capture or observation order.
 pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
-    let inspections = crate::core_runtime::frontend_from_config(config)
-        .await?
+    let service = crate::core_runtime::frontend_from_config(config).await?;
+    inspect_shell_rows(&service).await
+}
+
+pub(crate) async fn inspect_shell_rows(
+    service: &crate::core_runtime::ConfiguredFrontend,
+) -> Result<Vec<ShellRow>> {
+    let inspections = service
         .inspect_shells()
         .await
         .map_err(shine_core::frontend::FrontendServiceError::into_source)?

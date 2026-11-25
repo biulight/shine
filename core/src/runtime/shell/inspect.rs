@@ -195,7 +195,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
     ) -> Result<ShellCommandObservation> {
         let category = target.category;
         let file = target.file;
-        let desired_path = self.desired_shell_source_path(&category.name, &file.source_rel);
+        let desired_path = self.preset_source_path("shell", &category.name, &file.source_rel);
         let logical_source = format!(
             "shell/{}/{}",
             category.name,

@@ -15,8 +15,8 @@ where
     ) -> Result<AppRecoveryReportV1> {
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         approval.validate(&self.plan_app_operation_recovery().await?)?;
-        if self.secret_journal()?.is_some() {
-            return self.recover_secrets(approval);
+        if self.secret_journal().await?.is_some() {
+            return self.recover_secrets(approval).await;
         }
         let _guard = self.host().acquire_privileged_operation().await?;
         approval.validate(&self.plan_app_operation_recovery().await?)?;

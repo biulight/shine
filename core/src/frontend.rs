@@ -153,9 +153,16 @@ pub struct FrontendServiceError {
 
 impl FrontendServiceError {
     fn new(code: &'static str, source: impl Into<Error>) -> Self {
+        let source = source.into();
+        let code =
+            if source.is::<crate::runtime::secret_files::managed::SecretObservationUnavailable>() {
+                "frontend_app_secret_observation_unavailable"
+            } else {
+                code
+            };
         Self {
             diagnostic: FrontendDiagnosticV1::error(code),
-            source: source.into(),
+            source,
         }
     }
 
@@ -196,6 +203,11 @@ impl<H> FrontendService<H> {
 
     pub fn runtime(&self) -> &CoreRuntime<H> {
         &self.runtime
+    }
+
+    /// Refresh persistent authorization before explicit generator evaluation on the captured source.
+    pub fn replace_persistent_trust_grants(&mut self, grants: Vec<crate::trust::TrustGrantV1>) {
+        self.runtime.replace_persistent_trust_grants(grants);
     }
 
     pub fn into_runtime(self) -> CoreRuntime<H> {
@@ -295,7 +307,8 @@ impl<H: FileSystemObservationHost> FrontendService<H> {
             })?;
         for entry in self
             .runtime
-            .secret_store()
+            .observed_secret_store()
+            .await
             .map_err(|error| {
                 FrontendServiceError::new("frontend_inventory_app_secret_state_failed", error)
             })?
