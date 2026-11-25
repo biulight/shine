@@ -26,17 +26,26 @@ pub async fn handle_install_shim_approved(
     replace_managed: bool,
     yes: bool,
 ) -> Result<()> {
+    handle_install_shim(config, target, false, replace_managed, yes).await
+}
+
+pub(crate) async fn handle_install_shim(
+    config: &Config,
+    target: &str,
+    dry_run: bool,
+    replace_managed: bool,
+    yes: bool,
+) -> Result<()> {
     let (explicit_kind, category) = parse_preset_target(target)?;
-    if explicit_kind == Some(PresetKind::Shell) && category.contains('/') {
-        return Box::pin(shells::handle_install_approved(
-            config,
-            Some(category),
-            replace_managed,
-            yes,
-        ))
-        .await;
-    }
-    match resolve_shim_target(config, explicit_kind, category).await? {
+    let resolution = if explicit_kind == Some(PresetKind::Shell) && category.contains('/') {
+        ShimResolution::Found(PresetKind::Shell)
+    } else {
+        resolve_shim_target(config, explicit_kind, category).await?
+    };
+    match resolution {
+        ShimResolution::Found(PresetKind::Shell) if dry_run => {
+            Box::pin(shells::handle_install_dry_run(config, Some(category))).await
+        }
         ShimResolution::Found(PresetKind::Shell) => {
             Box::pin(shells::handle_install_approved(
                 config,
@@ -50,7 +59,7 @@ pub async fn handle_install_shim_approved(
             Box::pin(apps::handle_install_approved(
                 config,
                 Some(category),
-                false,
+                dry_run,
                 replace_managed,
                 yes,
             ))

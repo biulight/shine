@@ -28,6 +28,7 @@ Shine does not strip that whitespace. An entirely blank target is rejected.
 ```bash
 shine list --available
 shine info app/starship
+shine install app/starship --dry-run
 shine install app/starship
 shine update
 shine upgrade app/starship
@@ -40,7 +41,7 @@ shine upgrade app/starship
 | `shine init [--yes]` | Create `shine.config.toml` for the current project |
 | `shine list [--available [KIND]]` | List installed resources or browse the `app`, `shell`, and `sys` catalogs |
 | `shine info <TARGET> [--diff] [--verbose]` | Inspect an available or installed target |
-| `shine install <TARGET> [--verbose]` | Install or repair an app or shell target |
+| `shine install <TARGET> [--verbose] [--dry-run]` | Install or repair an app or shell target. Use `--dry-run` to preview the selected files or links. |
 | `shine uninstall <TARGET> [--verbose]` | Uninstall an app or shell target |
 | `shine update [TARGET]` | Check managed content and Shine releases without applying changes |
 | `shine upgrade [TARGET]` | Apply all or selected managed updates |

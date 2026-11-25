@@ -14,7 +14,7 @@ use super::{
 #[command(name = "shine")]
 #[command(version = version::display(), about, long_about = None)]
 #[command(
-    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>[/<command>], or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, trust, state, clear, self, completions, theme, and local are advanced tools."
+    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship --dry-run\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>[/<command>], or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, trust, state, clear, self, completions, theme, and local are advanced tools."
 )]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -65,11 +65,14 @@ pub enum Commands {
         /// Preset target: app/<category>, shell/<category>[/<command>], or a unique category name
         #[arg(value_name = "TARGET")]
         target: String,
+        /// Preview the selected app files or shell links without installing them
+        #[arg(long)]
+        dry_run: bool,
         /// Replace user-modified files that are already managed by shine
         #[arg(long)]
         replace_managed: bool,
         /// Approve the displayed lifecycle Plan without prompting
-        #[arg(long)]
+        #[arg(long, conflicts_with = "dry_run")]
         yes: bool,
     },
     /// Uninstall one shell or app preset
@@ -109,7 +112,7 @@ pub enum Commands {
     },
     /// Show details for an available or installed app/shell target, or `sys/<ITEM>`
     Info {
-        /// Installed item to inspect (e.g. git, starship, proxy, setproxy)
+        /// Available or installed target to inspect (e.g. app/starship or shell/proxy)
         #[arg(value_name = "TARGET")]
         target: String,
         /// Also print a unified diff against the expected content

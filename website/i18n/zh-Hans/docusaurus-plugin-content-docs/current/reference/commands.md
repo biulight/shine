@@ -26,6 +26,7 @@ sidebar_position: 1
 ```bash
 shine list --available
 shine info app/starship
+shine install app/starship --dry-run
 shine install app/starship
 shine update
 shine upgrade app/starship
@@ -38,7 +39,7 @@ shine upgrade app/starship
 | `shine init [--yes]` | 为当前项目创建 `shine.config.toml` |
 | `shine list [--available [KIND]]` | 查看已安装资源或浏览 `app`、`shell`、`sys` 目录 |
 | `shine info <TARGET> [--diff] [--verbose]` | 查看可用或已安装目标的详情 |
-| `shine install <TARGET> [--verbose]` | 安装或修复 App/Shell 目标 |
+| `shine install <TARGET> [--verbose] [--dry-run]` | 安装或修复 App 或 Shell 目标。使用 `--dry-run` 预览所选文件或链接。 |
 | `shine uninstall <TARGET> [--verbose]` | 卸载 App/Shell 目标 |
 | `shine update [TARGET]` | 检查受管内容与 Shine 版本，不应用改动 |
 | `shine upgrade [TARGET]` | 应用全部或指定的受管更新 |

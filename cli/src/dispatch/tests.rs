@@ -535,6 +535,7 @@ fn lifecycle_commands_accept_yes_and_reject_dry_run_conflicts() {
     }
 
     for args in [
+        vec!["shine", "install", "app/demo", "--dry-run", "--yes"],
         vec!["shine", "uninstall", "app/demo", "--dry-run", "--yes"],
         vec!["shine", "app", "install", "demo", "--dry-run", "--yes"],
         vec!["shine", "app", "uninstall", "demo", "--dry-run", "--yes"],

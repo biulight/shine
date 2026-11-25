@@ -41,7 +41,7 @@ use cli::preset_commands::{
 use cli::self_install::{
     handle_config_upgrade, handle_self_install, handle_self_upgrade, handle_update,
 };
-use cli::shim::{handle_install_shim_approved, handle_uninstall_shim_approved};
+use cli::shim::{handle_install_shim, handle_uninstall_shim_approved};
 
 pub async fn run(cli: Cli) -> Result<()> {
     cli::with_full_upgrade_plan(
@@ -107,10 +107,11 @@ async fn run_command(cli: Cli) -> Result<()> {
         },
         Commands::Install {
             target,
+            dry_run,
             replace_managed,
             yes,
             ..
-        } => handle_install_shim_approved(&config, &target, replace_managed, yes).await,
+        } => handle_install_shim(&config, &target, dry_run, replace_managed, yes).await,
         Commands::Uninstall {
             target,
             force,

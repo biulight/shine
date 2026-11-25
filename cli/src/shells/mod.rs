@@ -11,7 +11,7 @@ mod uninstall;
 
 #[doc(hidden)]
 pub use deployment::{handle_launch_live, handle_render_live};
-pub(crate) use install::collect_update_lifecycle_result;
+pub(crate) use install::shell_update_lifecycle_from_rows;
 pub use install::{
     handle_completion_install, handle_init_template, handle_install_approved,
     handle_install_dry_run,

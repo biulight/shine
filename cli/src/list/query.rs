@@ -68,8 +68,7 @@ async fn missing_app_sources(config: &Config) -> Result<Vec<(String, String)>> {
 
 pub(super) async fn collect_update(config: &Config, run_generators: bool) -> Result<UpdateInputs> {
     let shell_rows = build_shell_rows(config).await?;
-    // Retain the existing second capture used for lifecycle pending targets.
-    let shell_lifecycle = crate::shells::collect_update_lifecycle_result(config).await?;
+    let shell_lifecycle = crate::shells::shell_update_lifecycle_from_rows(&shell_rows);
     let cats = load_active_categories(config, None)
         .await
         .context("loading active App Presets for update")?;

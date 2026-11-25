@@ -294,7 +294,7 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/env/workspace/file_groups/platform.rs` | Native private creation, file identity, cancellation, and Unix/Windows command supervision |
 | `cli/src/env/catalog.rs` | Known variable metadata |
 | `cli/src/env/identity.rs` | age identity generation and recipient inspection |
-| `cli/src/env/upgrade.rs` | Reapply env templates to installed content |
+| `cli/src/env/upgrade.rs` | Compatibility entry point returning an empty report; Shell and App upgrades own template updates |
 | `cli/src/env/proxy.rs` | Transparent command proxy rules, complete installation transaction and execution; migrated tests use production owners |
 | `cli/src/env/broker.rs`, `env/broker/{model,policy,store,commands}.rs` | Stable broker facade/DTOs, pure exact policy matching, private locked persistence and CLI commands; `env/mod.rs` owns reserved SSH keys |
 | `cli/src/secret/mod.rs` | Backend-independent tagged ciphertext router |

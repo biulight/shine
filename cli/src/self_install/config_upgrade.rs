@@ -2,7 +2,7 @@
 
 mod summary;
 use crate::config::{self, Config};
-use crate::{apps, colors, env, output, shells, sys};
+use crate::{apps, colors, output, shells, sys};
 use anyhow::{Result, bail};
 use shine_core::lifecycle::LifecycleOperation;
 use shine_core::runtime::{
@@ -42,7 +42,6 @@ pub async fn handle_config_upgrade(
         output::SectionSeparator::with_preamble(colors::bold("Upgrading installed configs"))
     };
 
-    let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
     let reviewed = crate::lifecycle_plan::review_upgrade_plans(
         config,
         upgrade_plan_requests(config, None, prune_stale).await?,
@@ -78,16 +77,13 @@ pub async fn handle_config_upgrade(
     ))
     .await?;
 
-    let updated = env_report.updated
-        + changed_shell_categories(&shell_lifecycle)
+    let updated = changed_shell_categories(&shell_lifecycle)
         + usize::from(shell_report.path_changed)
         + changed_app_categories(&app_lifecycle)
         + sys_report.updated;
     let sys_summary = sys_lifecycle.summary();
-    let user_modified = env_report.user_modified
-        + preserved_app_resources(&app_lifecycle)
-        + sys_summary.preserved
-        + sys_summary.conflicts;
+    let user_modified =
+        preserved_app_resources(&app_lifecycle) + sys_summary.preserved + sys_summary.conflicts;
     let fatal_app_failures = app_upgrade_failure_count(&app_report);
     let failed = fatal_app_failures + sys_report.failed;
 

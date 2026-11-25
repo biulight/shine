@@ -440,9 +440,9 @@ mod tests {
         .unwrap();
         fs::write(&command, b"user-owned command\n").await.unwrap();
 
-        let update = super::super::install::collect_update_lifecycle_result(&config)
-            .await
-            .unwrap();
+        let update = crate::shells::shell_update_lifecycle_from_rows(
+            &crate::status::build_shell_rows(&config).await.unwrap(),
+        );
         let pending = update
             .outcomes
             .iter()

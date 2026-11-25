@@ -523,17 +523,11 @@ fn should_print_link_summary(verbose: bool, changed_count: usize, conflict_count
     verbose || changed_count > 0 || conflict_count > 0
 }
 
-pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<LifecycleResultV1> {
-    Ok(shell_update_lifecycle_from_rows(
-        crate::status::build_shell_rows(config).await?,
-    ))
-}
-
-fn shell_update_lifecycle_from_rows(
-    rows: impl IntoIterator<Item = crate::status::ShellRow>,
+pub(crate) fn shell_update_lifecycle_from_rows(
+    rows: &[crate::status::ShellRow],
 ) -> LifecycleResultV1 {
     let mut result = LifecycleResultV1::new(LifecycleOperation::Update, false);
-    for row in rows.into_iter().filter(|row| row.is_installed) {
+    for row in rows.iter().filter(|row| row.is_installed) {
         let mut effects = Vec::new();
         if row.changes.iter().any(|change| {
             matches!(
@@ -812,8 +806,9 @@ mod tests {
                     row.label = "friendly label/other".into();
                     row.status_sym = "✗";
                     row
-                });
-            let result = shell_update_lifecycle_from_rows(rows);
+                })
+                .collect::<Vec<_>>();
+            let result = shell_update_lifecycle_from_rows(&rows);
             assert_eq!(result.outcomes.len(), 1, "{state}: {result:?}");
             let outcome = &result.outcomes[0];
             assert_eq!(outcome.target, "shell/demo/run");
@@ -1034,7 +1029,9 @@ mod tests {
         .await
         .unwrap();
 
-        let pending = collect_update_lifecycle_result(&config).await.unwrap();
+        let pending = shell_update_lifecycle_from_rows(
+            &crate::status::build_shell_rows(&config).await.unwrap(),
+        );
         let selected_pending = pending
             .outcomes
             .iter()
@@ -1172,7 +1169,9 @@ mod tests {
             .await
             .unwrap();
         crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
-        let update = collect_update_lifecycle_result(&config).await.unwrap();
+        let update = shell_update_lifecycle_from_rows(
+            &crate::status::build_shell_rows(&config).await.unwrap(),
+        );
         let pending = update
             .outcomes
             .iter()
@@ -1204,7 +1203,9 @@ mod tests {
             b"#!/bin/sh\necho updated\n"
         );
 
-        let current = collect_update_lifecycle_result(&config).await.unwrap();
+        let current = shell_update_lifecycle_from_rows(
+            &crate::status::build_shell_rows(&config).await.unwrap(),
+        );
         assert!(current.outcomes.iter().any(|outcome| {
             outcome.target == "shell/custom/one" && outcome.status == LifecycleStatus::Unchanged
         }));

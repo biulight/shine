@@ -1145,6 +1145,9 @@ fn app_lifecycle_display_preserves_raw_destinations_backups_and_exit_policy() {
         String::from_utf8(output.stdout).unwrap()
     };
     let preview = run(&["app", "install", "demo", "--dry-run"], 0);
+    for target in ["app/demo", "demo"] {
+        assert_eq!(run(&["install", target, "--dry-run"], 0), preview);
+    }
     assert!(preview.contains("1 would install"), "{preview}");
     assert_eq!(fs::read(&target).unwrap(), b"original\n");
     assert!(!receipt.exists() && !backup.exists());
@@ -3853,6 +3856,20 @@ fn shell_install_preview_labels_candidates_without_changing_conflict_policy() {
             "{text}"
         );
         assert!(!text.contains("Would link"), "{text}");
+    }
+    for (target, scoped) in [
+        ("shell/demo", "demo"),
+        ("demo", "demo"),
+        ("shell/demo/demo-run", "demo/demo-run"),
+    ] {
+        let direct = run(&["shell", "install", scoped, "--dry-run"]);
+        let top = run(&["install", target, "--dry-run"]);
+        assert!(
+            direct.status.success() && top.status.success(),
+            "{direct:?} {top:?}"
+        );
+        assert_eq!(top.stdout, direct.stdout, "{target}");
+        assert_eq!(top.stderr, direct.stderr, "{target}");
     }
     let blocked = run(&["shell", "install", "demo", "--yes"]);
     assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");

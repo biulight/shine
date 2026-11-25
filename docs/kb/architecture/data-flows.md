@@ -132,8 +132,7 @@ handoff construction nor prevalidation replaces Core's fresh apply-time Plan/per
 The `self_install.rs` facade delegates configuration orchestration to `self_install/config_upgrade.rs`;
 Update checks (including explicit generator evaluation), release installation and local binary
 publication have separate owners.
-Compatibility checks, env upgrade and Shell/App/Sys review/prevalidation/execution retain their
-existing order. Target routes normalize App/Shell file/command suffixes to categories, reject malformed
+Compatibility checks precede Shell/App/Sys review, prevalidation and execution. Target routes normalize App/Shell file/command suffixes to categories, reject malformed
 Sys targets and limit stale pruning to App. Selector parsing preserves literal category whitespace
 before matching; blank-operand rejection does not trim nonblank identities. The private
 `TargetUpgradeSummary` preserves each domain's
@@ -339,14 +338,14 @@ selection to `list/projection.rs`, and output to `list/render.rs`. Global and ta
 inspections for diff collection without re-evaluation. Simple Shell inventory projects only
 available/installed targets; a receipt can establish installation even when its launcher is missing.
 Managed Sys inventory uses the frontend's OS/managed receipt filter; its former test-only runtime
-query has been removed (ADR 0134). Update retains two Shell captures followed
-by App, Sys and missing-source queries before output; status prints its initial note and Shell
+query has been removed (ADR 0134). Update derives Shell display rows and lifecycle outcomes from one inspection, then queries
+App, Sys and missing sources before output; status prints its initial note and Shell
 attention before loading App/Sys, then queries missing App sources through the existing read-only
 frontend. Receipt-only App resources prevent an empty-status result and reuse the retained-content
 notice/uninstall preview; they do not enter active App rows or summary counts. Detailed diff
 collection remains after the original empty-result checks (and after initial update attention
 output). Renderers still perform the existing per-row
-diff display reads. No shared snapshot optimization, new evaluation, approval or mutation is added.
+diff display reads. Generator evaluation remains opt-in.
 
 `frontend/review.rs` dispatches typed workspace-local `ReviewRequest` values to existing pure
 planners and wraps the unchanged `PlanV1`. CLI review and preparation use this service. Neither
@@ -959,9 +958,8 @@ same per-file boundary. Receipt-save failure leaves the journal for explicit rec
 The operation visits every manifest-tracked install and cleans up stale entries
 whose preset no longer exists. `shine upgrade app/<category>` selects manifest entries before the
 stale/update loop, so no other app category can be mutated. Shell and managed-sys targeted upgrades
-apply the same pre-mutation filtering at their own category/item boundaries. `env/upgrade.rs` does
-the same for env-templated content. This is why changing an env var requires `shine upgrade` to
-take effect in installed files.
+apply the same pre-mutation filtering at their own category/item boundaries. The owning subsystems reapply templates during `shine upgrade` so installed files
+pick up changed environment values.
 
 Manifest identity for app files is the preset `source`, while ownership checks remain destination-
 based. If metadata changes a source's effective destination, upgrade journals one receipt
