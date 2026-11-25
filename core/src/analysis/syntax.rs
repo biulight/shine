@@ -895,173 +895,7 @@ pub(super) fn parse(
                 (scope.straight_line || ordered_loader)
                     .then(|| scope.capture(bindings.order.start(node)))
             };
-            let name = expression_at(function, bytes, &bindings, capture);
-            let args = node.child_by_field_name("arguments");
-            let first = args.and_then(first_operand);
-            match name.as_deref() {
-                Some(api @ ("fetch" | "https.get")) if node.kind() == "call_expression" => {
-                    if let Some(host) = args.and_then(|args| network_host(api, args, bytes)) {
-                        finding(&mut facts, node, Behavior::Network(host));
-                    } else {
-                        gap(
-                            &mut facts,
-                            file,
-                            Some(node),
-                            "code_analysis_dynamic_target",
-                            "network",
-                        );
-                    }
-                }
-                Some(
-                    "Bun.spawn"
-                    | "Bun.spawnSync"
-                    | "child_process.spawn"
-                    | "child_process.spawnSync"
-                    | "child_process.execFile"
-                    | "child_process.execFileSync"
-                    | "child_process.fork",
-                ) => {
-                    let command = first.and_then(unwrapped).and_then(|n| {
-                        if n.kind() == "array" {
-                            first_operand(n).and_then(|n| literal(n, bytes))
-                        } else {
-                            literal(n, bytes)
-                        }
-                    });
-                    let command = if name.as_deref() == Some("child_process.fork")
-                        || (name
-                            .as_deref()
-                            .is_some_and(|n| n.starts_with("child_process."))
-                            && args.is_some_and(|args| {
-                                let mut cursor = args.walk();
-                                args.named_children(&mut cursor)
-                                    .filter(|n| !n.is_extra())
-                                    .skip(1)
-                                    .any(|n| {
-                                        unwrapped(n).is_none_or(|n| {
-                                            !matches!(
-                                                n.kind(),
-                                                "array" | "arrow_function" | "function_expression"
-                                            )
-                                        })
-                                    })
-                            })) {
-                        // fork's first argument is a module, not an executable.
-                        // Node options may select a shell or another execPath.
-                        None
-                    } else {
-                        command
-                    };
-                    if let Some(command) = command {
-                        finding(&mut facts, node, Behavior::Command(command));
-                    } else {
-                        gap(
-                            &mut facts,
-                            file,
-                            Some(node),
-                            "code_analysis_dynamic_target",
-                            "command",
-                        );
-                    }
-                    gap(
-                        &mut facts,
-                        file,
-                        Some(node),
-                        "code_analysis_subprocess_effects",
-                        "command",
-                    );
-                }
-                Some("require") => {
-                    if let Some(spec) = first.and_then(|n| literal(n, bytes)) {
-                        let p = node.start_position();
-                        facts.imports.push((spec, p.row + 1, p.column + 1));
-                    } else {
-                        gap(
-                            &mut facts,
-                            file,
-                            Some(node),
-                            "code_analysis_dynamic_code",
-                            "dependency",
-                        );
-                    }
-                }
-                Some(
-                    "eval" | "import" | "child_process.exec" | "child_process.execSync" | "Bun.$",
-                ) => {
-                    gap(
-                        &mut facts,
-                        file,
-                        Some(node),
-                        "code_analysis_dynamic_code",
-                        "code",
-                    );
-                    if name
-                        .as_deref()
-                        .is_some_and(|n| n.starts_with("child_process.") || n == "Bun.$")
-                    {
-                        gap(
-                            &mut facts,
-                            file,
-                            Some(node),
-                            "code_analysis_subprocess_effects",
-                            "command",
-                        );
-                    }
-                }
-                Some(name) if file_access(name).is_some() => {
-                    file_target(
-                        &mut facts,
-                        file,
-                        node,
-                        first.and_then(|n| literal(n, bytes)),
-                        file_access(name).unwrap(),
-                    );
-                }
-                Some("Bun.file") => {
-                    // Charge file access at the method call. A stored or passed
-                    // handle may have further uses outside the modeled methods.
-                    if !outer_expression(node).parent().is_some_and(|parent| {
-                        parent.kind() == "expression_statement"
-                            || (bun_file_method(parent, bytes, &bindings, capture).is_some()
-                                && outer_expression(parent)
-                                    .parent()
-                                    .is_some_and(|call| call.kind() == "call_expression"))
-                    }) {
-                        gap(
-                            &mut facts,
-                            file,
-                            Some(node),
-                            "code_analysis_file_object",
-                            "filesystem",
-                        );
-                    }
-                }
-                _ => {
-                    if node.kind() == "call_expression"
-                        && let Some(paths) = name
-                            .as_deref()
-                            .zip(args)
-                            .and_then(|(name, args)| transfer_paths(name, args))
-                    {
-                        for (operand, access) in paths {
-                            file_target(&mut facts, file, operand, literal(operand, bytes), access);
-                        }
-                    } else if node.kind() == "call_expression"
-                        && let Some((access, path)) =
-                            bun_file_method(function, bytes, &bindings, capture)
-                    {
-                        file_target(&mut facts, file, node, path, access);
-                    } else {
-                        gap(
-                            &mut facts,
-                            file,
-                            Some(node),
-                            "code_analysis_call_unknown",
-                            "code",
-                        );
-                    }
-                }
-            }
+            record_call_effects(&mut facts, file, bytes, node, function, &bindings, capture);
         }
         if matches!(node.kind(), "member_expression" | "subscript_expression") {
             let Some(object) = node.child_by_field_name("object") else {
@@ -1122,6 +956,181 @@ pub(super) fn parse(
         }
     }
     Ok(facts)
+}
+
+fn record_call_effects(
+    facts: &mut Facts,
+    file: &str,
+    bytes: &[u8],
+    node: Node<'_>,
+    function: Node<'_>,
+    bindings: &Bindings,
+    capture: Option<Capture>,
+) {
+    let name = expression_at(function, bytes, bindings, capture);
+    let args = node.child_by_field_name("arguments");
+    let first = args.and_then(first_operand);
+    match name.as_deref() {
+        Some(api @ ("fetch" | "https.get")) if node.kind() == "call_expression" => {
+            if let Some(host) = args.and_then(|args| network_host(api, args, bytes)) {
+                finding(facts, node, Behavior::Network(host));
+            } else {
+                gap(
+                    facts,
+                    file,
+                    Some(node),
+                    "code_analysis_dynamic_target",
+                    "network",
+                );
+            }
+        }
+        Some(
+            "Bun.spawn"
+            | "Bun.spawnSync"
+            | "child_process.spawn"
+            | "child_process.spawnSync"
+            | "child_process.execFile"
+            | "child_process.execFileSync"
+            | "child_process.fork",
+        ) => {
+            let command = first.and_then(unwrapped).and_then(|n| {
+                if n.kind() == "array" {
+                    first_operand(n).and_then(|n| literal(n, bytes))
+                } else {
+                    literal(n, bytes)
+                }
+            });
+            let command = if name.as_deref() == Some("child_process.fork")
+                || (name
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with("child_process."))
+                    && args.is_some_and(|args| {
+                        let mut cursor = args.walk();
+                        args.named_children(&mut cursor)
+                            .filter(|n| !n.is_extra())
+                            .skip(1)
+                            .any(|n| {
+                                unwrapped(n).is_none_or(|n| {
+                                    !matches!(
+                                        n.kind(),
+                                        "array" | "arrow_function" | "function_expression"
+                                    )
+                                })
+                            })
+                    })) {
+                // fork's first argument is a module, not an executable.
+                // Node options may select a shell or another execPath.
+                None
+            } else {
+                command
+            };
+            if let Some(command) = command {
+                finding(facts, node, Behavior::Command(command));
+            } else {
+                gap(
+                    facts,
+                    file,
+                    Some(node),
+                    "code_analysis_dynamic_target",
+                    "command",
+                );
+            }
+            gap(
+                facts,
+                file,
+                Some(node),
+                "code_analysis_subprocess_effects",
+                "command",
+            );
+        }
+        Some("require") => {
+            if let Some(spec) = first.and_then(|n| literal(n, bytes)) {
+                let p = node.start_position();
+                facts.imports.push((spec, p.row + 1, p.column + 1));
+            } else {
+                gap(
+                    facts,
+                    file,
+                    Some(node),
+                    "code_analysis_dynamic_code",
+                    "dependency",
+                );
+            }
+        }
+        Some("eval" | "import" | "child_process.exec" | "child_process.execSync" | "Bun.$") => {
+            gap(
+                facts,
+                file,
+                Some(node),
+                "code_analysis_dynamic_code",
+                "code",
+            );
+            if name
+                .as_deref()
+                .is_some_and(|n| n.starts_with("child_process.") || n == "Bun.$")
+            {
+                gap(
+                    facts,
+                    file,
+                    Some(node),
+                    "code_analysis_subprocess_effects",
+                    "command",
+                );
+            }
+        }
+        Some(name) if file_access(name).is_some() => {
+            file_target(
+                facts,
+                file,
+                node,
+                first.and_then(|n| literal(n, bytes)),
+                file_access(name).unwrap(),
+            );
+        }
+        Some("Bun.file") => {
+            // Charge file access at the method call. A stored or passed
+            // handle may have further uses outside the modeled methods.
+            if !outer_expression(node).parent().is_some_and(|parent| {
+                parent.kind() == "expression_statement"
+                    || (bun_file_method(parent, bytes, bindings, capture).is_some()
+                        && outer_expression(parent)
+                            .parent()
+                            .is_some_and(|call| call.kind() == "call_expression"))
+            }) {
+                gap(
+                    facts,
+                    file,
+                    Some(node),
+                    "code_analysis_file_object",
+                    "filesystem",
+                );
+            }
+        }
+        _ => {
+            if node.kind() == "call_expression"
+                && let Some(paths) = name
+                    .as_deref()
+                    .zip(args)
+                    .and_then(|(name, args)| transfer_paths(name, args))
+            {
+                for (operand, access) in paths {
+                    file_target(facts, file, operand, literal(operand, bytes), access);
+                }
+            } else if node.kind() == "call_expression"
+                && let Some((access, path)) = bun_file_method(function, bytes, bindings, capture)
+            {
+                file_target(facts, file, node, path, access);
+            } else {
+                gap(
+                    facts,
+                    file,
+                    Some(node),
+                    "code_analysis_call_unknown",
+                    "code",
+                );
+            }
+        }
+    }
 }
 
 struct Alias<'tree> {
