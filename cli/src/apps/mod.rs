@@ -115,7 +115,7 @@ mod tests {
     #[cfg(unix)]
     use crate::install_core::manifest::AppManifest;
     #[cfg(unix)]
-    use crate::test_support::env_lock;
+    use crate::test_support::{TestEnvironmentGuard, env_lock};
     use tokio::fs;
 
     async fn make_temp_dir() -> std::path::PathBuf {
@@ -316,12 +316,50 @@ mod tests {
     }
 
     #[cfg(unix)]
+    async fn temp_home() -> (TestEnvironmentGuard, PathBuf) {
+        let guard = env_lock();
+        let dir = make_temp_dir().await;
+        // SAFETY: the caller keeps the environment guard until the test finishes.
+        unsafe { std::env::set_var("HOME", &dir) };
+        (guard, dir)
+    }
+
+    #[cfg(unix)]
+    async fn install_sample_app(dir: &std::path::Path) -> (Config, std::path::PathBuf) {
+        write_external_sample_app(dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install_approved(&config, Some("sample"), false, false, true)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        (config, dest)
+    }
+
+    #[cfg(unix)]
+    async fn upgrade_installed_apps(
+        config: &Config,
+        prune_stale: bool,
+    ) -> Result<AppUpgradeReport> {
+        let mut sep = crate::output::SectionSeparator::new();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            config,
+            None,
+            prune_stale,
+            false,
+            true,
+            &mut sep,
+        )
+        .await?;
+        Ok(report)
+    }
+
+    #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_skips_up_to_date_app_config() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         write_external_sample_app(
             &dir,
@@ -338,12 +376,7 @@ mod tests {
         let dest = dir.join(".config/sample/daemon.json");
         let before = fs::read(&dest).await.unwrap();
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, false, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, false).await.unwrap();
 
         assert_eq!(report.updated, 0, "up-to-date app config must not update");
         assert_eq!(report.skipped, 1, "up-to-date app config should be skipped");
@@ -355,20 +388,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_updates_app_config_when_source_changes() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
-        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
-        let dest = dir.join(".config/sample/daemon.json");
+        let (config, dest) = install_sample_app(&dir).await;
         let before = fs::read(&dest).await.unwrap();
         let manifest_before = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
@@ -380,12 +402,7 @@ mod tests {
             b"{\n  \"proxy\": \"@@PROXY_HOST@@\",\n  \"updated\": true\n}\n",
         )
         .await;
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, false, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, false).await.unwrap();
 
         assert_eq!(report.updated, 1, "changed source should update");
         assert_eq!(report.skipped, 0);
@@ -401,10 +418,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn targeted_upgrade_does_not_mutate_other_app_categories() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"one\"\n}\n").await;
         let other_dir = dir.join("presets/app/other");
@@ -461,10 +475,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn structured_app_lifecycle_covers_update_upgrade_and_target_isolation() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         write_external_sample_app(&dir, b"{\"value\":\"initial\"}\n").await;
         let other_dir = dir.join("presets/app/other");
@@ -631,10 +642,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_runs_post_upgrade_hook_after_file_update_when_allowed() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         let script = dir.join("hook.sh");
         let marker = dir.join("hook-ran");
@@ -689,10 +697,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_does_not_run_post_upgrade_hook_when_unchanged() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         let script = dir.join("hook.sh");
         let marker = dir.join("hook-ran");
@@ -712,12 +717,7 @@ mod tests {
         handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, false, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, false).await.unwrap();
 
         assert_eq!(report.updated, 0);
         assert!(!marker.exists(), "unchanged config must not run hook");
@@ -728,10 +728,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn external_post_upgrade_hook_is_skipped_without_opt_in() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         let script = dir.join("hook.sh");
         let marker = dir.join("hook-ran");
@@ -776,19 +773,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_installs_new_app_file_from_installed_category() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
-        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
+        let (config, _) = install_sample_app(&dir).await;
         write_external_sample_app_with_extra(
             &dir,
             b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
@@ -796,12 +783,7 @@ mod tests {
         )
         .await;
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, false, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, false).await.unwrap();
 
         let new_dest = dir.join(".config/sample/themes/theme.conf");
         assert_eq!(report.updated, 1, "new app file should be installed");
@@ -829,19 +811,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_skips_new_app_file_when_destination_is_unmanaged() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
-        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
+        let (config, _) = install_sample_app(&dir).await;
         write_external_sample_app_with_extra(
             &dir,
             b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
@@ -854,12 +826,7 @@ mod tests {
             .unwrap();
         fs::write(&new_dest, b"user-owned\n").await.unwrap();
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let error = handle_upgrade_installed_target_with_result_approved(
-            &config, None, false, false, true, &mut sep,
-        )
-        .await
-        .unwrap_err();
+        let error = upgrade_installed_apps(&config, false).await.unwrap_err();
 
         assert!(error.to_string().contains("Plan is blocked"));
         assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
@@ -875,38 +842,16 @@ mod tests {
     }
 
     #[cfg(unix)]
-    async fn install_sample_for_prune_test(dir: &std::path::Path) -> (Config, std::path::PathBuf) {
-        write_external_sample_app(dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
-        let dest = dir.join(".config/sample/daemon.json");
-        (config, dest)
-    }
-
-    #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_prune_stale_removes_unmodified_file_and_manifest_entry() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
-        let (config, dest) = install_sample_for_prune_test(&dir).await;
+        let (config, dest) = install_sample_app(&dir).await;
         fs::remove_dir_all(dir.join("presets/app/sample"))
             .await
             .unwrap();
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, true, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, true).await.unwrap();
 
         assert_eq!(report.updated, 1, "stale cleanup should count as a change");
         assert_eq!(report.skipped, 0);
@@ -925,23 +870,15 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_prune_stale_removes_manifest_entry_when_destination_is_missing() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
-        let (config, dest) = install_sample_for_prune_test(&dir).await;
+        let (config, dest) = install_sample_app(&dir).await;
         fs::remove_file(&dest).await.unwrap();
         fs::remove_dir_all(dir.join("presets/app/sample"))
             .await
             .unwrap();
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, true, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, true).await.unwrap();
 
         assert_eq!(report.updated, 1, "manifest cleanup should count as change");
         assert_eq!(report.skipped, 0);
@@ -959,22 +896,14 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_without_prune_keeps_stale_file_and_manifest_entry() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
-        let (config, dest) = install_sample_for_prune_test(&dir).await;
+        let (config, dest) = install_sample_app(&dir).await;
         fs::remove_dir_all(dir.join("presets/app/sample"))
             .await
             .unwrap();
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, false, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, false).await.unwrap();
 
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
@@ -993,23 +922,15 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_prune_stale_keeps_user_modified_file() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
-        let (config, dest) = install_sample_for_prune_test(&dir).await;
+        let (config, dest) = install_sample_app(&dir).await;
         fs::write(&dest, b"{\"user\":true}\n").await.unwrap();
         fs::remove_dir_all(dir.join("presets/app/sample"))
             .await
             .unwrap();
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, true, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, true).await.unwrap();
 
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
@@ -1029,10 +950,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_prune_stale_allows_renamed_source_to_reinstall_same_destination() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"old\"\n}\n").await;
         let mut config = Config::new_for_test(&dir);
@@ -1056,12 +974,7 @@ mod tests {
         .await
         .unwrap();
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, true, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, true).await.unwrap();
 
         let dest = dir.join(".config/sample/daemon.json");
         assert_eq!(
@@ -1086,28 +999,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_skips_user_modified_app_config() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
-        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
-        let dest = dir.join(".config/sample/daemon.json");
+        let (config, dest) = install_sample_app(&dir).await;
         fs::write(&dest, b"{\"user\":true}\n").await.unwrap();
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, false, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed_apps(&config, false).await.unwrap();
 
         assert_eq!(
             report.updated, 0,

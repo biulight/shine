@@ -452,13 +452,12 @@ impl Fixture {
         command
     }
 
+    fn run_ok(&self, args: &[&str]) -> Output {
+        Self::assert_ok(self.shine().args(args).output().unwrap())
+    }
+
     fn initialize(&self) {
-        Self::assert_ok(
-            self.shine()
-                .args(["env", "get", "REVIEW_TOKEN"])
-                .output()
-                .unwrap(),
-        );
+        self.run_ok(&["env", "get", "REVIEW_TOKEN"]);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -483,25 +482,14 @@ impl Drop for Fixture {
 fn env_delete_rejects_inherited_values_and_preserves_both_config_layers() {
     let fixture = Fixture::new();
     // Complete ordinary default initialization before checking deletion's write boundary.
-    Fixture::assert_ok(
-        fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
-            .arg("--config-dir")
-            .arg(fixture.state())
-            .args(["env", "get", "REVIEW_TOKEN"])
-            .output()
-            .unwrap(),
-    );
+    fixture.run_ok(&["env", "get", "REVIEW_TOKEN"]);
     let global = fixture.state().join("config.toml");
     let project = fixture.0.join("project/shine.config.toml");
     let original_global = fs::read(&global).unwrap();
     let original_project = fs::read(&project).unwrap();
     for force in [false, true] {
-        let mut command = fixture.command(Path::new(env!("CARGO_BIN_EXE_shine")));
-        command
-            .arg("--config-dir")
-            .arg(fixture.state())
-            .args(["env", "delete", "REVIEW_TOKEN"]);
+        let mut command = fixture.shine();
+        command.args(["env", "delete", "REVIEW_TOKEN"]);
         if force {
             command.arg("--force");
         }
@@ -518,30 +506,14 @@ fn env_delete_rejects_inherited_values_and_preserves_both_config_layers() {
         assert_eq!(fs::read(&global).unwrap(), original_global);
         assert_eq!(fs::read(&project).unwrap(), original_project);
     }
-    let output = Fixture::assert_ok(
-        fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
-            .arg("--config-dir")
-            .arg(fixture.state())
-            .args(["env", "get", "REVIEW_TOKEN"])
-            .output()
-            .unwrap(),
-    );
+    let output = fixture.run_ok(&["env", "get", "REVIEW_TOKEN"]);
     assert_eq!(output.stdout, b"installed-value\n");
 }
 
 #[test]
 fn env_delete_removes_project_override_and_restores_global_value() {
     let fixture = Fixture::new();
-    Fixture::assert_ok(
-        fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
-            .arg("--config-dir")
-            .arg(fixture.state())
-            .args(["env", "get", "REVIEW_TOKEN"])
-            .output()
-            .unwrap(),
-    );
+    fixture.run_ok(&["env", "get", "REVIEW_TOKEN"]);
     let global = fixture.state().join("config.toml");
     let project = fixture.0.join("project/shine.config.toml");
     let original_global = fs::read(&global).unwrap();
@@ -550,15 +522,7 @@ fn env_delete_removes_project_override_and_restores_global_value() {
         "# keep this comment\n[env]\nREVIEW_TOKEN = 'project-value'\nOTHER = 'keep'\n",
     )
     .unwrap();
-    Fixture::assert_ok(
-        fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
-            .arg("--config-dir")
-            .arg(fixture.state())
-            .args(["env", "delete", "REVIEW_TOKEN"])
-            .output()
-            .unwrap(),
-    );
+    fixture.run_ok(&["env", "delete", "REVIEW_TOKEN"]);
     assert_eq!(fs::read(&global).unwrap(), original_global);
     let contents = fs::read_to_string(&project).unwrap();
     assert!(contents.contains("# keep this comment"));
@@ -570,30 +534,14 @@ fn env_delete_removes_project_override_and_restores_global_value() {
             .contains_key("REVIEW_TOKEN")
     );
     assert_eq!(table["env"]["OTHER"].as_str(), Some("keep"));
-    let output = Fixture::assert_ok(
-        fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
-            .arg("--config-dir")
-            .arg(fixture.state())
-            .args(["env", "get", "REVIEW_TOKEN"])
-            .output()
-            .unwrap(),
-    );
+    let output = fixture.run_ok(&["env", "get", "REVIEW_TOKEN"]);
     assert_eq!(output.stdout, b"installed-value\n");
 }
 
 #[test]
 fn proxy_uses_install_state_and_still_honors_project_rules() {
     let fixture = Fixture::new();
-    Fixture::assert_ok(
-        fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
-            .arg("--config-dir")
-            .arg(fixture.state())
-            .args(["env", "proxy", "install", "probe", "--with", "REVIEW_TOKEN"])
-            .output()
-            .unwrap(),
-    );
+    fixture.run_ok(&["env", "proxy", "install", "probe", "--with", "REVIEW_TOKEN"]);
     let launcher = fixture.state().join("bin/probe");
     let output = Fixture::assert_ok(fixture.command(&launcher).output().unwrap());
     assert_eq!(output.stdout, b"installed-value");
@@ -644,13 +592,7 @@ fn task_save_rejects_lossy_cwd_without_replacing_existing_tasks() {
         );
         assert!(fs::read_dir(&replacement).unwrap().next().is_none());
     }
-    let kept = Fixture::assert_ok(
-        fixture
-            .shine()
-            .args(["task", "run", "keep"])
-            .output()
-            .unwrap(),
-    );
+    let kept = fixture.run_ok(&["task", "run", "keep"]);
     assert_eq!(kept.stdout, b"original\n");
     assert!(String::from_utf8_lossy(&kept.stderr).starts_with("Running keep:"));
     assert_eq!(fs::read(&manifest).unwrap(), original);
@@ -664,13 +606,7 @@ fn task_save_rejects_lossy_cwd_without_replacing_existing_tasks() {
             .unwrap(),
     );
     assert!(String::from_utf8_lossy(&saved.stdout).contains("Saved task valid"));
-    let valid = Fixture::assert_ok(
-        fixture
-            .shine()
-            .args(["task", "run", "valid"])
-            .output()
-            .unwrap(),
-    );
+    let valid = fixture.run_ok(&["task", "run", "valid"]);
     assert_eq!(
         valid.stdout,
         format!("{}\n", replacement.canonicalize().unwrap().display()).as_bytes()
@@ -693,10 +629,8 @@ fn sudo_home_uses_system_account_instead_of_root_home() {
         .unwrap();
     Fixture::assert_ok(
         fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .shine()
             .env("SUDO_USER", account)
-            .arg("--config-dir")
-            .arg(fixture.state())
             .args([
                 "task",
                 "save",
@@ -746,10 +680,8 @@ if [ "$mode" = --decrypt ]; then cat "$last"; else cat; fi
     let redirected = fixture.0.join("redirected-output");
     Fixture::assert_ok(
         fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .shine()
             .env("REVIEW_GPG_OUTPUT", &redirected)
-            .arg("--config-dir")
-            .arg(fixture.state())
             .args(["env", "secret", "seal"])
             .arg(&source)
             .args(["--backend", "gpg", "-r", "review"])
@@ -769,10 +701,8 @@ if [ "$mode" = --decrypt ]; then cat "$last"; else cat; fi
     .unwrap();
     let output = Fixture::assert_ok(
         fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .shine()
             .env("REVIEW_GPG_OUTPUT", &redirected)
-            .arg("--config-dir")
-            .arg(fixture.state())
             .args(["env", "secret", "decrypt", "CIPHER"])
             .output()
             .unwrap(),
@@ -793,9 +723,7 @@ fn empty_gpg_ciphertext_preserves_pending_source() {
     let original = b"version = 1\n[secret]\nTOKEN = 'pending-value'\n";
     fs::write(&source, original).unwrap();
     let output = fixture
-        .command(Path::new(env!("CARGO_BIN_EXE_shine")))
-        .arg("--config-dir")
-        .arg(fixture.state())
+        .shine()
         .args(["env", "secret", "seal"])
         .arg(&source)
         .args(["--backend", "gpg", "-r", "review"])
@@ -814,34 +742,12 @@ fn empty_gpg_ciphertext_preserves_pending_source() {
 fn concurrent_task_saves_preserve_every_successful_update() {
     let fixture = Fixture::new();
     // Initialize once so this test isolates task persistence from config bootstrapping.
-    Fixture::assert_ok(
-        fixture
-            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
-            .arg("--config-dir")
-            .arg(fixture.state())
-            .args(["env", "get", "REVIEW_TOKEN"])
-            .output()
-            .unwrap(),
-    );
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    fs::write(
-        fixture.state().join("update-check.json"),
-        format!(
-            r#"{{"latest_version":"{}","checked_at_unix_secs":{now}}}"#,
-            env!("CARGO_PKG_VERSION")
-        ),
-    )
-    .unwrap();
+    fixture.initialize();
     let mut children = Vec::new();
     for index in 0..32 {
         children.push(
             fixture
-                .command(Path::new(env!("CARGO_BIN_EXE_shine")))
-                .arg("--config-dir")
-                .arg(fixture.state())
+                .shine()
                 .args([
                     "task",
                     "save",

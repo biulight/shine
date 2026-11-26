@@ -1550,6 +1550,7 @@ fn valid_managed_json_keys(keys: &[String]) -> bool {
 mod tests {
     use super::*;
     use crate::install::hash_content;
+    use FilesystemAccessV1::{Remove, Write};
 
     #[test]
     fn profile_only_boundary_is_exclusive_and_only_removes_identified_files() {
@@ -1739,10 +1740,30 @@ mod tests {
         assert!(!first.contains("super-secret-managed-bytes"));
     }
 
+    fn absolute_permissions(ir: &ActionIrV1) -> ActionPermissionRequirementsV1 {
+        ir.permission_requirements(|path| format!("absolute:{}", path.display()))
+    }
+
+    #[track_caller]
+    fn assert_file_permissions(
+        requirements: &ActionPermissionRequirementsV1,
+        expected: &[(FilesystemAccessV1, &Path)],
+    ) {
+        for &(access, path) in expected {
+            let permission = PermissionV1::Filesystem {
+                access,
+                path: format!("absolute:{}", path.display()),
+            };
+            assert!(
+                requirements.required.contains(&permission),
+                "missing {permission:?}"
+            );
+        }
+    }
+
     #[test]
     fn action_permissions_are_derived_from_the_executable_kind() {
-        let requirements =
-            ir().permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
+        let requirements = absolute_permissions(&ir());
         assert!(requirements.uncomputable_codes.is_empty());
         assert!(requirements.required.contains(&PermissionV1::Filesystem {
             access: FilesystemAccessV1::Write,
@@ -1782,20 +1803,36 @@ mod tests {
         assert!(!encoded.contains("desired-private-bytes"));
         let decoded: ActionIrV1 = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded, value);
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.display()));
-        for (access, path) in [
-            (FilesystemAccessV1::Remove, &previous),
-            (FilesystemAccessV1::Write, &desired),
-            (FilesystemAccessV1::Write, &rollback),
-            (FilesystemAccessV1::Remove, &rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Remove, &previous),
+                (Write, &desired),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
         assert!(requirements.required.contains(&PermissionV1::Administrator));
+    }
+
+    fn snapshot_launcher_receipt(source: &[u8]) -> ShellLauncherReceiptV1 {
+        ShellLauncherReceiptV1 {
+            launcher_format: None,
+            launcher_config_dir: None,
+            category: "demo".to_string(),
+            command: "demo".to_string(),
+            mode: "snapshot".to_string(),
+            source_path: PathBuf::from("/home/test/.shine/installed/shell/demo/demo.sh"),
+            rendered_path: PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh"),
+            runtime: "native".to_string(),
+            bun_dependencies: None,
+            dependency_hash: None,
+            transforms: Vec::new(),
+            env: Vec::new(),
+            needs_source: false,
+            content_hash: hash_content(source),
+        }
     }
 
     #[test]
@@ -1808,23 +1845,7 @@ mod tests {
                 "create-launcher",
                 "shell/demo/demo",
                 "launcher",
-                ShellLauncherReceiptV1 {
-                    launcher_format: None,
-                    launcher_config_dir: None,
-
-                    category: "demo".to_string(),
-                    command: "demo".to_string(),
-                    mode: "snapshot".to_string(),
-                    source_path: PathBuf::from("/home/test/.shine/installed/shell/demo/demo.sh"),
-                    rendered_path: PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh"),
-                    runtime: "native".to_string(),
-                    bun_dependencies: None,
-                    dependency_hash: None,
-                    transforms: Vec::new(),
-                    env: Vec::new(),
-                    needs_source: false,
-                    content_hash: hash_content(b"source bytes"),
-                },
+                snapshot_launcher_receipt(b"source bytes"),
                 vec![
                     ShellLauncherResourceV1::File {
                         destination: ps1.clone(),
@@ -1843,37 +1864,15 @@ mod tests {
         let encoded = toml::to_string(&value).unwrap();
         assert!(!encoded.contains("private ps1 launcher bytes"));
         assert!(!encoded.contains("private cmd launcher bytes"));
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.display()));
-        for destination in [ps1, cmd] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access: FilesystemAccessV1::Write,
-                path: format!("absolute:{}", destination.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(&requirements, &[(Write, &ps1), (Write, &cmd)]);
     }
 
     #[test]
     fn shell_launcher_update_is_payload_free_and_derives_rollback_permissions() {
         let destination = PathBuf::from("/home/test/.shine/bin/demo");
         let rollback = managed_file_rollback_path(&destination);
-        let previous_receipt = ShellLauncherReceiptV1 {
-            launcher_format: None,
-            launcher_config_dir: None,
-
-            category: "demo".to_string(),
-            command: "demo".to_string(),
-            mode: "snapshot".to_string(),
-            source_path: PathBuf::from("/home/test/.shine/installed/shell/demo/demo.sh"),
-            rendered_path: PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh"),
-            runtime: "native".to_string(),
-            bun_dependencies: None,
-            dependency_hash: None,
-            transforms: Vec::new(),
-            env: Vec::new(),
-            needs_source: false,
-            content_hash: hash_content(b"old source"),
-        };
+        let previous_receipt = snapshot_launcher_receipt(b"old source");
         let mut desired_receipt = previous_receipt.clone();
         desired_receipt.runtime = "bun".to_string();
         desired_receipt.content_hash = hash_content(b"new source");
@@ -1902,19 +1901,16 @@ mod tests {
         value.validate().unwrap();
         let encoded = toml::to_string(&value).unwrap();
         assert!(!encoded.contains("private replacement launcher bytes"));
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.display()));
-        for (access, path) in [
-            (FilesystemAccessV1::Write, &destination),
-            (FilesystemAccessV1::Remove, &destination),
-            (FilesystemAccessV1::Write, &rollback),
-            (FilesystemAccessV1::Remove, &rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Write, &destination),
+                (Remove, &destination),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
     }
 
     #[test]
@@ -1927,23 +1923,7 @@ mod tests {
                 "remove-launcher",
                 "shell/demo/demo",
                 "launcher",
-                ShellLauncherReceiptV1 {
-                    launcher_format: None,
-                    launcher_config_dir: None,
-
-                    category: "demo".to_string(),
-                    command: "demo".to_string(),
-                    mode: "snapshot".to_string(),
-                    source_path: PathBuf::from("/home/test/.shine/installed/shell/demo/demo.sh"),
-                    rendered_path: PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh"),
-                    runtime: "native".to_string(),
-                    bun_dependencies: None,
-                    dependency_hash: None,
-                    transforms: Vec::new(),
-                    env: Vec::new(),
-                    needs_source: false,
-                    content_hash: hash_content(b"private source bytes"),
-                },
+                snapshot_launcher_receipt(b"private source bytes"),
                 vec![ShellLauncherRemovalResourceV1 {
                     previous: ShellLauncherResourceV1::Symlink {
                         destination: destination.clone(),
@@ -1956,18 +1936,15 @@ mod tests {
         value.validate().unwrap();
         let encoded = toml::to_string(&value).unwrap();
         assert!(!encoded.contains("private source bytes"));
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.display()));
-        for (access, path) in [
-            (FilesystemAccessV1::Remove, &destination),
-            (FilesystemAccessV1::Write, &rollback),
-            (FilesystemAccessV1::Remove, &rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Remove, &destination),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
     }
 
     #[test]
@@ -1999,21 +1976,10 @@ mod tests {
         let destination = PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh");
         let rollback = managed_file_rollback_path(&destination);
         let receipt = ShellLauncherReceiptV1 {
-            launcher_format: None,
-            launcher_config_dir: None,
-
-            category: "demo".to_string(),
-            command: "demo".to_string(),
-            mode: "snapshot".to_string(),
             source_path: PathBuf::from("/home/test/.shine/presets/shell/demo/demo.sh"),
             rendered_path: destination.clone(),
-            runtime: "native".to_string(),
-            bun_dependencies: None,
-            dependency_hash: None,
             transforms: vec!["template".to_string()],
-            env: Vec::new(),
-            needs_source: false,
-            content_hash: hash_content(b"private source bytes"),
+            ..snapshot_launcher_receipt(b"private source bytes")
         };
         let value = ActionIrV1::new(
             "shell-rendered",
@@ -2043,19 +2009,16 @@ mod tests {
         let encoded = toml::to_string(&value).unwrap();
         assert!(!encoded.contains("private previous rendered bytes"));
         assert!(!encoded.contains("private desired rendered bytes"));
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.display()));
-        for (access, path) in [
-            (FilesystemAccessV1::Write, &destination),
-            (FilesystemAccessV1::Remove, &destination),
-            (FilesystemAccessV1::Write, &rollback),
-            (FilesystemAccessV1::Remove, &rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Write, &destination),
+                (Remove, &destination),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
     }
 
     #[test]
@@ -2063,21 +2026,11 @@ mod tests {
         let destination = PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh");
         let rollback = managed_file_rollback_path(&destination);
         let receipt = ShellLauncherReceiptV1 {
-            launcher_format: None,
-            launcher_config_dir: None,
-
-            category: "demo".to_string(),
-            command: "demo".to_string(),
             mode: "live".to_string(),
             source_path: PathBuf::from("/home/test/presets/shell/demo/demo.sh"),
             rendered_path: destination.clone(),
-            runtime: "native".to_string(),
-            bun_dependencies: None,
-            dependency_hash: None,
             transforms: vec!["template".to_string()],
-            env: Vec::new(),
-            needs_source: false,
-            content_hash: hash_content(b"private source bytes"),
+            ..snapshot_launcher_receipt(b"private source bytes")
         };
         let value = ActionIrV1::new(
             "shell-rendered-remove",
@@ -2103,18 +2056,15 @@ mod tests {
         assert!(!encoded.contains("private rendered bytes"));
         let decoded: ActionIrV1 = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded, value);
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.display()));
-        for (access, path) in [
-            (FilesystemAccessV1::Remove, &destination),
-            (FilesystemAccessV1::Write, &rollback),
-            (FilesystemAccessV1::Remove, &rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Remove, &destination),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
     }
 
     #[test]
@@ -2122,21 +2072,8 @@ mod tests {
         let destination = PathBuf::from("/home/test/.shine/presets/shell/demo/demo.sh");
         let rollback = managed_file_rollback_path(&destination);
         let receipt = ShellLauncherReceiptV1 {
-            launcher_format: None,
-            launcher_config_dir: None,
-
-            category: "demo".to_string(),
-            command: "demo".to_string(),
-            mode: "snapshot".to_string(),
             source_path: destination.clone(),
-            rendered_path: PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh"),
-            runtime: "native".to_string(),
-            bun_dependencies: None,
-            dependency_hash: None,
-            transforms: Vec::new(),
-            env: Vec::new(),
-            needs_source: false,
-            content_hash: hash_content(b"private desired cache bytes"),
+            ..snapshot_launcher_receipt(b"private desired cache bytes")
         };
         let value = ActionIrV1::new(
             "shell-cache",
@@ -2169,19 +2106,16 @@ mod tests {
         let encoded = toml::to_string(&value).unwrap();
         assert!(!encoded.contains("private previous cache bytes"));
         assert!(!encoded.contains("private desired cache bytes"));
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.display()));
-        for (access, path) in [
-            (FilesystemAccessV1::Write, &destination),
-            (FilesystemAccessV1::Remove, &destination),
-            (FilesystemAccessV1::Write, &rollback),
-            (FilesystemAccessV1::Remove, &rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Write, &destination),
+                (Remove, &destination),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
     }
 
     #[test]
@@ -2204,8 +2138,7 @@ mod tests {
             )],
         );
 
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.display()));
+        let requirements = absolute_permissions(&value);
         assert!(requirements.required.contains(&PermissionV1::Administrator));
     }
 
@@ -2233,25 +2166,16 @@ mod tests {
         assert!(!encoded.contains("private-original"));
         assert!(!encoded.contains("private-managed"));
 
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
+        let requirements = absolute_permissions(&value);
         assert!(requirements.uncomputable_codes.is_empty());
-        for permission in [
-            PermissionV1::Filesystem {
-                access: FilesystemAccessV1::Write,
-                path: format!("absolute:{}", destination.display()),
-            },
-            PermissionV1::Filesystem {
-                access: FilesystemAccessV1::Remove,
-                path: format!("absolute:{}", destination.display()),
-            },
-            PermissionV1::Filesystem {
-                access: FilesystemAccessV1::Write,
-                path: format!("absolute:{}", backup.display()),
-            },
-        ] {
-            assert!(requirements.required.contains(&permission));
-        }
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Write, &destination),
+                (Remove, &destination),
+                (Write, &backup),
+            ],
+        );
     }
 
     #[test]
@@ -2281,19 +2205,16 @@ mod tests {
         assert!(!encoded.contains("private-previous-managed"));
         assert!(!encoded.contains("private-next-managed"));
 
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
-        for (access, path) in [
-            (FilesystemAccessV1::Write, destination.clone()),
-            (FilesystemAccessV1::Remove, destination),
-            (FilesystemAccessV1::Write, rollback.clone()),
-            (FilesystemAccessV1::Remove, rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Write, &destination),
+                (Remove, &destination),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
     }
 
     #[test]
@@ -2319,18 +2240,15 @@ mod tests {
         let encoded = toml::to_string(&value).unwrap();
         assert!(!encoded.contains("private-managed"));
 
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
-        for (access, path) in [
-            (FilesystemAccessV1::Remove, destination),
-            (FilesystemAccessV1::Write, rollback.clone()),
-            (FilesystemAccessV1::Remove, rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Remove, &destination),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
         assert!(requirements.required.contains(&PermissionV1::Administrator));
     }
 
@@ -2362,20 +2280,17 @@ mod tests {
         assert!(!encoded.contains("private-managed"));
         assert!(!encoded.contains("private-user-original"));
 
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
-        for (access, path) in [
-            (FilesystemAccessV1::Write, destination.clone()),
-            (FilesystemAccessV1::Remove, destination),
-            (FilesystemAccessV1::Remove, backup),
-            (FilesystemAccessV1::Write, rollback.clone()),
-            (FilesystemAccessV1::Remove, rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Write, &destination),
+                (Remove, &destination),
+                (Remove, &backup),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
     }
 
     #[test]
@@ -2410,19 +2325,16 @@ mod tests {
         assert!(!encoded.contains("private-user-modification"));
         assert!(!encoded.contains("private-user-original"));
 
-        let requirements =
-            value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
-        for (access, path) in [
-            (FilesystemAccessV1::Write, destination.clone()),
-            (FilesystemAccessV1::Remove, destination),
-            (FilesystemAccessV1::Remove, backup),
-            (FilesystemAccessV1::Write, rollback.clone()),
-            (FilesystemAccessV1::Remove, rollback),
-        ] {
-            assert!(requirements.required.contains(&PermissionV1::Filesystem {
-                access,
-                path: format!("absolute:{}", path.display()),
-            }));
-        }
+        let requirements = absolute_permissions(&value);
+        assert_file_permissions(
+            &requirements,
+            &[
+                (Write, &destination),
+                (Remove, &destination),
+                (Remove, &backup),
+                (Write, &rollback),
+                (Remove, &rollback),
+            ],
+        );
     }
 }

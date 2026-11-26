@@ -352,6 +352,26 @@ fn approved_forced_remove_plan(
     (plan, approval)
 }
 
+#[track_caller]
+fn assert_recovery_step(plan: &PlanV1, action: PlanActionV1, code: &str) {
+    assert!(
+        plan.steps.iter().any(|step| step.action == action
+            && step.diagnostic_codes.iter().any(|actual| actual == code)),
+        "missing {action:?} step with diagnostic {code}"
+    );
+}
+
+async fn approve_and_recover(
+    runtime: &CoreRuntime<InMemoryHost>,
+    plan: &PlanV1,
+) -> AppRecoveryReportV1 {
+    let approval = PlanApprovalV1::for_reviewed_plan(plan).unwrap();
+    runtime
+        .recover_app_operation_approved(&approval)
+        .await
+        .unwrap()
+}
+
 async fn save_matching_receipt(runtime: &CoreRuntime<InMemoryHost>, content: &[u8]) {
     save_matching_receipt_with_backup(runtime, content, None).await;
 }
@@ -580,11 +600,7 @@ async fn interrupted_creation_rolls_back_only_after_a_fresh_recovery_plan() {
     );
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert_eq!(recovery_plan.operation, PlanOperationV1::AppRecovery);
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let recovered = runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(recovered.rolled_back_actions, vec!["action-1"]);
     assert!(
         runtime
@@ -621,11 +637,7 @@ async fn recovery_preserves_a_created_file_after_its_receipt_is_durable() {
                 .diagnostic_codes
                 .contains(&"app_recovery_clear_journal".to_string())
     }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let recovered = runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert!(recovered.rolled_back_actions.is_empty());
     assert_eq!(
         runtime
@@ -699,12 +711,11 @@ async fn creation_recovery_blocks_a_symlink_even_when_target_bytes_match() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_user_modified".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Blocked,
+        "app_recovery_user_modified",
+    );
     assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
 }
 
@@ -768,17 +779,12 @@ async fn failed_backup_rename_leaves_original_and_recovery_clears_journal() {
     );
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::None
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_backup_creation_not_started".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::None,
+        "app_recovery_backup_creation_not_started",
+    );
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&backup).await.is_err());
 }
@@ -804,17 +810,12 @@ async fn interruption_after_backup_rename_restores_original() {
     assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_backup".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_backup",
+    );
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&backup).await.is_err());
 }
@@ -843,11 +844,7 @@ async fn interruption_after_managed_write_removes_it_before_restoring_backup() {
     assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&backup).await.is_err());
 }
@@ -880,11 +877,7 @@ async fn privileged_backup_creation_recovery_uses_privileged_paths() {
             .required
             .contains(&PermissionV1::Administrator)
     );
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&backup).await.is_err());
     let operations = runtime.host().operations();
@@ -920,12 +913,11 @@ async fn backup_recovery_blocks_when_either_path_changed() {
 
         let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
         assert!(!recovery_plan.is_ready());
-        assert!(recovery_plan.steps.iter().any(|step| {
-            step.action == PlanActionV1::Blocked
-                && step
-                    .diagnostic_codes
-                    .contains(&"app_recovery_backup_state_changed".to_string())
-        }));
+        assert_recovery_step(
+            &recovery_plan,
+            PlanActionV1::Blocked,
+            "app_recovery_backup_state_changed",
+        );
         assert_eq!(
             runtime
                 .host()
@@ -965,12 +957,11 @@ async fn backup_recovery_blocks_a_symlink_even_when_target_bytes_match() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_backup_state_changed".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Blocked,
+        "app_recovery_backup_state_changed",
+    );
     assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
     assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
 }
@@ -992,11 +983,7 @@ async fn recovery_preserves_backup_creation_after_receipt_is_durable() {
     save_matching_receipt_with_backup(&runtime, content, Some(backup.clone())).await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let recovered = runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert!(recovered.rolled_back_actions.is_empty());
     assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
     assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
@@ -1020,12 +1007,11 @@ async fn backup_recovery_blocks_on_a_mismatched_ownership_receipt() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_receipt_conflict".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Blocked,
+        "app_recovery_receipt_conflict",
+    );
     assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
     assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
 }
@@ -1173,17 +1159,12 @@ async fn interrupted_managed_update_restores_previous_receipt_bytes() {
     );
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_previous_managed_file".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let recovered = runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_previous_managed_file",
+    );
+    let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(recovered.rolled_back_actions, vec!["action-update"]);
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -1211,12 +1192,11 @@ async fn managed_update_recovery_blocks_changed_rollback_material() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_rollback_state_changed".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Blocked,
+        "app_recovery_rollback_state_changed",
+    );
     assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
     assert_eq!(
         runtime.host().read(&rollback).await.unwrap(),
@@ -1246,12 +1226,11 @@ async fn managed_update_recovery_blocks_a_rollback_mode_change() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_rollback_state_changed".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Blocked,
+        "app_recovery_rollback_state_changed",
+    );
     assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
     assert_eq!(runtime.host().read(&rollback).await.unwrap(), original);
 }
@@ -1274,17 +1253,12 @@ async fn recovery_after_update_receipt_commit_cleans_only_rollback_material() {
     save_matching_receipt(&runtime, content).await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Remove
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_remove_committed_rollback".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let recovered = runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Remove,
+        "app_recovery_remove_committed_rollback",
+    );
+    let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert!(recovered.rolled_back_actions.is_empty());
     assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -1328,11 +1302,7 @@ async fn interrupted_json_update_restores_only_managed_keys() {
         step.diagnostic_codes
             .contains(&"app_recovery_restore_json_managed_keys".to_string())
     }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover(&runtime, &recovery_plan).await;
 
     let restored = runtime.host().read(&destination).await.unwrap();
     let restored = parse_json_object(&restored, "test JSON").unwrap();
@@ -1363,11 +1333,7 @@ async fn interrupted_json_creation_removes_only_created_keys() {
     );
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover(&runtime, &recovery_plan).await;
     let restored = runtime.host().read(&destination).await.unwrap();
     let restored = parse_json_object(&restored, "test JSON").unwrap();
     assert_eq!(restored["theme"], "dark");
@@ -1399,11 +1365,7 @@ async fn interrupted_json_removal_restores_receipt_and_only_managed_keys() {
         .put_file(&destination, br#"{"theme":"dark","zoom":3}"#.to_vec());
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover(&runtime, &recovery_plan).await;
     let restored = runtime.host().read(&destination).await.unwrap();
     let restored = parse_json_object(&restored, "test JSON").unwrap();
     assert_eq!(restored["proxy"]["mode"], "managed");
@@ -1477,11 +1439,7 @@ async fn committed_json_removal_cleanup_preserves_new_user_owned_keys() {
     );
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(
         runtime.host().read(&destination).await.unwrap(),
         br#"{"proxy":"user-owned","theme":"dark"}"#
@@ -1548,17 +1506,12 @@ async fn interrupted_forced_removal_restores_modified_file_and_receipt() {
     );
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_forced_managed_file".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let recovered = runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_forced_managed_file",
+    );
+    let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(recovered.rolled_back_actions, vec!["action-forced-remove"]);
     assert_eq!(runtime.host().read(&destination).await.unwrap(), current);
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -1589,17 +1542,12 @@ async fn forced_removal_receipt_gap_restores_modified_file_and_receipt() {
     remove_matching_receipt(&runtime).await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_forced_managed_file".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_forced_managed_file",
+    );
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), current);
     assert!(runtime.host().read(&rollback).await.is_err());
     let (manifest, _) = load_app_manifest_receipts(runtime.host(), &runtime.context().shine_dir)
@@ -1639,17 +1587,12 @@ async fn committed_forced_removal_recovery_cleans_only_exact_rollback() {
         .unwrap();
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Remove
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_remove_committed_forced_rollback".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let recovered = runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Remove,
+        "app_recovery_remove_committed_forced_rollback",
+    );
+    let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert!(recovered.rolled_back_actions.is_empty());
     assert!(runtime.host().read(&destination).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -1679,12 +1622,11 @@ async fn forced_removal_recovery_blocks_changed_modified_rollback() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_forced_removal_state_changed".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Blocked,
+        "app_recovery_forced_removal_state_changed",
+    );
     assert!(runtime.host().read(&destination).await.is_err());
     assert_eq!(
         runtime.host().read(&rollback).await.unwrap(),
@@ -1753,17 +1695,12 @@ async fn interrupted_forced_backup_removal_restores_modified_file_and_backup() {
     );
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_forced_file_and_backup".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_forced_file_and_backup",
+    );
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), current);
     assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -1811,11 +1748,7 @@ async fn interrupted_privileged_removal_requires_admin_and_uses_privileged_recov
             .required
             .contains(&PermissionV1::Administrator)
     );
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
     assert!(runtime.host().read(&rollback).await.is_err());
     assert!(
@@ -1877,23 +1810,18 @@ async fn privileged_removal_receipt_only_recovery_does_not_request_admin() {
     remove_matching_receipt(&runtime).await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_removed_receipt".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_removed_receipt",
+    );
     assert!(
         !recovery_plan
             .permissions
             .required
             .contains(&PermissionV1::Administrator)
     );
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
     let (manifest, _) = load_app_manifest_receipts(runtime.host(), &runtime.context().shine_dir)
         .await
@@ -1973,17 +1901,12 @@ async fn interrupted_managed_removal_restores_file_while_receipt_remains() {
     assert_eq!(runtime.host().read(&rollback).await.unwrap(), original);
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_removed_managed_file".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let recovered = runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_removed_managed_file",
+    );
+    let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(recovered.rolled_back_actions, vec!["action-remove"]);
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -2007,17 +1930,12 @@ async fn removal_receipt_absence_without_marker_rolls_back_file_and_receipt() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_removed_file_and_receipt".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_removed_file_and_receipt",
+    );
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&rollback).await.is_err());
     let (manifest, _) = load_app_manifest_receipts(runtime.host(), &runtime.context().shine_dir)
@@ -2055,17 +1973,12 @@ async fn removal_receipt_commit_marker_allows_rollback_cleanup() {
         .unwrap();
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Remove
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_remove_committed_removal_rollback".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let recovered = runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Remove,
+        "app_recovery_remove_committed_removal_rollback",
+    );
+    let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert!(recovered.rolled_back_actions.is_empty());
     assert!(runtime.host().read(&destination).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -2142,17 +2055,12 @@ async fn interruption_between_removal_renames_restores_managed_file() {
     assert_eq!(runtime.host().read(&rollback).await.unwrap(), managed);
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_backup_removal_managed_file".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_backup_removal_managed_file",
+    );
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
     assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -2186,11 +2094,7 @@ async fn interruption_after_backup_restoration_recreates_pre_uninstall_state() {
     assert_eq!(runtime.host().read(&rollback).await.unwrap(), managed);
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
     assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -2216,17 +2120,12 @@ async fn backup_removal_receipt_gap_restores_file_backup_and_receipt() {
     remove_matching_receipt(&runtime).await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_restore_backup_removal_file_and_backup".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Update,
+        "app_recovery_restore_backup_removal_file_and_backup",
+    );
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
     assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -2269,17 +2168,12 @@ async fn committed_backup_removal_recovery_keeps_user_file_and_cleans_rollback()
         .unwrap();
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Remove
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_remove_committed_backup_removal_rollback".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Remove,
+        "app_recovery_remove_committed_backup_removal_rollback",
+    );
+    approve_and_recover(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&backup).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -2310,12 +2204,11 @@ async fn backup_removal_recovery_blocks_changed_restored_user_file() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_backup_removal_state_changed".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Blocked,
+        "app_recovery_backup_removal_state_changed",
+    );
     assert_eq!(
         runtime.host().read(&destination).await.unwrap(),
         b"user-changed-after-restore"
@@ -2349,12 +2242,11 @@ async fn backup_removal_recovery_blocks_a_restored_user_file_mode_change() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_backup_removal_state_changed".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Blocked,
+        "app_recovery_backup_removal_state_changed",
+    );
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
 }
 
@@ -2379,12 +2271,11 @@ async fn managed_removal_recovery_blocks_changed_rollback_material() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_recovery_removal_state_changed".to_string())
-    }));
+    assert_recovery_step(
+        &recovery_plan,
+        PlanActionV1::Blocked,
+        "app_recovery_removal_state_changed",
+    );
     assert!(runtime.host().read(&destination).await.is_err());
     assert_eq!(
         runtime.host().read(&rollback).await.unwrap(),

@@ -396,38 +396,35 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::{make_temp_dir, restore_current_dir};
+    use super::super::test_util::make_temp_dir;
     use super::*;
     use crate::config::CURRENT_RUNTIME_SCHEMA_VERSION;
-    use crate::test_support::env_lock;
+    use crate::test_support::{TestEnvironmentGuard, env_lock};
+    use std::path::Path;
 
-    #[allow(clippy::await_holding_lock)]
+    fn set_config_dir(_guard: &TestEnvironmentGuard, path: &Path) {
+        // SAFETY: the caller holds the environment lock until the test environment is restored.
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", path) };
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn load_or_init_creates_bin_dir() {
-        let _guard = env_lock();
+        let guard = env_lock();
         let dir = make_temp_dir().await;
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+        set_config_dir(&guard, &dir);
 
         let config = Config::load_or_init().await.unwrap();
         assert!(config.bin_dir().exists(), "bin dir should be created");
         assert_eq!(config.bin_dir(), dir.join("bin"));
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn load_or_init_creates_env_table_in_config() {
-        let _guard = env_lock();
+        let guard = env_lock();
         let dir = make_temp_dir().await;
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+        set_config_dir(&guard, &dir);
 
         let config = Config::load_or_init().await.unwrap();
 
@@ -442,67 +439,48 @@ mod tests {
             "config.toml should contain [env]"
         );
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn load_or_init_keeps_missing_env_defaults_runtime_only() {
-        let _guard = env_lock();
+        let guard = env_lock();
         let dir = make_temp_dir().await;
         fs::write(dir.join("config.toml"), "[env]\nCUSTOM = \"kept\"\n")
             .await
             .unwrap();
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+        set_config_dir(&guard, &dir);
 
         let config = Config::load_or_init().await.unwrap();
 
         assert_eq!(config.env.get("CUSTOM").map(String::as_str), Some("kept"));
-        assert_eq!(
-            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
-            Some("6152")
-        );
-        assert_eq!(
-            config.env.get("SOCKS5_PROXY_PORT").map(String::as_str),
-            Some("6153")
-        );
-        assert_eq!(
-            config.env.get("IMAGE_QUALITY").map(String::as_str),
-            Some("80")
-        );
-        assert_eq!(
-            config.env.get("IMAGE_MAX_WIDTH").map(String::as_str),
-            Some("1920")
-        );
-        assert_eq!(
-            config.env.get("IMAGE_MAX_HEIGHT").map(String::as_str),
-            Some("1080")
-        );
         let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
         assert!(content.contains("CUSTOM = \"kept\""));
-        assert!(!content.contains("HTTP_PROXY_PORT = \"6152\""));
-        assert!(!content.contains("SOCKS5_PROXY_PORT = \"6153\""));
-        assert!(!content.contains("IMAGE_QUALITY = \"80\""));
-        assert!(!content.contains("IMAGE_MAX_WIDTH = \"1920\""));
-        assert!(!content.contains("IMAGE_MAX_HEIGHT = \"1080\""));
+        for (key, value) in [
+            ("HTTP_PROXY_PORT", "6152"),
+            ("SOCKS5_PROXY_PORT", "6153"),
+            ("IMAGE_QUALITY", "80"),
+            ("IMAGE_MAX_WIDTH", "1920"),
+            ("IMAGE_MAX_HEIGHT", "1080"),
+        ] {
+            assert_eq!(
+                config.env.get(key).map(String::as_str),
+                Some(value),
+                "{key}"
+            );
+            assert!(
+                !content.contains(&format!("{key} = \"{value}\"")),
+                "unexpected persisted default {key}"
+            );
+        }
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn load_or_init_discovers_project_config_from_child_dir() {
-        let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         let child_dir = project_dir.join("presets/shell/proxy");
         fs::create_dir_all(&child_dir).await.unwrap();
@@ -526,9 +504,7 @@ mod tests {
         .await
         .unwrap();
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        set_config_dir(&guard, &state_dir);
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
@@ -561,19 +537,14 @@ mod tests {
             Some("dotenv")
         );
 
-        restore_current_dir(&original_dir);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn load_global_runtime_ignores_project_config() {
-        let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         let child_dir = project_dir.join("subdir");
         fs::create_dir_all(&child_dir).await.unwrap();
@@ -591,9 +562,7 @@ mod tests {
         .await
         .unwrap();
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        set_config_dir(&guard, &state_dir);
         std::env::set_current_dir(&child_dir).unwrap();
 
         let config = Config::load_global_runtime(true).await.unwrap();
@@ -608,49 +577,36 @@ mod tests {
         assert_eq!(config.last_cleared_schema_version, Some(0));
         assert_eq!(config.shine_dir(), state_dir);
 
-        restore_current_dir(&original_dir);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn load_global_runtime_for_dry_run_does_not_create_state() {
-        let _guard = env_lock();
+        let guard = env_lock();
         let dir = std::env::temp_dir().join(format!("shine-dry-run-{}", uuid::Uuid::new_v4()));
         assert!(!dir.exists());
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+        set_config_dir(&guard, &dir);
 
         let config = Config::load_global_runtime_for_dry_run().await.unwrap();
 
         assert_eq!(config.config_path(), dir.join("config.toml"));
         assert_eq!(config.schema_version, CURRENT_RUNTIME_SCHEMA_VERSION);
         assert!(!dir.exists(), "dry-run loader must not create state dir");
-
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn load_global_runtime_for_dry_run_ignores_removed_global_env_file() {
-        let _guard = env_lock();
+        let guard = env_lock();
         let dir = make_temp_dir().await;
         let removed_path = dir.join("env.toml");
         fs::write(&removed_path, "CUSTOM_TOKEN = \"abc\"\n")
             .await
             .unwrap();
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+        set_config_dir(&guard, &dir);
 
         let config = Config::load_global_runtime_for_dry_run().await.unwrap();
 
@@ -658,16 +614,12 @@ mod tests {
         assert!(removed_path.exists());
         assert!(!dir.join("config.toml").exists());
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn global_config_with_presets_dir_remains_global_config() {
-        let _guard = env_lock();
+        let guard = env_lock();
         let home_dir = make_temp_dir().await;
         let shine_dir = home_dir.join(".shine");
         let child_dir = shine_dir.join("presets/shell/proxy");
@@ -684,15 +636,12 @@ mod tests {
         .await
         .unwrap();
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("HOME", home_dir.to_str().unwrap()) };
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        // SAFETY: guard holds env_lock across config discovery.
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+            std::env::remove_var("SHINE_CONFIG_DIR");
+            std::env::remove_var("SHINE_PRESETS");
+        }
         std::env::set_current_dir(&child_dir).unwrap();
 
         let config = Config::load_or_init().await.unwrap();
@@ -712,18 +661,16 @@ mod tests {
             fs::canonicalize(&external_presets).await.unwrap()
         );
 
-        drop(_guard);
+        drop(guard);
         fs::remove_dir_all(&home_dir).await.unwrap();
         fs::remove_dir_all(external_presets.parent().unwrap())
             .await
             .unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn load_or_init_ignores_generic_project_config_and_dotenv() {
-        let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         let child_dir = project_dir.join("subdir");
         fs::create_dir_all(&child_dir).await.unwrap();
@@ -741,9 +688,7 @@ mod tests {
         .await
         .unwrap();
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        set_config_dir(&guard, &state_dir);
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
@@ -767,19 +712,14 @@ mod tests {
             Some("6152")
         );
 
-        restore_current_dir(&original_dir);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn init_current_dir_config_ignores_generic_config_and_refuses_existing_shine_config() {
-        let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         fs::write(
             project_dir.join("config.toml"),
@@ -820,15 +760,13 @@ mod tests {
             "error should refuse overwrite: {err:#}"
         );
 
-        restore_current_dir(&original_dir);
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn project_config_save_removes_runtime_schema_fields() {
-        let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         let state_dir = make_temp_dir().await;
         fs::write(
@@ -838,9 +776,7 @@ mod tests {
         .await
         .unwrap();
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        set_config_dir(&guard, &state_dir);
         std::env::set_current_dir(&project_dir).unwrap();
 
         let config = Config::load_or_init().await.unwrap();
@@ -860,18 +796,14 @@ mod tests {
         assert!(!parsed.contains_key("schema_version"));
         assert!(!parsed.contains_key("last_cleared_schema_version"));
 
-        restore_current_dir(&original_dir);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn project_config_without_presets_dir_inherits_global_config() {
-        let _guard = env_lock();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         let home_dir = make_temp_dir().await;
         let state_dir = home_dir.join(".shine");
@@ -891,9 +823,12 @@ mod tests {
         .await
         .unwrap();
 
-        unsafe { std::env::set_var("HOME", home_dir.to_str().unwrap()) };
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        // SAFETY: guard holds env_lock across config discovery.
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+            std::env::remove_var("SHINE_CONFIG_DIR");
+            std::env::remove_var("SHINE_PRESETS");
+        }
         std::env::set_current_dir(&project_dir).unwrap();
 
         let config = Config::load_or_init().await.unwrap();
@@ -904,16 +839,14 @@ mod tests {
         assert_eq!(config.gpg_recipients, ["global-key"]);
         assert!(config.is_external_presets);
 
-        drop(_guard);
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&home_dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn project_config_merges_layers_and_saves_only_local_changes() {
-        let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         let state_dir = make_temp_dir().await;
         fs::create_dir_all(project_dir.join("project-presets"))
@@ -944,7 +877,7 @@ mod tests {
         .await
         .unwrap();
 
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        set_config_dir(&guard, &state_dir);
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         std::env::set_current_dir(&project_dir).unwrap();
 
@@ -990,17 +923,14 @@ mod tests {
         assert!(!env.contains_key("GLOBAL_FILE"));
         assert!(!env.contains_key("PROJECT_FILE"));
 
-        restore_current_dir(&original_dir);
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn project_config_overrides_age_backend_settings() {
-        let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         let state_dir = make_temp_dir().await;
         fs::write(
@@ -1016,7 +946,7 @@ mod tests {
         .await
         .unwrap();
 
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        set_config_dir(&guard, &state_dir);
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         std::env::set_current_dir(&project_dir).unwrap();
 
@@ -1038,17 +968,14 @@ mod tests {
         );
         assert!(!config.project_overrides_age_identities());
 
-        restore_current_dir(&original_dir);
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn project_age_identities_replace_the_global_identity_set() {
-        let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         let state_dir = make_temp_dir().await;
         fs::write(
@@ -1064,7 +991,7 @@ mod tests {
         .await
         .unwrap();
 
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        set_config_dir(&guard, &state_dir);
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         std::env::set_current_dir(&project_dir).unwrap();
 
@@ -1079,8 +1006,7 @@ mod tests {
         );
         assert!(config.project_overrides_age_identities());
 
-        restore_current_dir(&original_dir);
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
     }
