@@ -246,7 +246,7 @@ fn cli_parses_trusted_remote_policy_update() {
 }
 
 #[test]
-fn cli_accepts_refactored_update_commands() {
+fn cli_parses_self_install_and_upgrade() {
     let cli = Cli::try_parse_from(["shine", "self", "install"]).unwrap();
     assert!(matches!(
         cli.command,
@@ -280,210 +280,96 @@ fn cli_accepts_refactored_update_commands() {
             }
         }
     ));
+}
 
-    let cli = Cli::try_parse_from(["shine", "update"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Update(UpdateCommand {
-            target: None,
-            pull: false,
-            diff: false,
-            verbose: false,
-            refresh_release: false,
-            run_generators: false
-        })
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "update", "--verbose"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Update(UpdateCommand {
-            target: None,
-            pull: false,
-            diff: false,
-            verbose: true,
-            refresh_release: false,
-            run_generators: false
-        })
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "update", "--refresh-release"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Update(UpdateCommand {
-            target: None,
-            pull: false,
-            diff: false,
-            verbose: false,
-            refresh_release: true,
-            run_generators: false
-        })
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "preset", "pull"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Pull
-        }
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "update", "--pull"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Update(UpdateCommand {
-            target: None,
-            pull: true,
-            diff: false,
-            verbose: false,
-            refresh_release: false,
-            run_generators: false
-        })
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "update", "proxy/setproxy"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Update(UpdateCommand {
-            target: Some(ref target),
-            pull: false,
-            diff: false,
-            verbose: false,
-            refresh_release: false,
-            run_generators: false
-        }) if target == "proxy/setproxy"
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "update", "--diff"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Update(UpdateCommand {
-            target: None,
-            pull: false,
-            diff: true,
-            verbose: false,
-            refresh_release: false,
-            run_generators: false
-        })
-    ));
-
-    let cli =
-        Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--pull", "--diff"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Update(UpdateCommand {
-            target: Some(ref target),
-            pull: true,
-            diff: true,
-            verbose: false,
-            refresh_release: false,
-            run_generators: false
-        }) if target == "proxy/setproxy"
-    ));
-
-    let cli =
-        Cli::try_parse_from(["shine", "update", "utils/shine-theme-sync", "--verbose"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Update(UpdateCommand {
-            target: Some(ref target),
-            pull: false,
-            diff: false,
-            verbose: true,
-            refresh_release: false,
-            run_generators: false
-        }) if target == "utils/shine-theme-sync"
-    ));
+#[test]
+fn cli_parses_update_flags_and_targets() {
+    let cases: &[(Option<&str>, &[&str])] = &[
+        (None, &[]),
+        (None, &["--verbose"]),
+        (None, &["--refresh-release"]),
+        (None, &["--pull"]),
+        (None, &["--diff"]),
+        (None, &["--run-generators"]),
+        (Some("proxy/setproxy"), &[]),
+        (Some("proxy/setproxy"), &["--pull", "--diff"]),
+        (Some("utils/shine-theme-sync"), &["--verbose"]),
+    ];
+    for &(expected_target, flags) in cases {
+        let args = ["shine", "update"]
+            .into_iter()
+            .chain(expected_target)
+            .chain(flags.iter().copied());
+        let Commands::Update(UpdateCommand {
+            target,
+            pull,
+            diff,
+            verbose,
+            refresh_release,
+            run_generators,
+        }) = Cli::try_parse_from(args).unwrap().command
+        else {
+            panic!("expected update command")
+        };
+        assert_eq!(target.as_deref(), expected_target, "{flags:?}");
+        assert_eq!(pull, flags.contains(&"--pull"), "{flags:?}");
+        assert_eq!(diff, flags.contains(&"--diff"), "{flags:?}");
+        assert_eq!(verbose, flags.contains(&"--verbose"), "{flags:?}");
+        assert_eq!(
+            refresh_release,
+            flags.contains(&"--refresh-release"),
+            "{flags:?}"
+        );
+        assert_eq!(
+            run_generators,
+            flags.contains(&"--run-generators"),
+            "{flags:?}"
+        );
+    }
     assert!(
         Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--refresh-release"]).is_err()
     );
     assert!(Cli::try_parse_from(["shine", "update", "--refresh"]).is_err());
+}
 
-    let cli = Cli::try_parse_from(["shine", "update", "--run-generators"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Update(UpdateCommand {
-            run_generators: true,
-            ..
-        })
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Upgrade(UpgradeCommand {
-            target: None,
-            pull: false,
-            verbose: false,
-            full_plan: false,
-            prune_stale: false,
-            yes: false
-        })
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "upgrade", "--verbose"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Upgrade(UpgradeCommand {
-            target: None,
-            pull: false,
-            verbose: true,
-            full_plan: false,
-            prune_stale: false,
-            yes: false
-        })
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "upgrade", "--prune-stale"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Upgrade(UpgradeCommand {
-            target: None,
-            pull: false,
-            verbose: false,
-            full_plan: false,
-            prune_stale: true,
-            yes: false
-        })
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "upgrade", "--pull"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Upgrade(UpgradeCommand {
-            target: None,
-            pull: true,
-            verbose: false,
-            full_plan: false,
-            prune_stale: false,
-            yes: false
-        })
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "upgrade", "app/starship"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Upgrade(UpgradeCommand {
-            target: Some(ref target),
-            pull: false,
-            verbose: false,
-            full_plan: false,
-            prune_stale: false,
-            yes: false,
-        }) if target == "app/starship"
-    ));
-
+#[test]
+fn cli_parses_upgrade_flags_and_targets() {
+    let cases: &[(Option<&str>, &[&str])] = &[
+        (None, &[]),
+        (None, &["--verbose"]),
+        (None, &["--prune-stale"]),
+        (None, &["--pull"]),
+        (None, &["--verbose", "--full-plan"]),
+        (Some("app/starship"), &[]),
+    ];
+    for &(expected_target, flags) in cases {
+        let args = ["shine", "upgrade"]
+            .into_iter()
+            .chain(expected_target)
+            .chain(flags.iter().copied());
+        let Commands::Upgrade(UpgradeCommand {
+            target,
+            pull,
+            verbose,
+            full_plan,
+            prune_stale,
+            yes,
+        }) = Cli::try_parse_from(args).unwrap().command
+        else {
+            panic!("expected upgrade command")
+        };
+        assert_eq!(target.as_deref(), expected_target, "{flags:?}");
+        assert_eq!(pull, flags.contains(&"--pull"), "{flags:?}");
+        assert_eq!(verbose, flags.contains(&"--verbose"), "{flags:?}");
+        assert_eq!(full_plan, flags.contains(&"--full-plan"), "{flags:?}");
+        assert_eq!(prune_stale, flags.contains(&"--prune-stale"), "{flags:?}");
+        assert!(!yes, "{flags:?}");
+    }
     assert!(Cli::try_parse_from(["shine", "upgrade", "--full-plan"]).is_err());
-    let cli = Cli::try_parse_from(["shine", "upgrade", "--verbose", "--full-plan"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Upgrade(UpgradeCommand {
-            verbose: true,
-            full_plan: true,
-            ..
-        })
-    ));
+}
 
+#[test]
+fn cli_list_kind_requires_available() {
     let cli = Cli::try_parse_from(["shine", "list", "--available", "app"]).unwrap();
     assert!(matches!(
         cli.command,
@@ -493,7 +379,10 @@ fn cli_accepts_refactored_update_commands() {
         }
     ));
     assert!(Cli::try_parse_from(["shine", "list", "app"]).is_err());
+}
 
+#[test]
+fn cli_parses_state_migrate_dry_run() {
     let cli = Cli::try_parse_from(["shine", "state", "migrate"]).unwrap();
     assert!(matches!(
         cli.command,
@@ -567,6 +456,14 @@ fn lifecycle_commands_accept_yes_and_reject_dry_run_conflicts() {
 
 #[test]
 fn cli_accepts_preset_commands() {
+    let cli = Cli::try_parse_from(["shine", "preset", "pull"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Commands::Preset {
+            command: PresetCommands::Pull
+        }
+    ));
+
     let cli = Cli::try_parse_from(["shine", "preset", "export"]).unwrap();
     assert!(matches!(
         cli.command,

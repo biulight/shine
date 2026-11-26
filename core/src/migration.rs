@@ -88,136 +88,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_convert_to_edit_toml_value_string() {
-        let v = toml::Value::String("hello".to_string());
-        let result = convert_to_edit_toml_value(&v);
-        assert!(matches!(result, toml_edit::Value::String(_)));
-        if let toml_edit::Value::String(s) = result {
-            assert_eq!(s.value(), "hello");
-        }
-    }
-
-    #[test]
-    fn test_convert_to_edit_toml_value_integer() {
-        let v = toml::Value::Integer(42);
-        let result = convert_to_edit_toml_value(&v);
-        assert!(matches!(result, toml_edit::Value::Integer(_)));
-        if let toml_edit::Value::Integer(i) = result {
-            assert_eq!(*i.value(), 42);
-        }
-    }
-
-    #[test]
-    fn test_convert_to_edit_toml_value_float() {
-        let v = toml::Value::Float(2.5);
-        let result = convert_to_edit_toml_value(&v);
-        assert!(matches!(result, toml_edit::Value::Float(_)));
-        if let toml_edit::Value::Float(f) = result {
-            assert_eq!(*f.value(), 2.5);
-        }
-    }
-
-    #[test]
-    fn test_convert_to_edit_toml_value_boolean() {
-        for b in [true, false] {
-            let v = toml::Value::Boolean(b);
-            let result = convert_to_edit_toml_value(&v);
-            assert!(matches!(result, toml_edit::Value::Boolean(_)));
-            if let toml_edit::Value::Boolean(val) = result {
-                assert_eq!(*val.value(), b);
-            }
-        }
-    }
-
-    #[test]
-    fn test_convert_to_edit_toml_value_datetime() {
-        let dt: toml::value::Datetime = "1979-05-27T07:32:00Z".parse().unwrap();
-        let v = toml::Value::Datetime(dt);
-        let result = convert_to_edit_toml_value(&v);
-        assert!(matches!(result, toml_edit::Value::Datetime(_)));
-        if let toml_edit::Value::Datetime(d) = result {
-            assert_eq!(d.value().to_string(), dt.to_string());
-        }
-    }
-
-    #[test]
-    fn test_convert_to_edit_toml_value_array() {
-        let v = toml::Value::Array(vec![
-            toml::Value::String("a".to_string()),
-            toml::Value::Integer(1),
-            toml::Value::Boolean(false),
-        ]);
-        let result = convert_to_edit_toml_value(&v);
-        assert!(matches!(result, toml_edit::Value::Array(_)));
-        if let toml_edit::Value::Array(arr) = result {
-            assert_eq!(arr.len(), 3);
-            assert!(matches!(
-                arr.iter().next().unwrap(),
-                toml_edit::Value::String(_)
-            ));
-        }
-    }
-
-    #[test]
-    fn test_convert_to_edit_toml_value_nested_array() {
-        let v = toml::Value::Array(vec![
-            toml::Value::Array(vec![toml::Value::Integer(1), toml::Value::Integer(2)]),
-            toml::Value::Array(vec![toml::Value::Integer(3)]),
-        ]);
-        let result = convert_to_edit_toml_value(&v);
-        assert!(matches!(result, toml_edit::Value::Array(_)));
-        if let toml_edit::Value::Array(outer) = result {
-            assert_eq!(outer.len(), 2);
-            assert!(matches!(
-                outer.iter().next().unwrap(),
-                toml_edit::Value::Array(_)
-            ));
-        }
-    }
-
-    #[test]
-    fn test_convert_to_edit_toml_value_table() {
-        let mut table = toml::value::Table::new();
-        table.insert("key1".to_string(), toml::Value::String("val".to_string()));
-        table.insert("key2".to_string(), toml::Value::Integer(99));
-        let v = toml::Value::Table(table);
-        let result = convert_to_edit_toml_value(&v);
-        assert!(matches!(result, toml_edit::Value::InlineTable(_)));
-        if let toml_edit::Value::InlineTable(inline) = result {
-            assert_eq!(inline.len(), 2);
-            let v1 = inline.get("key1").unwrap();
-            assert!(matches!(v1, toml_edit::Value::String(_)));
-            if let toml_edit::Value::String(s) = v1 {
-                assert_eq!(s.value(), "val");
-            }
-            let v2 = inline.get("key2").unwrap();
-            assert!(matches!(v2, toml_edit::Value::Integer(_)));
-            if let toml_edit::Value::Integer(i) = v2 {
-                assert_eq!(*i.value(), 99);
-            }
-        }
-    }
-
-    #[test]
-    fn test_convert_to_edit_toml_value_nested_table() {
-        let mut inner = toml::value::Table::new();
-        inner.insert("x".to_string(), toml::Value::Boolean(true));
-        let mut outer = toml::value::Table::new();
-        outer.insert("inner".to_string(), toml::Value::Table(inner));
-        let v = toml::Value::Table(outer);
-        let result = convert_to_edit_toml_value(&v);
-        assert!(matches!(result, toml_edit::Value::InlineTable(_)));
-        if let toml_edit::Value::InlineTable(inline) = result {
-            let nested = inline.get("inner").unwrap();
-            assert!(matches!(nested, toml_edit::Value::InlineTable(_)));
-            if let toml_edit::Value::InlineTable(inner_inline) = nested {
-                assert_eq!(inner_inline.len(), 1);
-                let xv = inner_inline.get("x").unwrap();
-                assert!(matches!(xv, toml_edit::Value::Boolean(_)));
-                if let toml_edit::Value::Boolean(b) = xv {
-                    assert!(*b.value());
-                }
-            }
+    fn conversion_preserves_toml_types_and_contents() {
+        for literal in [
+            "'hello'",
+            "42",
+            "2.5",
+            "true",
+            "false",
+            "1979-05-27T07:32:00Z",
+            "['a', 1, false]",
+            "[[1, 2], [3]]",
+            "{ key1 = 'val', key2 = 99 }",
+            "{ inner = { x = true } }",
+        ] {
+            let expected = literal.parse::<toml::Value>().unwrap();
+            let converted = convert_to_edit_toml_value(&expected);
+            let actual = converted.to_string().parse::<toml::Value>().unwrap();
+            assert_eq!(actual, expected, "{literal}");
         }
     }
 
@@ -316,69 +203,31 @@ TOKEN = { value = "old", description = "API token" }
     }
 
     #[test]
-    fn test_values_equal() {
-        use toml::Value as TargetValue;
-        use toml_edit::Value as EditValue;
-
-        assert!(values_equal(
-            &EditValue::from("hello"),
-            &TargetValue::from("hello")
-        ));
-        assert!(values_equal(
-            &EditValue::from(42i64),
-            &TargetValue::from(42i64)
-        ));
-        assert!(values_equal(
-            &EditValue::from(2.5f64),
-            &TargetValue::from(2.5f64)
-        ));
-        assert!(values_equal(
-            &EditValue::from(true),
-            &TargetValue::from(true)
-        ));
-
-        let edit_array = EditValue::Array(
-            vec![
-                EditValue::from("a"),
-                EditValue::from(1i64),
-                EditValue::from(false),
-            ]
-            .into_iter()
-            .collect(),
-        );
-        let target_array = TargetValue::Array(vec![
-            TargetValue::from("a"),
-            TargetValue::from(1i64),
-            TargetValue::from(false),
-        ]);
-
-        assert!(values_equal(&edit_array, &target_array));
-
-        let different_string = TargetValue::from("world");
-        assert!(!values_equal(&EditValue::from("hello"), &different_string));
-
-        let different_int = TargetValue::from(7i64);
-        assert!(!values_equal(&EditValue::from(42i64), &different_int));
-
-        let different_type = TargetValue::from(42i64);
-        assert!(!values_equal(&EditValue::from("42"), &different_type));
-
-        let shorter_array =
-            TargetValue::Array(vec![TargetValue::from("a"), TargetValue::from(1i64)]);
-        assert!(!values_equal(&edit_array, &shorter_array));
-
-        let nested_edit_array = EditValue::Array(
-            vec![
-                EditValue::Array(vec![EditValue::from("x")].into_iter().collect()),
-                EditValue::from(false),
-            ]
-            .into_iter()
-            .collect(),
-        );
-        let nested_target_array = TargetValue::Array(vec![
-            TargetValue::Array(vec![TargetValue::from("x")]),
-            TargetValue::from(false),
-        ]);
-        assert!(values_equal(&nested_edit_array, &nested_target_array));
+    fn values_equal_compares_types_and_nested_contents() {
+        for literal in [
+            "'hello'",
+            "42",
+            "2.5",
+            "true",
+            "['a', 1, false]",
+            "[['x'], false]",
+        ] {
+            assert!(
+                values_equal(&literal.parse().unwrap(), &literal.parse().unwrap()),
+                "{literal}"
+            );
+        }
+        for (edit, target) in [
+            ("'hello'", "'world'"),
+            ("42", "7"),
+            ("'42'", "42"),
+            ("['a', 1, false]", "['a', 1]"),
+            ("[['x'], false]", "[['y'], false]"),
+        ] {
+            assert!(
+                !values_equal(&edit.parse().unwrap(), &target.parse().unwrap()),
+                "{edit} vs {target}"
+            );
+        }
     }
 }
