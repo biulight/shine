@@ -65,9 +65,8 @@ async fn reviewed_policy_updates_recheck_revocation_and_preserve_unrelated_chang
     save_store(
         &config,
         &PolicyStore {
-            file_policies: Vec::new(),
-            version: POLICY_VERSION,
             policies: vec![initial.candidate.clone(), unrelated.clone()],
+            ..PolicyStore::default()
         },
     )
     .await
@@ -91,9 +90,8 @@ async fn reviewed_policy_updates_recheck_revocation_and_preserve_unrelated_chang
     save_store(
         &config,
         &PolicyStore {
-            file_policies: Vec::new(),
-            version: POLICY_VERSION,
             policies: vec![unrelated.clone()],
+            ..PolicyStore::default()
         },
     )
     .await
@@ -118,6 +116,26 @@ fn snapshot() -> WorkspaceSnapshot {
                 contents: "version = 1\n[plain]\nPUBLIC = \"x\"\n[secret]\nAPI_TOKEN = true\nNPM_TOKEN = true\n[payload]\ndata = \"ciphertext\"\n".into(),
             }],
         }
+}
+
+fn policy_store(snapshot: &WorkspaceSnapshot, name: &str) -> PolicyStore {
+    let allow = allow_from_snapshot(
+        snapshot,
+        &["API_TOKEN".into()],
+        &["bun".into(), "test".into()],
+    )
+    .unwrap();
+    PolicyStore {
+        policies: vec![BrokerPolicy {
+            name: name.into(),
+            ssh_target: "dev".into(),
+            project: "api".into(),
+            workspace_sha256: sha256(snapshot.workspace_contents.as_bytes()),
+            remote_workspace: None,
+            allow: vec![allow],
+        }],
+        ..PolicyStore::default()
+    }
 }
 
 #[test]
@@ -190,24 +208,9 @@ fn policy_diff_retains_serialized_cr_values_without_normalizing_approval_inputs(
 #[test]
 fn trusted_remote_update_replaces_one_allow_and_preserves_policy_identity() {
     let original = snapshot();
-    let allow = allow_from_snapshot(
-        &original,
-        &["API_TOKEN".into()],
-        &["bun".into(), "test".into()],
-    )
-    .unwrap();
-    let store = PolicyStore {
-        file_policies: Vec::new(),
-        version: POLICY_VERSION,
-        policies: vec![BrokerPolicy {
-            name: "dev-api".into(),
-            ssh_target: "dev".into(),
-            project: "friendly-api-name".into(),
-            workspace_sha256: sha256(original.workspace_contents.as_bytes()),
-            remote_workspace: Some(original.workspace_path.clone()),
-            allow: vec![allow],
-        }],
-    };
+    let mut store = policy_store(&original, "dev-api");
+    store.policies[0].project = "friendly-api-name".into();
+    store.policies[0].remote_workspace = Some(original.workspace_path.clone());
     let mut changed = original.clone();
     changed
         .workspace_contents
@@ -256,24 +259,7 @@ async fn trusted_remote_update_applies_once_and_rejects_a_stale_preview() {
     let dir = crate::test_support::make_temp_dir("shine-broker-remote-update").await;
     let config = Config::new_for_test(&dir);
     let original = snapshot();
-    let allow = allow_from_snapshot(
-        &original,
-        &["API_TOKEN".into()],
-        &["bun".into(), "test".into()],
-    )
-    .unwrap();
-    let store = PolicyStore {
-        file_policies: Vec::new(),
-        version: POLICY_VERSION,
-        policies: vec![BrokerPolicy {
-            name: "dev-api".into(),
-            ssh_target: "dev".into(),
-            project: "api".into(),
-            workspace_sha256: sha256(original.workspace_contents.as_bytes()),
-            remote_workspace: None,
-            allow: vec![allow],
-        }],
-    };
+    let store = policy_store(&original, "dev-api");
     save_store(&config, &store).await.unwrap();
 
     let mut changed = original;
@@ -301,24 +287,7 @@ async fn trusted_remote_update_applies_once_and_rejects_a_stale_preview() {
 #[test]
 fn exact_policy_match_rejects_changed_argv_or_source() {
     let snapshot = snapshot();
-    let allow = allow_from_snapshot(
-        &snapshot,
-        &["API_TOKEN".into()],
-        &["bun".into(), "test".into()],
-    )
-    .unwrap();
-    let store = PolicyStore {
-        file_policies: Vec::new(),
-        version: POLICY_VERSION,
-        policies: vec![BrokerPolicy {
-            name: "dev-api".into(),
-            ssh_target: "dev".into(),
-            project: "api".into(),
-            workspace_sha256: sha256(snapshot.workspace_contents.as_bytes()),
-            remote_workspace: None,
-            allow: vec![allow],
-        }],
-    };
+    let store = policy_store(&snapshot, "dev-api");
 
     let matched =
         match_workspace_request(&store, "dev", &snapshot, &["bun".into(), "test".into()]).unwrap();
@@ -353,24 +322,7 @@ async fn policy_store_is_written_with_private_permissions() {
     let dir = crate::test_support::make_temp_dir("shine-broker-policy").await;
     let config = Config::new_for_test(&dir);
     let snapshot = snapshot();
-    let allow = allow_from_snapshot(
-        &snapshot,
-        &["API_TOKEN".into()],
-        &["bun".into(), "test".into()],
-    )
-    .unwrap();
-    let store = PolicyStore {
-        file_policies: Vec::new(),
-        version: POLICY_VERSION,
-        policies: vec![BrokerPolicy {
-            name: "dev-api".into(),
-            ssh_target: "dev".into(),
-            project: "api".into(),
-            workspace_sha256: sha256(snapshot.workspace_contents.as_bytes()),
-            remote_workspace: None,
-            allow: vec![allow],
-        }],
-    };
+    let store = policy_store(&snapshot, "dev-api");
     save_store(&config, &store).await.unwrap();
     let loaded = load_store(&config).await.unwrap();
     assert_eq!(loaded, store);
@@ -426,24 +378,7 @@ async fn additional_local_policy_files_are_merged_and_validated() {
     let dir = crate::test_support::make_temp_dir("shine-broker-policy-merge").await;
     let config = Config::new_for_test(&dir);
     let snapshot = snapshot();
-    let allow = allow_from_snapshot(
-        &snapshot,
-        &["API_TOKEN".into()],
-        &["bun".into(), "test".into()],
-    )
-    .unwrap();
-    let extra = PolicyStore {
-        file_policies: Vec::new(),
-        version: POLICY_VERSION,
-        policies: vec![BrokerPolicy {
-            name: "extra-api".into(),
-            ssh_target: "dev".into(),
-            project: "api".into(),
-            workspace_sha256: sha256(snapshot.workspace_contents.as_bytes()),
-            remote_workspace: None,
-            allow: vec![allow],
-        }],
-    };
+    let extra = policy_store(&snapshot, "extra-api");
     let path = dir.join("extra.toml");
     tokio::fs::write(&path, toml::to_string(&extra).unwrap())
         .await

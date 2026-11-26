@@ -419,9 +419,7 @@ mod tests {
     async fn protected_uninstall_reports_partial_completion_and_strategy_specific_guidance() {
         for mode in [0, 1, 2] {
             let dir = make_temp_dir().await;
-            let mut config = Config::new_for_test(&dir);
-            config.is_external_presets = true;
-            fs::create_dir_all(config.shine_dir()).await.unwrap();
+            let config = external_app_config(&dir).await;
             let protected = dir.join("protected");
             let clean = dir.join("clean");
             let backup = dir.join("protected.shine.bak");
@@ -543,11 +541,7 @@ mod tests {
             assert!(protected.exists());
             assert!(!clean.exists());
             assert_eq!(
-                AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                    .await
-                    .unwrap()
-                    .entries
-                    .len(),
+                load_manifest(&config).await.entries.len(),
                 if mode == 0 { 2 } else { 1 }
             );
             fs::remove_dir_all(dir).await.unwrap();
@@ -556,6 +550,41 @@ mod tests {
 
     async fn make_temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-apps").await
+    }
+
+    async fn external_app_config(dir: &std::path::Path) -> Config {
+        let mut config = Config::new_for_test(dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        config
+    }
+
+    async fn load_manifest(config: &Config) -> AppManifest {
+        AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap()
+    }
+
+    fn copy_receipt(source: &str, destination: std::path::PathBuf, installed: &[u8]) -> AppEntry {
+        AppEntry {
+            source: source.into(),
+            destination,
+            backup: None,
+            content_hash: crate::install_core::hash_content(installed),
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        }
+    }
+
+    async fn save_receipt(config: &Config, entry: AppEntry) {
+        AppManifest {
+            entries: vec![entry],
+            ..AppManifest::default()
+        }
+        .save(&shine_core::runtime::RealHost, config.shine_dir())
+        .await
+        .unwrap();
     }
 
     #[cfg(unix)]
@@ -586,9 +615,7 @@ mod tests {
             .await
             .unwrap();
 
-        let manifest_before = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest_before = load_manifest(&config).await;
         let count_before = manifest_before.entries.len();
 
         let result = handle_uninstall_with_result(&config, Some("git"), false, true)
@@ -635,9 +662,7 @@ mod tests {
                 })
         );
 
-        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest_after = load_manifest(&config).await;
         assert_eq!(
             manifest_after.entries.len(),
             count_before,
@@ -662,9 +687,7 @@ mod tests {
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"debug\": true\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
 
         handle_install_approved(&config, Some("sample"), false, false, true)
             .await
@@ -683,9 +706,7 @@ mod tests {
                 .contains(&LifecycleEffect::UserModificationOverridden)
         );
 
-        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest_after = load_manifest(&config).await;
         assert!(
             manifest_after.entries.is_empty(),
             "force uninstall should remove manifest entry"
@@ -718,58 +739,41 @@ mod tests {
         handle_install_approved(&config, Some("starship"), false, false, true)
             .await
             .unwrap();
-        let manifest_all = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
-        let total = manifest_all.entries.len();
-        assert!(total > 0, "need at least one installed entry");
-
-        // Find a category that was installed
-        let first_category = manifest_all
+        let before = load_manifest(&config).await;
+        assert!(
+            before
+                .entries
+                .iter()
+                .any(|e| e.source.starts_with("app/git/"))
+        );
+        let remaining: Vec<_> = before
             .entries
-            .iter()
-            .find_map(|e| {
-                e.source
-                    .strip_prefix("app/")
-                    .and_then(|s| s.split('/').next())
-                    .map(|s| s.to_string())
-            })
-            .expect("no category found in manifest");
+            .into_iter()
+            .filter(|e| !e.source.starts_with("app/git/"))
+            .collect();
+        assert!(
+            remaining
+                .iter()
+                .any(|e| e.source.starts_with("app/starship/"))
+        );
 
-        let category_count = manifest_all
-            .entries
-            .iter()
-            .filter(|e| e.source.starts_with(&format!("app/{first_category}/")))
-            .count();
-
-        // Uninstall only that category
-        let result = handle_uninstall_with_result(&config, Some(&first_category), false, false)
+        let result = handle_uninstall_with_result(&config, Some("git"), false, false)
             .await
             .unwrap();
         assert!(
             result
                 .outcomes
                 .iter()
-                .all(|outcome| outcome.target == format!("app/{first_category}"))
+                .all(|outcome| outcome.target == "app/git")
         );
-
-        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
-        assert_eq!(
-            manifest_after.entries.len(),
-            total - category_count,
-            "only entries for '{first_category}' should be removed"
-        );
-        // No remaining entry belongs to the uninstalled category
-        let prefix = format!("app/{first_category}/");
-        assert!(
-            manifest_after
-                .entries
-                .iter()
-                .all(|e| !e.source.starts_with(&prefix)),
-            "uninstalled category must not appear in manifest"
-        );
+        let after = load_manifest(&config).await;
+        assert_eq!(after.entries.len(), remaining.len());
+        for entry in remaining {
+            assert!(
+                after.entries.contains(&entry),
+                "lost unrelated receipt: {entry:?}"
+            );
+        }
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -777,30 +781,21 @@ mod tests {
     #[tokio::test]
     async fn structured_uninstall_preserves_user_modified_resource_and_receipt() {
         let dir = make_temp_dir().await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
         let destination = dir.join("destination/config.toml");
         fs::create_dir_all(destination.parent().unwrap())
             .await
             .unwrap();
         fs::write(&destination, b"user change\n").await.unwrap();
-        let manifest = AppManifest {
-            entries: vec![AppEntry {
-                source: "app/sample/config.toml".to_string(),
-                destination: destination.clone(),
-                backup: None,
-                content_hash: crate::install_core::hash_content(b"installed\n"),
-                install_strategy: AppInstallStrategy::Copy,
-                uses_env: false,
-                requires_admin: false,
-            }],
-            ..AppManifest::default()
-        };
-        manifest
-            .save(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        save_receipt(
+            &config,
+            copy_receipt(
+                "app/sample/config.toml",
+                destination.clone(),
+                b"installed\n",
+            ),
+        )
+        .await;
 
         let preview = handle_uninstall_with_result(&config, Some("sample"), false, true)
             .await
@@ -816,39 +811,23 @@ mod tests {
             vec![LifecycleEffect::UserResourcePreserved]
         );
         assert_eq!(fs::read(&destination).await.unwrap(), b"user change\n");
-        assert_eq!(
-            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap()
-                .entries
-                .len(),
-            1
-        );
+        assert_eq!(load_manifest(&config).await.entries.len(), 1);
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn structured_uninstall_reports_stale_receipt_cleanup_as_change() {
         let dir = make_temp_dir().await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-        let manifest = AppManifest {
-            entries: vec![AppEntry {
-                source: "app/sample/missing.toml".to_string(),
-                destination: dir.join("destination/missing.toml"),
-                backup: None,
-                content_hash: crate::install_core::hash_content(b"installed\n"),
-                install_strategy: AppInstallStrategy::Copy,
-                uses_env: false,
-                requires_admin: false,
-            }],
-            ..AppManifest::default()
-        };
-        manifest
-            .save(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let config = external_app_config(&dir).await;
+        save_receipt(
+            &config,
+            copy_receipt(
+                "app/sample/missing.toml",
+                dir.join("destination/missing.toml"),
+                b"installed\n",
+            ),
+        )
+        .await;
 
         let result = handle_uninstall_with_result(&config, Some("sample"), false, false)
             .await
@@ -860,42 +839,26 @@ mod tests {
             result.outcomes[0].effects,
             vec![LifecycleEffect::ReceiptRemoved]
         );
-        assert!(
-            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap()
-                .entries
-                .is_empty()
-        );
+        assert!(load_manifest(&config).await.entries.is_empty());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn source_missing_target_uninstall_previews_then_restores_backup() {
         let dir = make_temp_dir().await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
         let destination = dir.join("config");
         let backup = dir.join("config.shine.bak");
         fs::write(&destination, b"managed").await.unwrap();
         fs::write(&backup, b"original").await.unwrap();
-        let manifest = AppManifest {
-            entries: vec![AppEntry {
-                source: "app/retired/config".to_string(),
-                destination: destination.clone(),
+        save_receipt(
+            &config,
+            AppEntry {
                 backup: Some(backup.clone()),
-                content_hash: crate::install_core::hash_content(b"managed"),
-                install_strategy: AppInstallStrategy::Copy,
-                uses_env: false,
-                requires_admin: false,
-            }],
-            ..AppManifest::default()
-        };
-        manifest
-            .save(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+                ..copy_receipt("app/retired/config", destination.clone(), b"managed")
+            },
+        )
+        .await;
         let frontend = crate::core_runtime::frontend_from_config(&config)
             .await
             .unwrap();
@@ -912,14 +875,7 @@ mod tests {
         );
         assert_eq!(fs::read(&destination).await.unwrap(), b"managed");
         assert!(backup.exists());
-        assert_eq!(
-            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap()
-                .entries
-                .len(),
-            1
-        );
+        assert_eq!(load_manifest(&config).await.entries.len(), 1);
         let result = handle_uninstall_with_result(&config, Some("retired"), false, false)
             .await
             .unwrap();
@@ -932,13 +888,7 @@ mod tests {
         );
         assert_eq!(fs::read(&destination).await.unwrap(), b"original");
         assert!(!backup.exists());
-        assert!(
-            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap()
-                .entries
-                .is_empty()
-        );
+        assert!(load_manifest(&config).await.entries.is_empty());
         fs::remove_dir_all(dir).await.unwrap();
     }
 
@@ -946,9 +896,7 @@ mod tests {
     async fn removed_file_uninstall_uses_receipt_strategy_and_exact_category() {
         for json_merge in [false, true] {
             let dir = make_temp_dir().await;
-            let mut config = Config::new_for_test(&dir);
-            config.is_external_presets = true;
-            fs::create_dir_all(config.shine_dir()).await.unwrap();
+            let config = external_app_config(&dir).await;
             // The original category remains available, but its installed file was removed.
             let category = config.presets_dir().join("app/retired");
             fs::create_dir_all(&category).await.unwrap();
@@ -963,8 +911,9 @@ mod tests {
                 b"managed"
             };
             fs::write(&destination, current).await.unwrap();
-            let manifest = AppManifest {
-                entries: vec![AppEntry {
+            save_receipt(
+                &config,
+                AppEntry {
                     source: "app/retired/config.json".into(),
                     destination: destination.clone(),
                     backup: None,
@@ -982,13 +931,9 @@ mod tests {
                     },
                     uses_env: false,
                     requires_admin: false,
-                }],
-                ..AppManifest::default()
-            };
-            manifest
-                .save(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap();
+                },
+            )
+            .await;
             // Another available category uses the same destination, but owns no receipt.
             let replacement = config.presets_dir().join("app/replacement");
             fs::create_dir_all(&replacement).await.unwrap();
@@ -1026,13 +971,7 @@ mod tests {
             } else {
                 assert!(!destination.exists());
             }
-            assert!(
-                AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                    .await
-                    .unwrap()
-                    .entries
-                    .is_empty()
-            );
+            assert!(load_manifest(&config).await.entries.is_empty());
             fs::remove_dir_all(dir).await.unwrap();
         }
     }
@@ -1046,8 +985,9 @@ mod tests {
         fs::write(category_cache.join("orphan"), b"cache")
             .await
             .unwrap();
-        let manifest = AppManifest {
-            entries: vec![AppEntry {
+        save_receipt(
+            &config,
+            AppEntry {
                 source: "app/git/gitconfig".to_string(),
                 destination: dir.join("missing-gitconfig"),
                 backup: None,
@@ -1055,13 +995,9 @@ mod tests {
                 install_strategy: AppInstallStrategy::Copy,
                 uses_env: false,
                 requires_admin: false,
-            }],
-            ..AppManifest::default()
-        };
-        manifest
-            .save(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let category = handle_uninstall_with_result(&config, Some("git"), false, false)
             .await

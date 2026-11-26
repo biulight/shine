@@ -179,20 +179,17 @@ fn recognizes_powershell_unix_and_cmd_managed_markers() {
 }
 
 #[cfg(unix)]
-fn native_specs(sources: &[PathBuf]) -> Vec<LinkSpec> {
-    sources
-        .iter()
-        .map(|source| LinkSpec {
-            native_cmd_literal_path: false,
-            live_launch_config: None,
-            source: source.clone(),
-            link_name: link_stem(source),
-            runtime: LinkRuntime::Native,
-            bun_dependencies: BunDependencyMode::Disabled,
-            env: Vec::new(),
-            render_target: None,
-        })
-        .collect()
+fn native_spec(source: &Path) -> LinkSpec {
+    LinkSpec {
+        native_cmd_literal_path: false,
+        live_launch_config: None,
+        source: source.into(),
+        link_name: link_stem(source),
+        runtime: LinkRuntime::Native,
+        bun_dependencies: BunDependencyMode::Disabled,
+        env: Vec::new(),
+        render_target: None,
+    }
 }
 
 #[cfg(unix)]
@@ -203,6 +200,26 @@ async fn make_dirs() -> (PathBuf, PathBuf) {
     fs::create_dir_all(&src_dir).await.unwrap();
     fs::create_dir_all(&bin_dir).await.unwrap();
     (src_dir, bin_dir)
+}
+
+#[cfg(unix)]
+async fn link(bin: &Path, specs: &[LinkSpec], overwrite: bool) -> LinkReport {
+    link_executables_with_host(&RealHost, bin, specs, overwrite)
+        .await
+        .unwrap()
+}
+
+#[cfg(unix)]
+async fn unlink(bin: &Path, name: &str, managed_root: &Path, dry_run: bool) -> UnlinkReport {
+    unlink_managed_command_with_host(
+        &RealHost,
+        bin,
+        OsStr::new(name),
+        &[managed_root.into()],
+        dry_run,
+    )
+    .await
+    .unwrap()
 }
 
 /// Write a file and set the executable bit for the Host executable-bit check.
@@ -230,14 +247,7 @@ async fn creates_symlink_for_executable_source() {
     let (src, bin) = make_dirs().await;
     let exe = make_executable(&src, "run.sh").await;
 
-    let report = link_executables_with_host(
-        &RealHost,
-        &bin,
-        &native_specs(std::slice::from_ref(&exe)),
-        false,
-    )
-    .await
-    .unwrap();
+    let report = link(&bin, &[native_spec(&exe)], false).await;
 
     assert_eq!(report.created.len(), 1);
     let link = &report.created[0];
@@ -256,9 +266,7 @@ async fn skips_non_executable_source() {
     let (src, bin) = make_dirs().await;
     let plain = make_plain(&src, "readme.txt").await;
 
-    let report = link_executables_with_host(&RealHost, &bin, &native_specs(&[plain]), false)
-        .await
-        .unwrap();
+    let report = link(&bin, &[native_spec(&plain)], false).await;
 
     assert!(report.created.is_empty());
     assert!(report.skipped.is_empty());
@@ -274,14 +282,7 @@ async fn skips_when_correct_symlink_already_exists() {
     let exe = make_executable(&src, "run.sh").await;
     tokio::fs::symlink(&exe, bin.join("run")).await.unwrap();
 
-    let report = link_executables_with_host(
-        &RealHost,
-        &bin,
-        &native_specs(std::slice::from_ref(&exe)),
-        false,
-    )
-    .await
-    .unwrap();
+    let report = link(&bin, &[native_spec(&exe)], false).await;
 
     assert!(report.created.is_empty());
     assert_eq!(report.skipped.len(), 1);
@@ -297,14 +298,7 @@ async fn reports_conflict_when_regular_file_exists() {
     let exe = make_executable(&src, "run.sh").await;
     make_plain(&bin, "run").await;
 
-    let report = link_executables_with_host(
-        &RealHost,
-        &bin,
-        &native_specs(std::slice::from_ref(&exe)),
-        false,
-    )
-    .await
-    .unwrap();
+    let report = link(&bin, &[native_spec(&exe)], false).await;
 
     assert!(report.created.is_empty());
     assert_eq!(report.conflicts.len(), 1);
@@ -324,14 +318,7 @@ async fn overwrites_stale_symlink_when_overwrite_true() {
     let other = make_executable(&src, "other.sh").await;
     tokio::fs::symlink(&other, bin.join("run")).await.unwrap();
 
-    let report = link_executables_with_host(
-        &RealHost,
-        &bin,
-        &native_specs(std::slice::from_ref(&exe)),
-        true,
-    )
-    .await
-    .unwrap();
+    let report = link(&bin, &[native_spec(&exe)], true).await;
 
     assert_eq!(report.overwritten.len(), 1);
     assert_eq!(fs::read_link(bin.join("run")).await.unwrap(), exe);
@@ -346,19 +333,9 @@ async fn flattens_nested_preset_path_into_bin_dir() {
     let (src, bin) = make_dirs().await;
     let sub = src.join("shell").join("proxy");
     fs::create_dir_all(&sub).await.unwrap();
-    let exe = {
-        use std::os::unix::fs::PermissionsExt;
-        let path = sub.join("set_proxy.sh");
-        fs::write(&path, b"#!/bin/sh\n").await.unwrap();
-        let mut perms = fs::metadata(&path).await.unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&path, perms).await.unwrap();
-        path
-    };
+    let exe = make_executable(&sub, "set_proxy.sh").await;
 
-    let report = link_executables_with_host(&RealHost, &bin, &native_specs(&[exe]), false)
-        .await
-        .unwrap();
+    let report = link(&bin, &[native_spec(&exe)], false).await;
 
     assert_eq!(report.created.len(), 1);
     assert!(bin.join("set_proxy").exists());
@@ -378,10 +355,7 @@ async fn reports_collision_when_two_sources_share_basename() {
     let exe1 = make_executable(&sub1, "run.sh").await;
     let exe2 = make_executable(&sub2, "run.sh").await;
 
-    let report =
-        link_executables_with_host(&RealHost, &bin, &native_specs(&[exe1, exe2.clone()]), false)
-            .await
-            .unwrap();
+    let report = link(&bin, &[native_spec(&exe1), native_spec(&exe2)], false).await;
 
     assert_eq!(report.created.len(), 1);
     assert_eq!(report.conflicts.len(), 1);
@@ -399,20 +373,11 @@ async fn creates_symlink_with_explicit_link_name() {
     let (src, bin) = make_dirs().await;
     let exe = make_executable(&src, "set_proxy.sh").await;
     let specs = [LinkSpec {
-        native_cmd_literal_path: false,
-        live_launch_config: None,
-
-        source: exe.clone(),
-        link_name: OsString::from("setproxy"),
-        runtime: LinkRuntime::Native,
-        bun_dependencies: BunDependencyMode::Disabled,
-        env: Vec::new(),
-        render_target: None,
+        link_name: "setproxy".into(),
+        ..native_spec(&exe)
     }];
 
-    let report = link_executables_with_host(&RealHost, &bin, &specs, false)
-        .await
-        .unwrap();
+    let report = link(&bin, &specs, false).await;
 
     assert_eq!(report.created.len(), 1);
     assert!(bin.join("setproxy").exists());
@@ -430,20 +395,11 @@ async fn links_non_executable_shell_script_source() {
     let script = src.join("set_proxy.sh");
     fs::write(&script, b"#!/bin/sh\n").await.unwrap();
     let specs = [LinkSpec {
-        native_cmd_literal_path: false,
-        live_launch_config: None,
-
-        source: script.clone(),
-        link_name: OsString::from("setproxy"),
-        runtime: LinkRuntime::Native,
-        bun_dependencies: BunDependencyMode::Disabled,
-        env: Vec::new(),
-        render_target: None,
+        link_name: "setproxy".into(),
+        ..native_spec(&script)
     }];
 
-    let report = link_executables_with_host(&RealHost, &bin, &specs, false)
-        .await
-        .unwrap();
+    let report = link(&bin, &specs, false).await;
 
     assert_eq!(report.created.len(), 1);
     assert!(bin.join("setproxy").exists());
@@ -459,20 +415,11 @@ async fn skips_non_executable_non_script_source_with_custom_name() {
     let (src, bin) = make_dirs().await;
     let plain = make_plain(&src, "proxy.txt").await;
     let specs = [LinkSpec {
-        native_cmd_literal_path: false,
-        live_launch_config: None,
-
-        source: plain,
-        link_name: OsString::from("setproxy"),
-        runtime: LinkRuntime::Native,
-        bun_dependencies: BunDependencyMode::Disabled,
-        env: Vec::new(),
-        render_target: None,
+        link_name: "setproxy".into(),
+        ..native_spec(&plain)
     }];
 
-    let report = link_executables_with_host(&RealHost, &bin, &specs, false)
-        .await
-        .unwrap();
+    let report = link(&bin, &specs, false).await;
 
     assert!(report.created.is_empty());
     assert!(!bin.join("setproxy").exists());
@@ -490,15 +437,7 @@ async fn unlink_removes_symlink_pointing_into_managed_root() {
     let exe = make_executable(&src, "run.sh").await;
     tokio::fs::symlink(&exe, bin.join("run.sh")).await.unwrap();
 
-    let report = unlink_managed_command_with_host(
-        &RealHost,
-        &bin,
-        OsStr::new("run.sh"),
-        std::slice::from_ref(&src),
-        false,
-    )
-    .await
-    .unwrap();
+    let report = unlink(&bin, "run.sh", &src, false).await;
 
     assert_eq!(report.removed.len(), 1);
     assert!(!bin.join("run.sh").exists());
@@ -516,15 +455,7 @@ async fn unlink_skips_symlink_outside_managed_root() {
     let exe = make_executable(&outside, "run.sh").await;
     tokio::fs::symlink(&exe, bin.join("run.sh")).await.unwrap();
 
-    let report = unlink_managed_command_with_host(
-        &RealHost,
-        &bin,
-        OsStr::new("run.sh"),
-        std::slice::from_ref(&src),
-        false,
-    )
-    .await
-    .unwrap();
+    let report = unlink(&bin, "run.sh", &src, false).await;
 
     assert_eq!(report.skipped.len(), 1);
     assert!(bin.join("run.sh").is_symlink());
@@ -540,15 +471,7 @@ async fn unlink_skips_regular_files_in_bin_dir() {
     let (src, bin) = make_dirs().await;
     make_plain(&bin, "user_script.sh").await;
 
-    let report = unlink_managed_command_with_host(
-        &RealHost,
-        &bin,
-        OsStr::new("user_script.sh"),
-        std::slice::from_ref(&src),
-        false,
-    )
-    .await
-    .unwrap();
+    let report = unlink(&bin, "user_script.sh", &src, false).await;
 
     assert!(report.removed.is_empty());
     assert_eq!(report.skipped.len(), 1);
@@ -565,15 +488,7 @@ async fn unlink_dry_run_reports_but_does_not_remove() {
     let exe = make_executable(&src, "run.sh").await;
     tokio::fs::symlink(&exe, bin.join("run.sh")).await.unwrap();
 
-    let report = unlink_managed_command_with_host(
-        &RealHost,
-        &bin,
-        OsStr::new("run.sh"),
-        std::slice::from_ref(&src),
-        true,
-    )
-    .await
-    .unwrap();
+    let report = unlink(&bin, "run.sh", &src, true).await;
 
     assert_eq!(report.removed.len(), 1);
     assert!(bin.join("run.sh").is_symlink(), "dry-run must not remove");
@@ -587,24 +502,8 @@ async fn unlink_dry_run_reports_but_does_not_remove() {
 async fn unlink_is_idempotent_on_empty_bin_dir() {
     let (src, bin) = make_dirs().await;
 
-    let r1 = unlink_managed_command_with_host(
-        &RealHost,
-        &bin,
-        OsStr::new("run"),
-        std::slice::from_ref(&src),
-        false,
-    )
-    .await
-    .unwrap();
-    let r2 = unlink_managed_command_with_host(
-        &RealHost,
-        &bin,
-        OsStr::new("run"),
-        std::slice::from_ref(&src),
-        false,
-    )
-    .await
-    .unwrap();
+    let r1 = unlink(&bin, "run", &src, false).await;
+    let r2 = unlink(&bin, "run", &src, false).await;
 
     assert!(r1.removed.is_empty());
     assert!(r2.removed.is_empty());
@@ -642,15 +541,8 @@ fn bun_spec(source: &Path, name: &str) -> LinkSpec {
 #[cfg(unix)]
 fn locked_bun_spec(source: &Path, name: &str) -> LinkSpec {
     LinkSpec {
-        native_cmd_literal_path: false,
-        live_launch_config: None,
-
-        source: source.to_path_buf(),
-        link_name: OsString::from(name),
-        runtime: LinkRuntime::Bun,
         bun_dependencies: BunDependencyMode::Locked,
-        env: Vec::new(),
-        render_target: None,
+        ..bun_spec(source, name)
     }
 }
 
@@ -676,9 +568,7 @@ async fn creates_bun_launcher_as_marked_executable_regular_file() {
     let script = src.join("tool.ts");
     fs::write(&script, b"console.log('hi')\n").await.unwrap();
 
-    let report = link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], false)
-        .await
-        .unwrap();
+    let report = link(&bin, &[bun_spec(&script, "tool")], false).await;
 
     assert_eq!(report.created.len(), 1);
     let launcher = bin.join("tool");
@@ -710,12 +600,8 @@ async fn bun_launcher_is_idempotent_and_refreshes_when_stale() {
     let script = src.join("tool.ts");
     fs::write(&script, b"console.log('hi')\n").await.unwrap();
 
-    link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], false)
-        .await
-        .unwrap();
-    let again = link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], false)
-        .await
-        .unwrap();
+    link(&bin, &[bun_spec(&script, "tool")], false).await;
+    let again = link(&bin, &[bun_spec(&script, "tool")], false).await;
     assert_eq!(
         again.skipped.len(),
         1,
@@ -735,10 +621,7 @@ async fn bun_launcher_is_idempotent_and_refreshes_when_stale() {
     )
     .await
     .unwrap();
-    let refreshed =
-        link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], false)
-            .await
-            .unwrap();
+    let refreshed = link(&bin, &[bun_spec(&script, "tool")], false).await;
     assert_eq!(
         refreshed.overwritten.len(),
         1,
@@ -764,16 +647,12 @@ async fn bun_launcher_conflicts_with_user_file_unless_forced() {
     // A user's own file at the same command name, no managed marker.
     make_plain(&bin, "tool").await;
 
-    let report = link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], false)
-        .await
-        .unwrap();
+    let report = link(&bin, &[bun_spec(&script, "tool")], false).await;
     assert_eq!(report.conflicts.len(), 1);
     assert_eq!(report.conflicts[0].kind, LinkConflictKind::ExistingEntry);
     assert_eq!(fs::read_to_string(bin.join("tool")).await.unwrap(), "data");
 
-    let forced = link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], true)
-        .await
-        .unwrap();
+    let forced = link(&bin, &[bun_spec(&script, "tool")], true).await;
     assert_eq!(forced.overwritten.len(), 1);
     assert!(
         fs::read_to_string(bin.join("tool"))
@@ -792,30 +671,12 @@ async fn unlink_removes_managed_bun_launcher_but_skips_user_file() {
     let (src, bin) = make_dirs().await;
     let script = src.join("tool.ts");
     fs::write(&script, b"console.log('hi')\n").await.unwrap();
-    link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], false)
-        .await
-        .unwrap();
+    link(&bin, &[bun_spec(&script, "tool")], false).await;
     // A user's own regular file that must survive uninstall.
     make_plain(&bin, "user_tool").await;
 
-    let report = unlink_managed_command_with_host(
-        &RealHost,
-        &bin,
-        OsStr::new("tool"),
-        std::slice::from_ref(&src),
-        false,
-    )
-    .await
-    .unwrap();
-    let user = unlink_managed_command_with_host(
-        &RealHost,
-        &bin,
-        OsStr::new("user_tool"),
-        std::slice::from_ref(&src),
-        false,
-    )
-    .await
-    .unwrap();
+    let report = unlink(&bin, "tool", &src, false).await;
+    let user = unlink(&bin, "user_tool", &src, false).await;
     assert!(user.removed.is_empty());
 
     assert!(report.removed.iter().any(|p| p.ends_with("tool")));
@@ -840,9 +701,7 @@ async fn bun_launcher_without_env_has_no_shine_dependency() {
     let script = src.join("tool.ts");
     fs::write(&script, b"console.log('hi')\n").await.unwrap();
 
-    link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], false)
-        .await
-        .unwrap();
+    link(&bin, &[bun_spec(&script, "tool")], false).await;
 
     let content = fs::read_to_string(bin.join("tool")).await.unwrap();
     assert!(
@@ -869,14 +728,7 @@ async fn bun_launcher_with_env_wraps_shine_env_run() {
     fs::write(&script, b"console.log('hi')\n").await.unwrap();
 
     let env = vec!["API_URL".to_string(), "SERVICE_TOKEN=API_TOKEN".to_string()];
-    link_executables_with_host(
-        &RealHost,
-        &bin,
-        &[bun_spec_with_env(&script, "tool", env)],
-        false,
-    )
-    .await
-    .unwrap();
+    link(&bin, &[bun_spec_with_env(&script, "tool", env)], false).await;
 
     let content = fs::read_to_string(bin.join("tool")).await.unwrap();
     // Both prerequisites are checked with a 127 exit.
@@ -900,13 +752,8 @@ async fn locked_bun_launcher_uses_fallback_and_refreshes_disabled_launcher() {
     let script = src.join("tool.ts");
     fs::write(&script, b"import 'zod'\n").await.unwrap();
 
-    link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], false)
-        .await
-        .unwrap();
-    let refreshed =
-        link_executables_with_host(&RealHost, &bin, &[locked_bun_spec(&script, "tool")], false)
-            .await
-            .unwrap();
+    link(&bin, &[bun_spec(&script, "tool")], false).await;
+    let refreshed = link(&bin, &[locked_bun_spec(&script, "tool")], false).await;
     assert_eq!(refreshed.overwritten.len(), 1);
     let content = fs::read_to_string(bin.join("tool")).await.unwrap();
     assert!(content.contains("exec bun --install=fallback"));
@@ -923,11 +770,8 @@ async fn bun_launcher_refreshes_when_env_declaration_changes() {
     fs::write(&script, b"console.log('hi')\n").await.unwrap();
 
     // Install with no env, then replace the same source with a declaration.
-    link_executables_with_host(&RealHost, &bin, &[bun_spec(&script, "tool")], false)
-        .await
-        .unwrap();
-    let changed = link_executables_with_host(
-        &RealHost,
+    link(&bin, &[bun_spec(&script, "tool")], false).await;
+    let changed = link(
         &bin,
         &[bun_spec_with_env(
             &script,
@@ -936,8 +780,7 @@ async fn bun_launcher_refreshes_when_env_declaration_changes() {
         )],
         false,
     )
-    .await
-    .unwrap();
+    .await;
     assert_eq!(
         changed.overwritten.len(),
         1,
@@ -945,8 +788,7 @@ async fn bun_launcher_refreshes_when_env_declaration_changes() {
     );
 
     // Re-running with the same declaration is a no-op (byte-identical).
-    let again = link_executables_with_host(
-        &RealHost,
+    let again = link(
         &bin,
         &[bun_spec_with_env(
             &script,
@@ -955,8 +797,7 @@ async fn bun_launcher_refreshes_when_env_declaration_changes() {
         )],
         false,
     )
-    .await
-    .unwrap();
+    .await;
     assert_eq!(again.skipped.len(), 1);
     assert!(again.overwritten.is_empty());
 
