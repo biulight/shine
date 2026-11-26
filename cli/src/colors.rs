@@ -168,23 +168,14 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn external_presets_note_contains_path() {
-        let path = Path::new("/home/user/.custom/presets");
-        let note = external_presets_note(path);
-        assert!(
-            note.contains("/home/user/.custom/presets"),
-            "note should include the path: {note:?}"
-        );
-    }
-
-    #[test]
-    fn external_presets_note_uses_shared_source_label() {
-        let path = Path::new("/some/dir");
-        let note = external_presets_note(path);
+    fn external_presets_note_includes_source_label_and_path() {
+        let path = "/home/user/.custom/presets";
+        let note = external_presets_note(Path::new(path));
         assert!(
             note.contains("Preset Source") && note.contains("external"),
-            "note should use the shared preset-source vocabulary: {note:?}"
+            "{note:?}"
         );
+        assert!(note.contains(path), "{note:?}");
     }
 
     #[test]

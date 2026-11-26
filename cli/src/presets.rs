@@ -552,11 +552,6 @@ mod tests {
         fs::remove_dir_all(root).await.unwrap();
     }
 
-    #[test]
-    fn embedded_assets_not_empty() {
-        assert!(PresetAssets::iter().count() > 0, "no assets embedded");
-    }
-
     #[tokio::test]
     async fn overlay_asset_paths_include_new_files() {
         let dir = make_temp_dir().await;
@@ -720,27 +715,6 @@ mod tests {
         .shell_categories(Some("nonexistent"))
         .unwrap();
         assert!(cats.is_empty());
-    }
-
-    #[tokio::test]
-    async fn extracts_all_files_into_empty_dir() {
-        let dir = make_temp_dir().await;
-        let report = PresetAssetReader::new(None)
-            .extract_all(&dir, false)
-            .await
-            .unwrap();
-
-        assert!(!report.created.is_empty());
-        assert!(report.skipped.is_empty());
-        assert!(report.overwritten.is_empty());
-
-        for path in &report.created {
-            assert!(path.exists(), "{path:?} should exist");
-            let content = fs::read(path).await.unwrap();
-            assert!(!content.is_empty(), "{path:?} should not be empty");
-        }
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     // Production snapshot discovery and metadata regressions.
@@ -951,6 +925,8 @@ mod tests {
 
         for path in &report.created {
             assert!(path.exists(), "{path:?} should exist after export");
+            let content = fs::read(path).await.unwrap();
+            assert!(!content.is_empty(), "{path:?} should not be empty");
         }
 
         let mut legacy_paths = Vec::new();

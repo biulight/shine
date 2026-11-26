@@ -602,43 +602,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_profile_preserves_explicit_empty_permission_declaration() {
-        let runtime = external_sys_runtime(
-            "version = 2\n\
-             [[items]]\n\
-             id = 'neovim'\n\
-             label = 'Neovim'\n\
-             permissions = { schema_version = 1 }\n\
-             detect = { kind = 'command', command = 'nvim' }\n\
-             install = { kind = 'package', provider = 'apt', package = 'neovim' }\n",
-        );
-
-        let report = runtime
-            .external_code_requirements("sys/neovim")
-            .await
-            .unwrap();
-        assert_eq!(report.requirements.len(), 1);
-        assert!(report.requirements[0].permissions_declared);
-        assert!(report.requirements[0].permissions.is_empty());
-    }
-
-    #[tokio::test]
-    async fn external_profile_preserves_missing_permission_declaration() {
-        let runtime = external_sys_runtime(
-            "version = 2\n\
-             [[items]]\n\
-             id = 'neovim'\n\
-             label = 'Neovim'\n\
-             detect = { kind = 'command', command = 'nvim' }\n\
-             install = { kind = 'package', provider = 'apt', package = 'neovim' }\n",
-        );
-
-        let report = runtime
-            .external_code_requirements("sys/neovim")
-            .await
-            .unwrap();
-        assert_eq!(report.requirements.len(), 1);
-        assert!(!report.requirements[0].permissions_declared);
-        assert!(report.requirements[0].permissions.is_empty());
+    async fn external_profile_distinguishes_missing_and_empty_permission_declarations() {
+        for (declaration, declared) in [("", false), ("permissions = { schema_version = 1 }", true)]
+        {
+            let runtime = external_sys_runtime(&format!(
+                "version = 2\n\
+                 [[items]]\n\
+                 id = 'neovim'\n\
+                 label = 'Neovim'\n\
+                 {declaration}\n\
+                 detect = {{ kind = 'command', command = 'nvim' }}\n\
+                 install = {{ kind = 'package', provider = 'apt', package = 'neovim' }}\n"
+            ));
+            let report = runtime
+                .external_code_requirements("sys/neovim")
+                .await
+                .unwrap();
+            assert_eq!(report.requirements.len(), 1);
+            assert_eq!(
+                report.requirements[0].permissions_declared, declared,
+                "{declaration:?}"
+            );
+            assert!(report.requirements[0].permissions.is_empty());
+        }
     }
 }

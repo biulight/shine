@@ -429,17 +429,10 @@ content_hash = 7
     }
 
     #[test]
-    fn hash_content_is_deterministic() {
-        let h1 = hash_content(b"hello");
-        let h2 = hash_content(b"hello");
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn hash_content_differs_for_different_inputs() {
-        let h1 = hash_content(b"hello");
-        let h2 = hash_content(b"world");
-        assert_ne!(h1, h2);
+    fn hash_content_is_repeatable_and_distinguishes_inputs() {
+        let hello = hash_content(b"hello");
+        assert_eq!(hello, hash_content(b"hello"));
+        assert_ne!(hello, hash_content(b"world"));
     }
 
     #[test]

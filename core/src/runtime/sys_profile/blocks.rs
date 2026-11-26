@@ -515,31 +515,24 @@ mod tests {
     }
 
     #[test]
-    fn extract_sentinel_block_returns_none_when_start_missing() {
-        assert_eq!(extract_sentinel_block("no markers here", SENTINEL), None);
+    fn extract_sentinel_block_requires_both_markers() {
+        for content in ["no markers here", "STARTonly, no end"] {
+            assert_eq!(extract_sentinel_block(content, SENTINEL), None, "{content}");
+        }
     }
 
     #[test]
-    fn extract_sentinel_block_returns_none_when_end_missing_after_start() {
-        assert_eq!(extract_sentinel_block("STARTonly, no end", SENTINEL), None);
-    }
-
-    #[test]
-    fn extract_sentinel_block_includes_one_trailing_newline_when_present() {
-        let content = "pre\nSTART\nbody\nEND\npost";
-        assert_eq!(
-            extract_sentinel_block(content, SENTINEL),
-            Some("START\nbody\nEND\n")
-        );
-    }
-
-    #[test]
-    fn extract_sentinel_block_omits_trailing_newline_when_absent() {
-        let content = "pre\nSTART\nbody\nEND";
-        assert_eq!(
-            extract_sentinel_block(content, SENTINEL),
-            Some("START\nbody\nEND")
-        );
+    fn extract_sentinel_block_preserves_trailing_newline() {
+        for (content, expected) in [
+            ("pre\nSTART\nbody\nEND\npost", "START\nbody\nEND\n"),
+            ("pre\nSTART\nbody\nEND", "START\nbody\nEND"),
+        ] {
+            assert_eq!(
+                extract_sentinel_block(content, SENTINEL),
+                Some(expected),
+                "{content:?}"
+            );
+        }
     }
 
     #[test]

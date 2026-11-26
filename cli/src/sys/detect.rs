@@ -48,10 +48,21 @@ mod tests {
     }
 
     #[test]
-    fn detects_ubuntu_from_os_release() {
-        let os_release = "PRETTY_NAME=\"Ubuntu 22.04\"\nID=ubuntu\nVERSION_ID=\"22.04\"\n";
-        let result = detect_os_id_from("linux", Some(os_release)).unwrap();
-        assert_eq!(result, "ubuntu");
+    fn detects_linux_distribution_from_os_release() {
+        for (os_release, expected) in [
+            (
+                "PRETTY_NAME=\"Ubuntu 22.04\"\nID=ubuntu\nVERSION_ID=\"22.04\"\n",
+                "ubuntu",
+            ),
+            ("ID=\"ubuntu\"\n", "ubuntu"),
+            ("ID=Debian\n", "debian"),
+        ] {
+            assert_eq!(
+                detect_os_id_from("linux", Some(os_release)).unwrap(),
+                expected,
+                "{os_release:?}"
+            );
+        }
     }
 
     #[test]
@@ -64,20 +75,6 @@ mod tests {
             detect_os_id_from("linux", Some("ID=manjaro\nID_LIKE=arch\n")).unwrap(),
             "manjaro"
         );
-    }
-
-    #[test]
-    fn detects_quoted_id() {
-        let os_release = "ID=\"ubuntu\"\n";
-        let result = detect_os_id_from("linux", Some(os_release)).unwrap();
-        assert_eq!(result, "ubuntu");
-    }
-
-    #[test]
-    fn lowercases_id() {
-        let os_release = "ID=Debian\n";
-        let result = detect_os_id_from("linux", Some(os_release)).unwrap();
-        assert_eq!(result, "debian");
     }
 
     #[test]

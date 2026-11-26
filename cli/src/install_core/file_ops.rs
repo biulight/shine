@@ -32,7 +32,7 @@ mod tests {
     #[tokio::test]
     async fn install_to_empty_destination() {
         let dir = make_temp_dir().await;
-        let dest = dir.join("dest.toml");
+        let dest = dir.join("deep/nested/dest.toml");
 
         let outcome = install_bytes_with_host(&RealHost, b"content", &dest, false, false, false)
             .await
@@ -40,18 +40,6 @@ mod tests {
         assert!(matches!(outcome, InstallOutcome::Installed { .. }));
         assert!(dest.exists());
         assert_eq!(fs::read(&dest).await.unwrap(), b"content");
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn install_creates_parent_directories() {
-        let dir = make_temp_dir().await;
-        let dest = dir.join("deep/nested/dest.toml");
-
-        install_bytes_with_host(&RealHost, b"content", &dest, false, false, false)
-            .await
-            .unwrap();
-        assert!(dest.exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

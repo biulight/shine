@@ -39,5 +39,7 @@ mod tests {
         assert_eq!(categories.len(), 1);
         assert_eq!(categories[0].name, "vim");
         assert!(!categories[0].files.is_empty());
+        assert!(categories[0].uses_metadata);
+        assert_eq!(categories[0].destination_root.as_deref(), Some("~/.vim"));
     }
 }

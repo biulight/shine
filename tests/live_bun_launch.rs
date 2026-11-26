@@ -426,19 +426,11 @@ fn live_bun_receipt_is_read_after_operation_lock_is_acquired() {
 }
 
 #[cfg(unix)]
-#[test]
-fn live_bun_parent_signal_is_relayed_and_child_is_reaped() {
-    let fixture = Fixture::new(false);
-    let ready = fixture.root.join("ready");
-    let mut child = fixture
-        .shine()
-        .args(["__shell-launch", "shell/demo/run", "--"])
-        .env("PROBE_READY", &ready)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+fn wait_for_bun_pid(
+    child: &mut std::process::Child,
+    ready: &Path,
+    deadline: std::time::Instant,
+) -> i32 {
     while !ready.exists() && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -447,10 +439,15 @@ fn live_bun_parent_signal_is_relayed_and_child_is_reaped() {
         let _ = child.wait();
         panic!("Bun did not become ready");
     }
-    let pid: i32 = fs::read_to_string(&ready).unwrap().parse().unwrap();
-    unsafe {
-        libc::kill(child.id() as i32, libc::SIGTERM);
-    }
+    fs::read_to_string(ready).unwrap().parse().unwrap()
+}
+
+#[cfg(unix)]
+fn wait_for_launcher_exit(
+    child: &mut std::process::Child,
+    pid: i32,
+    deadline: std::time::Instant,
+) -> Option<i32> {
     let mut status = None;
     while std::time::Instant::now() < deadline {
         status = child.try_wait().unwrap();
@@ -467,7 +464,28 @@ fn live_bun_parent_signal_is_relayed_and_child_is_reaped() {
         let _ = child.wait();
     }
     let _ = child.wait(); // try_wait may already have reaped it; always complete child ownership.
-    assert_eq!(status.and_then(|status| status.code()), Some(143));
+    status.and_then(|status| status.code())
+}
+
+#[cfg(unix)]
+#[test]
+fn live_bun_parent_signal_is_relayed_and_child_is_reaped() {
+    let fixture = Fixture::new(false);
+    let ready = fixture.root.join("ready");
+    let mut child = fixture
+        .shine()
+        .args(["__shell-launch", "shell/demo/run", "--"])
+        .env("PROBE_READY", &ready)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let pid = wait_for_bun_pid(&mut child, &ready, deadline);
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+    assert_eq!(wait_for_launcher_exit(&mut child, pid, deadline), Some(143));
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "Bun remained alive");
 }
 
@@ -487,35 +505,11 @@ fn live_bun_foreground_group_interrupt_is_reaped() {
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !ready.exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    if !ready.exists() {
-        child.kill().unwrap();
-        let _ = child.wait();
-        panic!("Bun did not become ready");
-    }
-    let pid: i32 = fs::read_to_string(&ready).unwrap().parse().unwrap();
+    let pid = wait_for_bun_pid(&mut child, &ready, deadline);
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGINT);
     }
-    let mut status = None;
-    while std::time::Instant::now() < deadline {
-        status = child.try_wait().unwrap();
-        if status.is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    if status.is_none() {
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    let _ = child.wait(); // try_wait may already have reaped it; always complete child ownership.
-    assert_eq!(status.and_then(|status| status.code()), Some(130));
+    assert_eq!(wait_for_launcher_exit(&mut child, pid, deadline), Some(130));
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "Bun remained alive");
 }
 

@@ -264,8 +264,7 @@ async fn second_removal_receipt_failure_preserves_the_first_committed_removal() 
     assert!(runtime.host().read(&journal).await.is_err());
 }
 
-#[tokio::test]
-async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
+fn json_relocation_fixture() -> (CoreRuntime<InMemoryHost>, PathBuf, PathBuf) {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "app/demo/shine.toml",
@@ -282,6 +281,12 @@ async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
         .context()
         .home_dir
         .join(".config/demo-next/settings.json");
+    (runtime, previous, desired)
+}
+
+#[tokio::test]
+async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
+    let (runtime, previous, desired) = json_relocation_fixture();
     let rollback = crate::action::managed_file_rollback_path(&previous);
     let managed_keys = vec!["proxy".to_string()];
     AppManifest {
@@ -385,22 +390,7 @@ async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
 
 #[tokio::test]
 async fn json_relocation_receipt_failure_restores_only_owned_keys_on_both_sides() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy']\n".to_vec(),
-            )
-            .file("app/demo/settings.json", br#"{"proxy":"next"}"#.to_vec())
-            .build();
-    let runtime = runtime(snapshot);
-    let previous = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-old/settings.json");
-    let desired = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-next/settings.json");
+    let (runtime, previous, desired) = json_relocation_fixture();
     let rollback = crate::action::managed_file_rollback_path(&previous);
     let managed_keys = vec!["proxy".to_string()];
     runtime.host().put_file(
@@ -486,22 +476,7 @@ async fn json_relocation_receipt_failure_restores_only_owned_keys_on_both_sides(
 
 #[tokio::test]
 async fn committed_json_relocation_cleanup_preserves_user_owned_values_on_both_sides() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy']\n".to_vec(),
-            )
-            .file("app/demo/settings.json", br#"{"proxy":"next"}"#.to_vec())
-            .build();
-    let runtime = runtime(snapshot);
-    let previous = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-old/settings.json");
-    let desired = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-next/settings.json");
+    let (runtime, previous, desired) = json_relocation_fixture();
     let rollback = crate::action::managed_file_rollback_path(&previous);
     let managed_keys = vec!["proxy".to_string()];
     runtime.host().put_file(

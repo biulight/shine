@@ -105,20 +105,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn parse_osc_rgb_scales_16_bit_components_to_8_bit() {
-        // Full-scale white: 0xffff/0xffff/0xffff -> 255/255/255.
-        assert_eq!(parse_osc_rgb("rgb:ffff/ffff/ffff"), Some((255, 255, 255)));
-        // Full-scale black.
-        assert_eq!(parse_osc_rgb("rgb:0000/0000/0000"), Some((0, 0, 0)));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn parse_osc_rgb_scales_differing_component_widths() {
-        // A 2-digit component (0-255 native) must scale identically to a
-        // 4-digit component representing the same fraction.
-        assert_eq!(parse_osc_rgb("rgb:ff/ff/ff"), Some((255, 255, 255)));
-        assert_eq!(parse_osc_rgb("rgb:00/00/00"), Some((0, 0, 0)));
+    fn parse_osc_rgb_scales_two_and_four_digit_components() {
+        for (body, level) in [
+            ("rgb:ffff/ffff/ffff", 255),
+            ("rgb:0000/0000/0000", 0),
+            ("rgb:ff/ff/ff", 255),
+            ("rgb:00/00/00", 0),
+        ] {
+            assert_eq!(parse_osc_rgb(body), Some((level, level, level)), "{body}");
+        }
     }
 
     #[cfg(unix)]

@@ -875,15 +875,9 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test(flavor = "current_thread")]
-    async fn upgrade_prune_stale_removes_unmodified_file_and_manifest_entry() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
-
-        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
+    async fn install_sample_for_prune_test(dir: &std::path::Path) -> (Config, std::path::PathBuf) {
+        write_external_sample_app(dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
@@ -891,6 +885,18 @@ mod tests {
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
+        (config, dest)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_prune_stale_removes_unmodified_file_and_manifest_entry() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        let (config, dest) = install_sample_for_prune_test(&dir).await;
         fs::remove_dir_all(dir.join("presets/app/sample"))
             .await
             .unwrap();
@@ -924,15 +930,7 @@ mod tests {
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
-        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
-        let dest = dir.join(".config/sample/daemon.json");
+        let (config, dest) = install_sample_for_prune_test(&dir).await;
         fs::remove_file(&dest).await.unwrap();
         fs::remove_dir_all(dir.join("presets/app/sample"))
             .await
@@ -966,15 +964,7 @@ mod tests {
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
-        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
-        let dest = dir.join(".config/sample/daemon.json");
+        let (config, dest) = install_sample_for_prune_test(&dir).await;
         fs::remove_dir_all(dir.join("presets/app/sample"))
             .await
             .unwrap();
@@ -1008,15 +998,7 @@ mod tests {
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
-        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
-        let dest = dir.join(".config/sample/daemon.json");
+        let (config, dest) = install_sample_for_prune_test(&dir).await;
         fs::write(&dest, b"{\"user\":true}\n").await.unwrap();
         fs::remove_dir_all(dir.join("presets/app/sample"))
             .await

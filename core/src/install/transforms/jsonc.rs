@@ -40,26 +40,18 @@ mod tests {
     }
 
     #[test]
-    fn strips_line_comments() {
-        let input = b"{\n  \"key\": \"value\" // comment\n}";
-        let out = apply(input).unwrap();
-        assert!(!std::str::from_utf8(&out).unwrap().contains("//"));
-        let _: serde_json::Value = serde_json::from_slice(&out).unwrap();
-    }
-
-    #[test]
-    fn strips_block_comments() {
-        let input = b"{ /* block */ \"key\": \"value\" }";
-        let out = apply(input).unwrap();
-        assert!(!std::str::from_utf8(&out).unwrap().contains("/*"));
-        let _: serde_json::Value = serde_json::from_slice(&out).unwrap();
-    }
-
-    #[test]
-    fn strips_trailing_commas() {
-        let input = b"{ \"a\": 1, }";
-        let out = apply(input).unwrap();
-        let _: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    fn strips_line_and_block_comments() {
+        for (input, marker) in [
+            (b"{\n  \"key\": \"value\" // comment\n}".as_slice(), "//"),
+            (b"{ /* block */ \"key\": \"value\" }", "/*"),
+        ] {
+            let out = apply(input).unwrap();
+            assert!(
+                !std::str::from_utf8(&out).unwrap().contains(marker),
+                "{marker}"
+            );
+            let _: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        }
     }
 
     #[test]
@@ -105,6 +97,7 @@ mod tests {
 
     #[test]
     fn retains_existing_permissive_syntax() {
+        assert_eq!(round_trip(br#"{ "a": 1, }"#), serde_json::json!({"a": 1}));
         assert_eq!(
             round_trip(b"{unquoted: 'value', hex: 0x10, plus: +2, items: [1 2],}"),
             serde_json::json!({"unquoted": "value", "hex": 16, "plus": 2, "items": [1, 2]})

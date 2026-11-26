@@ -888,38 +888,23 @@ mod tests {
     }
 
     #[test]
-    fn encrypt_backend_cli_wins_over_config() {
+    fn encrypt_backend_uses_cli_then_config_then_gpg() {
         let dir = std::env::temp_dir().join(format!("shine-env-backend-{}", uuid::Uuid::new_v4()));
-        let mut config = config_in(&dir);
-        config.secret_backend = Some("age".to_string());
-
-        assert_eq!(
-            resolve_encrypt_backend(&config, Some("gpg")).unwrap(),
-            BackendKind::Gpg
-        );
-    }
-
-    #[test]
-    fn encrypt_backend_falls_back_to_config() {
-        let dir = std::env::temp_dir().join(format!("shine-env-backend-{}", uuid::Uuid::new_v4()));
-        let mut config = config_in(&dir);
-        config.secret_backend = Some("age".to_string());
-
-        assert_eq!(
-            resolve_encrypt_backend(&config, None).unwrap(),
-            BackendKind::Age
-        );
-    }
-
-    #[test]
-    fn encrypt_backend_defaults_to_gpg() {
-        let dir = std::env::temp_dir().join(format!("shine-env-backend-{}", uuid::Uuid::new_v4()));
-        let config = config_in(&dir);
-
-        assert_eq!(
-            resolve_encrypt_backend(&config, None).unwrap(),
-            BackendKind::Gpg
-        );
+        let default = config_in(&dir);
+        let mut age = config_in(&dir);
+        age.secret_backend = Some("age".to_string());
+        for (config, cli, expected) in [
+            (&age, Some("gpg"), BackendKind::Gpg),
+            (&age, None, BackendKind::Age),
+            (&default, None, BackendKind::Gpg),
+        ] {
+            assert_eq!(
+                resolve_encrypt_backend(config, cli).unwrap(),
+                expected,
+                "cli={cli:?}, config={:?}",
+                config.secret_backend
+            );
+        }
     }
 
     #[test]
@@ -960,34 +945,21 @@ mod tests {
     }
 
     #[test]
-    fn encrypt_recipients_gpg_treats_empty_config_as_missing() {
+    fn encrypt_recipients_gpg_reports_missing_or_blank_config() {
         let dir =
             std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
-        let mut config = config_in(&dir);
-        config.gpg_recipients = vec!["  ".to_string()];
-
-        let err = resolve_encrypt_recipients(BackendKind::Gpg, &[], &config).unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("pass -r/--recipient, set gpg_recipients"),
-            "error should explain how to set recipient: {err:#}"
-        );
-    }
-
-    #[test]
-    fn encrypt_recipients_gpg_errors_when_missing() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
-        let config = config_in(&dir);
-
-        let err = resolve_encrypt_recipients(BackendKind::Gpg, &[], &config).unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("pass -r/--recipient, set gpg_recipients"),
-            "error should explain how to set recipient: {err:#}"
-        );
+        let default = config_in(&dir);
+        let mut blank = config_in(&dir);
+        blank.gpg_recipients = vec!["  ".to_owned()];
+        for config in [&default, &blank] {
+            let err = resolve_encrypt_recipients(BackendKind::Gpg, &[], config).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("pass -r/--recipient, set gpg_recipients"),
+                "configured {:?}: {err:#}",
+                config.gpg_recipients
+            );
+        }
     }
 
     #[test]

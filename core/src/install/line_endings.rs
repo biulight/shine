@@ -40,13 +40,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_eol_converts_crlf_to_lf() {
-        assert_eq!(normalize_eol(b"a\r\nb\r\n"), b"a\nb\n");
-    }
-
-    #[test]
-    fn normalize_eol_converts_lone_cr_to_lf() {
-        assert_eq!(normalize_eol(b"a\rb\r"), b"a\nb\n");
+    fn normalize_eol_converts_crlf_and_lone_cr_to_lf() {
+        for input in [b"a\r\nb\r\n".as_slice(), b"a\rb\r"] {
+            assert_eq!(normalize_eol(input), b"a\nb\n", "{input:?}");
+        }
     }
 
     #[test]

@@ -2,22 +2,6 @@
 use std::path::PathBuf;
 
 #[test]
-fn embedded_shell_metadata_returns_proxy_and_utils() {
-    let cats = super::support::runtime(shine_core::runtime::RuntimePlatform::Linux)
-        .shell_categories(None)
-        .unwrap();
-    let names: Vec<&str> = cats.iter().map(|c| c.name.as_str()).collect();
-    assert!(
-        names.contains(&"proxy"),
-        "proxy category missing: {names:?}"
-    );
-    assert!(
-        names.contains(&"utils"),
-        "utils category missing: {names:?}"
-    );
-}
-
-#[test]
 fn agent_provider_config_is_embedded_auxiliary_data_on_every_platform() {
     use shine_core::runtime::RuntimePlatform;
     for platform in [
@@ -42,11 +26,18 @@ fn agent_provider_config_is_embedded_auxiliary_data_on_every_platform() {
 }
 
 #[test]
-fn embedded_shell_metadata_proxy_scripts_have_descriptions() {
+fn embedded_shell_metadata_includes_utils_and_describes_all_proxy_scripts() {
     let cats = super::support::runtime(shine_core::runtime::RuntimePlatform::Linux)
         .shell_categories(None)
         .unwrap();
-    let proxy = cats.iter().find(|c| c.name == "proxy").unwrap();
+    assert!(
+        cats.iter().any(|c| c.name == "utils"),
+        "utils category missing"
+    );
+    let proxy = cats
+        .iter()
+        .find(|c| c.name == "proxy")
+        .expect("proxy category missing");
     assert!(!proxy.files.is_empty());
     for script in &proxy.files {
         assert!(

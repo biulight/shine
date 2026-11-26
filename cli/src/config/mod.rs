@@ -704,11 +704,12 @@ mod tests {
     }
 
     #[test]
-    fn age_identities_is_empty_without_configured_or_default_identity() {
+    fn age_identities_are_empty_with_no_default_and_unset_or_blank_path() {
         let dir =
             std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
-        let config = Config::new_for_test(&dir);
-
+        let mut config = Config::new_for_test(&dir);
+        assert!(config.resolved_age_identities().is_empty());
+        config.age_identity = Some("   ".to_string());
         assert!(config.resolved_age_identities().is_empty());
     }
 
@@ -723,16 +724,6 @@ mod tests {
             config.resolved_age_identities(),
             vec![PathBuf::from("/tmp/my-identity.txt")]
         );
-    }
-
-    #[test]
-    fn age_identities_treats_blank_configured_path_as_unset() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
-        let mut config = Config::new_for_test(&dir);
-        config.age_identity = Some("   ".to_string());
-
-        assert!(config.resolved_age_identities().is_empty());
     }
 
     #[tokio::test]

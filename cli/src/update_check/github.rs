@@ -339,40 +339,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn github_auth_token_uses_github_token_first() {
-        let token = github_auth_token_from_vars(|name| match name {
-            "GITHUB_TOKEN" => Some(" github-value ".to_string()),
-            "GH_TOKEN" => Some("gh-value".to_string()),
-            _ => None,
-        });
-
-        assert_eq!(token.as_deref(), Some("github-value"));
-    }
-
-    #[test]
-    fn github_auth_token_uses_gh_token_when_github_token_is_absent() {
-        let token = github_auth_token_from_vars(|name| match name {
-            "GH_TOKEN" => Some("gh-value".to_string()),
-            _ => None,
-        });
-
-        assert_eq!(token.as_deref(), Some("gh-value"));
-    }
-
-    #[test]
-    fn github_auth_token_ignores_empty_values() {
-        let token = github_auth_token_from_vars(|name| match name {
-            "GITHUB_TOKEN" => Some("  ".to_string()),
-            "GH_TOKEN" => Some("gh-value".to_string()),
-            _ => None,
-        });
-
-        assert_eq!(token.as_deref(), Some("gh-value"));
-    }
-
-    #[test]
-    fn github_auth_token_returns_none_without_token() {
-        assert_eq!(github_auth_token_from_vars(|_| None), None);
+    fn github_auth_token_uses_first_nonblank_token() {
+        for (github, gh, expected) in [
+            (
+                Some(" github-value "),
+                Some("gh-value"),
+                Some("github-value"),
+            ),
+            (None, Some("gh-value"), Some("gh-value")),
+            (Some("  "), Some("gh-value"), Some("gh-value")),
+            (None, None, None),
+        ] {
+            let token = github_auth_token_from_vars(|name| match name {
+                "GITHUB_TOKEN" => github.map(str::to_owned),
+                "GH_TOKEN" => gh.map(str::to_owned),
+                _ => None,
+            });
+            assert_eq!(
+                token.as_deref(),
+                expected,
+                "GITHUB_TOKEN={github:?}, GH_TOKEN={gh:?}"
+            );
+        }
     }
 
     #[test]

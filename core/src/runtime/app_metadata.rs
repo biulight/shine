@@ -927,29 +927,16 @@ generator={script='gen.ts',runtime='bun',env=[{source='URL',target='INPUT',sensi
     }
 
     #[test]
-    fn falls_back_to_default_dest_root_when_no_annotation() {
+    fn default_destination_root_preserves_relative_path() {
         let runtime =
             destination_runtime(PresetSnapshot::builder(PresetSourceKind::External).build());
-        assert_eq!(
-            legacy_destination(None, "config.toml").unwrap(),
-            runtime
-                .context()
-                .app_default_dest_root
-                .join("demo/config.toml")
-        );
-    }
-
-    #[test]
-    fn fallback_keeps_nested_relative_path() {
-        let runtime =
-            destination_runtime(PresetSnapshot::builder(PresetSourceKind::External).build());
-        assert_eq!(
-            legacy_destination(None, "colors/theme.vim").unwrap(),
-            runtime
-                .context()
-                .app_default_dest_root
-                .join("demo/colors/theme.vim")
-        );
+        let root = runtime.context().app_default_dest_root.join("demo");
+        for relative in ["config.toml", "colors/theme.vim"] {
+            assert_eq!(
+                legacy_destination(None, relative).unwrap(),
+                root.join(relative)
+            );
+        }
     }
 
     #[test]

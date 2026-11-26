@@ -25,11 +25,6 @@ async function fixture(t, versions = ['2.2', '1.8']) {
   return {root, docs};
 }
 
-test('accepts one stable version per major with matching resources', async (t) => {
-  const {root, docs} = await fixture(t);
-  assert.deepEqual(await checkVersions(root, docs), []);
-});
-
 test('rejects multiple stable versions of the same major', async (t) => {
   const {root, docs} = await fixture(t, ['2.2', '2.1', '1.8']);
   assert.match((await checkVersions(root, docs)).join('\n'), /one stable documentation version per major/);

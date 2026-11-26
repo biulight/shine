@@ -121,24 +121,11 @@ mod tests {
     }
 
     #[test]
-    fn passthrough_when_no_closing_at_at() {
+    fn preserves_incomplete_or_invalid_placeholders() {
         let v = vars(&[]);
-        let out = apply(b"hello @@ world", &v).unwrap();
-        assert_eq!(out, b"hello @@ world");
-    }
-
-    #[test]
-    fn passthrough_for_invalid_var_name_with_space() {
-        let v = vars(&[]);
-        let out = apply(b"@@has space@@", &v).unwrap();
-        assert_eq!(out, b"@@has space@@");
-    }
-
-    #[test]
-    fn passthrough_for_empty_placeholder() {
-        let v = vars(&[]);
-        let out = apply(b"@@@@", &v).unwrap();
-        assert_eq!(out, b"@@@@");
+        for input in [b"hello @@ world".as_slice(), b"@@has space@@", b"@@@@"] {
+            assert_eq!(apply(input, &v).unwrap(), input, "{input:?}");
+        }
     }
 
     #[test]

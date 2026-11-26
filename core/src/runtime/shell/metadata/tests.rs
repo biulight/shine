@@ -264,65 +264,50 @@ fn production_description(bytes: &[u8], link_runtime: LinkRuntime) -> Vec<String
 }
 
 #[test]
-fn parse_description_extracts_comment_block() {
-    let script = b"#!/bin/bash\n# First line.\n# Second line.\n\nsome_command\n";
-    let desc = production_description(script, LinkRuntime::Native);
-    assert_eq!(desc, vec!["First line.", "Second line."]);
+fn native_description_reads_only_the_header_and_preserves_internal_blank_lines() {
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "#!/bin/bash\n# First line.\n# Second line.\n\nsome_command\n",
+            &["First line.", "Second line."],
+        ),
+        ("#!/bin/bash\nsome_command\n", &[]),
+        (
+            "#!/bin/bash\n# First.\n#\n# Third.\n",
+            &["First.", "", "Third."],
+        ),
+        ("#!/bin/bash\n# First.\n#\n#\n", &["First."]),
+        ("", &[]),
+    ];
+    for &(script, expected) in cases {
+        assert_eq!(
+            production_description(script.as_bytes(), LinkRuntime::Native),
+            expected,
+            "{script:?}"
+        );
+    }
 }
 
 #[test]
-fn parse_description_skips_shebang_only() {
-    let script = b"#!/bin/bash\nsome_command\n";
-    let desc = production_description(script, LinkRuntime::Native);
-    assert!(desc.is_empty());
-}
-
-#[test]
-fn parse_description_handles_bare_hash_as_empty_line() {
-    let script = b"#!/bin/bash\n# First.\n#\n# Third.\n";
-    let desc = production_description(script, LinkRuntime::Native);
-    assert_eq!(desc, vec!["First.", "", "Third."]);
-}
-
-#[test]
-fn parse_description_trims_trailing_empty_lines() {
-    let script = b"#!/bin/bash\n# First.\n#\n#\n";
-    let desc = production_description(script, LinkRuntime::Native);
-    assert_eq!(desc, vec!["First."]);
-}
-
-#[test]
-fn parse_bun_description_extracts_slash_comment_block() {
-    let script = b"// First line.\n// Second line.\nconsole.log('hi')\n";
-    let desc = production_description(script, LinkRuntime::Bun);
-    assert_eq!(desc, vec!["First line.", "Second line."]);
-}
-
-#[test]
-fn parse_bun_description_skips_shebang_and_stops_at_code() {
-    let script = b"#!/usr/bin/env bun\n// Only line.\nexport const x = 1\n";
-    let desc = production_description(script, LinkRuntime::Bun);
-    assert_eq!(desc, vec!["Only line."]);
-}
-
-#[test]
-fn parse_bun_description_handles_bare_slash_as_empty_line() {
-    let script = b"// First.\n//\n// Third.\n";
-    let desc = production_description(script, LinkRuntime::Bun);
-    assert_eq!(desc, vec!["First.", "", "Third."]);
-}
-
-#[test]
-fn parse_bun_description_empty_when_starts_with_code() {
-    let script = b"import { foo } from './foo'\n// not a header\n";
-    let desc = production_description(script, LinkRuntime::Bun);
-    assert!(desc.is_empty());
-}
-
-#[test]
-fn parse_description_empty_content() {
-    let desc = production_description(b"", LinkRuntime::Native);
-    assert!(desc.is_empty());
+fn bun_description_reads_only_the_header_and_preserves_internal_blank_lines() {
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "// First line.\n// Second line.\nconsole.log('hi')\n",
+            &["First line.", "Second line."],
+        ),
+        (
+            "#!/usr/bin/env bun\n// Only line.\nexport const x = 1\n",
+            &["Only line."],
+        ),
+        ("// First.\n//\n// Third.\n", &["First.", "", "Third."]),
+        ("import { foo } from './foo'\n// not a header\n", &[]),
+    ];
+    for &(script, expected) in cases {
+        assert_eq!(
+            production_description(script.as_bytes(), LinkRuntime::Bun),
+            expected,
+            "{script:?}"
+        );
+    }
 }
 
 #[test]

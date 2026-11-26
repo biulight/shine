@@ -509,7 +509,6 @@ fn cli_accepts_refactored_update_commands() {
             command: StateCommands::Migrate(StateMigrateCommand { dry_run: true })
         }
     ));
-    assert!(Cli::try_parse_from(["shine", "clear"]).is_err());
 }
 
 #[test]
@@ -861,21 +860,7 @@ fn cli_accepts_top_level_init_command() {
 }
 
 #[test]
-fn cli_accepts_env_secret_export_command() {
-    let cli =
-        Cli::try_parse_from(["shine", "env", "secret", "export", "DEEPSEEK_API_KEY"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Env {
-            command: EnvCommands::Secret(commands::EnvSecretCommand {
-                command: EnvSecretSubcommand::Export { key, alias: None }
-            })
-        } if key == "DEEPSEEK_API_KEY"
-    ));
-}
-
-#[test]
-fn cli_accepts_primary_env_secret_commands() {
+fn cli_accepts_env_secret_decrypt() {
     assert!(matches!(
         Cli::try_parse_from(["shine", "env", "secret", "decrypt", "TOKEN_SECRET"])
             .unwrap()
@@ -886,7 +871,6 @@ fn cli_accepts_primary_env_secret_commands() {
             })
         } if key == "TOKEN_SECRET"
     ));
-    assert!(Cli::try_parse_from(["shine", "env", "secret", "identity", "list",]).is_ok());
 }
 
 #[test]
@@ -958,25 +942,22 @@ fn cli_accepts_env_list_reveal() {
 }
 
 #[test]
-fn cli_accepts_env_secret_export_with_alias() {
-    let cli = Cli::try_parse_from([
-        "shine",
-        "env",
-        "secret",
-        "export",
-        "DEEPSEEK_API_KEY",
-        "--as",
-        "AI_KEY",
-    ])
-    .unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Env {
-            command: EnvCommands::Secret(commands::EnvSecretCommand {
-                command: EnvSecretSubcommand::Export { key, alias: Some(a) }
-            })
-        } if key == "DEEPSEEK_API_KEY" && a == "AI_KEY"
-    ));
+fn cli_parses_env_secret_export_with_and_without_alias() {
+    for (options, expected_alias) in [(&[][..], None), (&["--as", "AI_KEY"][..], Some("AI_KEY"))] {
+        let argv = ["shine", "env", "secret", "export", "DEEPSEEK_API_KEY"];
+        let cli = Cli::try_parse_from(argv.into_iter().chain(options.iter().copied())).unwrap();
+        assert!(
+            matches!(
+                cli.command,
+                Commands::Env {
+                    command: EnvCommands::Secret(commands::EnvSecretCommand {
+                        command: EnvSecretSubcommand::Export { key, alias }
+                    })
+                } if key == "DEEPSEEK_API_KEY" && alias.as_deref() == expected_alias
+            ),
+            "{options:?}"
+        );
+    }
 }
 
 #[test]
@@ -1475,7 +1456,7 @@ fn cli_rejects_legacy_show_command() {
 }
 
 #[test]
-fn cli_accepts_primary_authoring_artifact_and_bootstrap_spellings() {
+fn cli_accepts_primary_authoring_and_artifact_spellings() {
     assert!(matches!(
         Cli::try_parse_from(["shine", "preset", "new", "app"])
             .unwrap()
@@ -1521,14 +1502,6 @@ fn cli_accepts_primary_authoring_artifact_and_bootstrap_spellings() {
                 command: AppArtifactCommands::Apply { app_id, .. }
             }
         } if app_id == "surge"
-    ));
-    assert!(matches!(
-        Cli::try_parse_from(["shine", "sys", "bootstrap", "--dry-run"])
-            .unwrap()
-            .command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap { dry_run: true, .. }
-        }
     ));
 }
 

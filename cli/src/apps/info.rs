@@ -359,16 +359,3 @@ pub(crate) fn print_categories(categories: &[metadata::AppCategory]) {
         println!("{}", colors::dim(hint));
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn list_uses_embedded_metadata_for_vim() {
-        let categories = metadata::load_embedded_categories(Some("vim")).unwrap();
-        let vim = categories.iter().find(|c| c.name == "vim").unwrap();
-        assert!(vim.uses_metadata);
-        assert_eq!(vim.destination_root.as_deref(), Some("~/.vim"));
-    }
-}

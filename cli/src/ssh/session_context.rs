@@ -73,29 +73,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_split_control_path_option() {
-        let opts = vec![
-            "-o".to_string(),
-            "ControlPath=/tmp/x".to_string(),
-            "dev".to_string(),
-        ];
-        assert!(user_set_control_options(&opts));
-    }
-
-    #[test]
-    fn detects_glued_control_master_option() {
-        let opts = vec!["-oControlMaster=auto".to_string()];
-        assert!(user_set_control_options(&opts));
-    }
-
-    #[test]
-    fn ignores_unrelated_options() {
-        let opts = vec![
-            "-p".to_string(),
-            "2222".to_string(),
-            "-oPort=22".to_string(),
-        ];
-        assert!(!user_set_control_options(&opts));
+    fn detects_only_ssh_control_options() {
+        for (args, expected) in [
+            (&["-o", "ControlPath=/tmp/x", "dev"][..], true),
+            (&["-oControlMaster=auto"][..], true),
+            (&["-p", "2222", "-oPort=22"][..], false),
+        ] {
+            let options: Vec<_> = args.iter().map(|arg| (*arg).to_owned()).collect();
+            assert_eq!(user_set_control_options(&options), expected, "{args:?}");
+        }
     }
 
     #[tokio::test]

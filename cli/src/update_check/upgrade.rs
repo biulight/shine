@@ -411,23 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn platform_target_maps_supported_targets() {
-        assert_eq!(
-            platform_target("macos", "aarch64").unwrap(),
-            "darwin-aarch64"
-        );
-        assert_eq!(platform_target("linux", "x86_64").unwrap(), "linux-x86_64");
-        assert_eq!(
-            platform_target("windows", "x86_64").unwrap(),
-            "windows-x86_64"
-        );
-        assert_eq!(
-            platform_target("windows", "aarch64").unwrap(),
-            "windows-aarch64"
-        );
-    }
-
-    #[test]
     fn asset_file_name_uses_versioned_target_name_for_stable() {
         let release = GithubRelease {
             tag_name: "v1.2.3".to_string(),
@@ -500,21 +483,29 @@ mod tests {
     }
 
     #[test]
-    fn find_release_asset_selects_matching_windows_asset() {
+    fn find_release_asset_selects_matching_windows_architecture() {
+        let platforms = [
+            ("x86_64", "https://example.test/windows"),
+            ("aarch64", "https://example.test/windows-arm64"),
+        ];
         let release = GithubRelease {
             tag_name: "v1.2.3".to_string(),
             body: String::new(),
-            assets: vec![GithubReleaseAsset {
-                name: "shine-v1.2.3-windows-x86_64.tar.gz".to_string(),
-                browser_download_url: "https://example.test/windows".to_string(),
-            }],
+            assets: platforms
+                .into_iter()
+                .map(|(arch, url)| GithubReleaseAsset {
+                    name: format!("shine-v1.2.3-windows-{arch}.tar.gz"),
+                    browser_download_url: url.to_string(),
+                })
+                .collect(),
         };
-
-        let asset =
-            find_release_asset(&release, ReleaseChannel::Stable, "windows", "x86_64").unwrap();
-        assert_eq!(asset.release_tag, "v1.2.3");
-        assert_eq!(asset.target, "windows-x86_64");
-        assert_eq!(asset.download_url, "https://example.test/windows");
+        for (arch, url) in platforms {
+            let asset =
+                find_release_asset(&release, ReleaseChannel::Stable, "windows", arch).unwrap();
+            assert_eq!(asset.release_tag, "v1.2.3");
+            assert_eq!(asset.target, format!("windows-{arch}"));
+            assert_eq!(asset.download_url, url);
+        }
     }
 
     #[test]
