@@ -7,6 +7,16 @@ use crate::runtime::{
 use std::future::Future;
 use std::pin::Pin;
 
+#[track_caller]
+fn assert_plan_diagnostic(plan: &PlanV1, code: &str) {
+    assert!(
+        plan.steps
+            .iter()
+            .any(|step| step.diagnostic_codes.iter().any(|actual| actual == code)),
+        "missing plan diagnostic {code}"
+    );
+}
+
 async fn assert_frontend_journal(
     runtime: &CoreRuntime<InMemoryHost>,
     kind: crate::frontend::CapabilityKindV1,
@@ -221,6 +231,23 @@ fn runtime(snapshot: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
     );
     context.shell = super::super::ShellType::Bash;
     CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+}
+
+fn app_request(operation: LifecycleOperation, target: Option<&str>) -> AppPlanRequest {
+    AppPlanRequest {
+        operation,
+        target: target.map(str::to_owned),
+        force: false,
+        purge: false,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
+    }
+}
+
+async fn app_manifest(runtime: &CoreRuntime<InMemoryHost>) -> AppManifest {
+    AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap()
 }
 
 fn static_copy_app_snapshot() -> PresetSnapshot {

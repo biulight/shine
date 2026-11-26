@@ -1,6 +1,14 @@
 //! App recovery regressions.
 use super::*;
 
+async fn approve_and_recover_app(runtime: &CoreRuntime<InMemoryHost>, plan: &PlanV1) {
+    let approval = PlanApprovalV1::for_reviewed_plan(plan).unwrap();
+    runtime
+        .recover_app_operation_approved(&approval)
+        .await
+        .unwrap();
+}
+
 fn two_file_app_snapshot() -> PresetSnapshot {
     PresetSnapshot::builder(PresetSourceKind::Embedded)
         .file(
@@ -15,14 +23,7 @@ fn two_file_app_snapshot() -> PresetSnapshot {
 #[tokio::test]
 async fn second_install_receipt_failure_recovers_only_the_uncommitted_file() {
     let runtime = runtime(two_file_app_snapshot());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".into()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let first = runtime.context().home_dir.join(".config/demo/a.toml");
@@ -44,9 +45,7 @@ async fn second_install_receipt_failure_recovers_only_the_uncommitted_file() {
             .await
             .is_err()
     );
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert!(manifest.find_by_dest(&first).is_some());
     assert!(manifest.find_by_dest(&second).is_none());
     assert_eq!(runtime.host().read(&first).await.unwrap(), b"first");
@@ -91,17 +90,11 @@ async fn second_install_receipt_failure_recovers_only_the_uncommitted_file() {
         .await
         .unwrap();
     assert!(previous_approval.validate(&recovery).is_err());
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    recovery_runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover_app(&recovery_runtime, &recovery).await;
     assert_eq!(runtime.host().read(&first).await.unwrap(), b"first");
     assert!(runtime.host().read(&second).await.is_err());
     assert!(runtime.host().read(&journal).await.is_err());
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(manifest.entries.len(), 1);
     assert!(manifest.find_by_dest(&first).is_some());
 
@@ -123,9 +116,7 @@ async fn second_install_receipt_failure_recovers_only_the_uncommitted_file() {
     );
     assert!(report.files.iter().any(|file| file.destination == second
         && file.action == crate::runtime::AppFileAction::Installed));
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(manifest.entries.len(), 2);
     assert_eq!(runtime.host().read(&first).await.unwrap(), b"first");
     assert_eq!(runtime.host().read(&second).await.unwrap(), b"second");
@@ -135,14 +126,7 @@ async fn second_install_receipt_failure_recovers_only_the_uncommitted_file() {
 #[tokio::test]
 async fn second_removal_receipt_failure_preserves_the_first_committed_removal() {
     let runtime = runtime(two_file_app_snapshot());
-    let mut request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".into()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let mut request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
@@ -176,9 +160,7 @@ async fn second_removal_receipt_failure_preserves_the_first_committed_removal() 
             .await
             .is_err()
     );
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert!(manifest.find_by_dest(&first).is_none());
     assert!(manifest.find_by_dest(&second).is_some());
     assert!(runtime.host().read(&first).await.is_err());
@@ -222,11 +204,7 @@ async fn second_removal_receipt_failure_preserves_the_first_committed_removal() 
     );
     assert_eq!(runtime.host().read(&journal).await.unwrap(), interrupted);
     let recovery = runtime.plan_app_operation_recovery().await.unwrap();
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover_app(&runtime, &recovery).await;
     assert!(runtime.host().read(&first).await.is_err());
     assert_eq!(runtime.host().read(&second).await.unwrap(), b"second");
     assert!(
@@ -237,9 +215,7 @@ async fn second_removal_receipt_failure_preserves_the_first_committed_removal() 
             .is_err()
     );
     assert!(runtime.host().read(&journal).await.is_err());
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(manifest.entries.len(), 1);
     assert!(manifest.find_by_dest(&second).is_some());
 
@@ -255,9 +231,7 @@ async fn second_removal_receipt_failure_preserves_the_first_committed_removal() 
         )
         .await
         .unwrap();
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert!(manifest.entries.is_empty());
     assert!(runtime.host().read(&first).await.is_err());
     assert!(runtime.host().read(&second).await.is_err());
@@ -308,14 +282,7 @@ async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
@@ -363,10 +330,7 @@ async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"app_recovery_restore_json_relocation".to_string())
-    }));
+    assert_plan_diagnostic(&recovery_plan, "app_recovery_restore_json_relocation");
     frontend_recover(
         &runtime,
         crate::frontend::ReviewRequest::AppRecovery,
@@ -376,9 +340,7 @@ async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
     assert!(runtime.host().read(&previous).await.is_err());
     assert!(runtime.host().read(&desired).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(
         manifest
             .find_by_source("app/demo/settings.json")
@@ -418,14 +380,7 @@ async fn json_relocation_receipt_failure_restores_only_owned_keys_on_both_sides(
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
@@ -453,15 +408,8 @@ async fn json_relocation_receipt_failure_restores_only_owned_keys_on_both_sides(
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"app_recovery_restore_json_relocation".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery_plan, "app_recovery_restore_json_relocation");
+    approve_and_recover_app(&runtime, &recovery_plan).await;
     let previous_json: serde_json::Value =
         serde_json::from_slice(&runtime.host().read(&previous).await.unwrap()).unwrap();
     let desired_json: serde_json::Value =
@@ -502,14 +450,7 @@ async fn committed_json_relocation_cleanup_preserves_user_owned_values_on_both_s
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().fail_remove_after(&rollback, 0);
@@ -526,9 +467,7 @@ async fn committed_json_relocation_cleanup_preserves_user_owned_values_on_both_s
             .await
             .is_err()
     );
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(
         manifest
             .find_by_source("app/demo/settings.json")
@@ -546,15 +485,11 @@ async fn committed_json_relocation_cleanup_preserves_user_owned_values_on_both_s
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"app_recovery_remove_committed_json_relocation_rollback".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(
+        &recovery_plan,
+        "app_recovery_remove_committed_json_relocation_rollback",
+    );
+    approve_and_recover_app(&runtime, &recovery_plan).await;
     assert_eq!(
         runtime.host().read(&previous).await.unwrap(),
         br#"{"proxy":"user-owned","theme":"dark"}"#
@@ -603,14 +538,7 @@ async fn app_relocation_recovery_after_receipt_commit_cleans_only_rollback() {
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().fail_remove_after(&rollback, 0);
@@ -637,9 +565,7 @@ async fn app_relocation_recovery_after_receipt_commit_cleans_only_rollback() {
         runtime.host().read(&rollback).await.unwrap(),
         b"previous-managed"
     );
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(
         manifest
             .find_by_source("app/demo/config.toml")
@@ -651,15 +577,11 @@ async fn app_relocation_recovery_after_receipt_commit_cleans_only_rollback() {
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::App, true).await;
     assert!(recovery_plan.is_ready());
-    assert!(recovery_plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"app_recovery_remove_committed_relocation_rollback".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(
+        &recovery_plan,
+        "app_recovery_remove_committed_relocation_rollback",
+    );
+    approve_and_recover_app(&runtime, &recovery_plan).await;
     assert!(runtime.host().read(&previous).await.is_err());
     assert_eq!(
         runtime.host().read(&desired).await.unwrap(),
@@ -707,14 +629,7 @@ async fn app_relocation_receipt_failure_recovers_previous_file_and_backup() {
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
@@ -750,11 +665,7 @@ async fn app_relocation_receipt_failure_recovers_previous_file_and_backup() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(recovery_plan.is_ready());
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover_app(&runtime, &recovery_plan).await;
     assert_eq!(
         runtime.host().read(&previous).await.unwrap(),
         b"previous-managed"
@@ -800,14 +711,7 @@ async fn app_relocation_recovers_created_destination_when_previous_file_was_miss
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
@@ -832,16 +736,10 @@ async fn app_relocation_recovers_created_destination_when_previous_file_was_miss
         b"next-managed"
     );
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover_app(&runtime, &recovery_plan).await;
     assert!(runtime.host().read(&previous).await.is_err());
     assert!(runtime.host().read(&desired).await.is_err());
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(
         manifest
             .find_by_source("app/demo/config.toml")
@@ -861,14 +759,7 @@ async fn app_install_receipt_failure_leaves_journal_for_explicit_recovery() {
             .file("app/demo/config.toml", b"desired".to_vec())
             .build();
     let runtime = runtime(snapshot);
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
@@ -925,14 +816,7 @@ async fn backup_install_receipt_failure_recovers_the_original_file() {
     runtime
         .host()
         .put_file(&destination, b"user-original".to_vec());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
@@ -954,11 +838,7 @@ async fn backup_install_receipt_failure_recovers_the_original_file() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::App, true).await;
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover_app(&runtime, &recovery_plan).await;
     assert_eq!(
         runtime.host().read(&destination).await.unwrap(),
         b"user-original"
@@ -1002,10 +882,7 @@ async fn rendered_uninstall_receipt_failure_restores_file_on_recovery() {
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_removed_rendered_file".to_string())
-    }));
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_removed_rendered_file");
     let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
     runtime
         .recover_shell_operation_approved(&approval)
@@ -1063,10 +940,7 @@ async fn rendered_uninstall_recovery_blocks_modified_rollback() {
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(!recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_rendered_file_removal_changed".to_string())
-    }));
+    assert_plan_diagnostic(&recovery, "shell_recovery_rendered_file_removal_changed");
     assert_eq!(
         runtime.host().read(&rollback).await.unwrap(),
         b"user changed rollback"
@@ -1114,10 +988,7 @@ async fn rendered_uninstall_marker_failure_reconstructs_receipt_before_restore()
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_removed_rendered_file".to_string())
-    }));
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_removed_rendered_file");
     let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
     runtime
         .recover_shell_operation_approved(&approval)
@@ -1159,12 +1030,8 @@ async fn app_upgrade_prune_receipt_failure_recovers_stale_static_copy() {
     .await
     .unwrap();
     let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: None,
-        force: false,
-        purge: false,
         prune_stale: true,
-        input_versions: PlanningInputVersions::default(),
+        ..app_request(LifecycleOperation::Upgrade, None)
     };
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -1190,16 +1057,10 @@ async fn app_upgrade_prune_receipt_failure_recovers_stale_static_copy() {
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(recovery_plan.is_ready());
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_app_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover_app(&runtime, &recovery_plan).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
     assert!(runtime.host().read(&rollback).await.is_err());
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(manifest.entries.len(), 1);
 }
 
@@ -1263,14 +1124,7 @@ async fn app_upgrade_update_completion_keeps_receipt_before_commit_and_recovers_
             .await
             .unwrap();
             let before_receipt = runtime.host().read(&receipt_path).await.unwrap();
-            let request = AppPlanRequest {
-                operation: LifecycleOperation::Upgrade,
-                target: Some("demo".into()),
-                force: false,
-                purge: false,
-                prune_stale: false,
-                input_versions: Default::default(),
-            };
+            let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
             let plan = runtime.plan_apps(request.clone()).await.unwrap();
             let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
             if fail_receipt {
@@ -1294,11 +1148,7 @@ async fn app_upgrade_update_completion_keeps_receipt_before_commit_and_recovers_
                 );
                 assert!(runtime.host().read(&journal).await.is_ok());
                 let recovery = runtime.plan_app_operation_recovery().await.unwrap();
-                let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-                runtime
-                    .recover_app_operation_approved(&approval)
-                    .await
-                    .unwrap();
+                approve_and_recover_app(&runtime, &recovery).await;
                 let recovered = runtime.host().read(&destination).await.unwrap();
                 if json {
                     assert_eq!(
@@ -1314,9 +1164,7 @@ async fn app_upgrade_update_completion_keeps_receipt_before_commit_and_recovers_
                 );
             } else {
                 assert_eq!(applied.unwrap().failed, 0);
-                let receipt = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-                    .await
-                    .unwrap();
+                let receipt = app_manifest(&runtime).await;
                 assert_eq!(
                     receipt.find_by_dest(&destination).unwrap().content_hash,
                     hash(next)

@@ -3,6 +3,23 @@ use super::*;
 use crate::action::ActionKindV1;
 use crate::runtime::SHELL_OPERATION_JOURNAL_FILE;
 
+async fn shell_manifest(runtime: &CoreRuntime<InMemoryHost>) -> ShellManifest {
+    ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap()
+}
+
+async fn approve_and_recover_shell(
+    runtime: &CoreRuntime<InMemoryHost>,
+    plan: &PlanV1,
+) -> crate::runtime::ShellRecoveryReportV1 {
+    let approval = PlanApprovalV1::for_reviewed_plan(plan).unwrap();
+    runtime
+        .recover_shell_operation_approved(&approval)
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_prefix() {
     #[derive(serde::Deserialize)]
@@ -121,11 +138,7 @@ async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_pre
 
         let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
         assert!(recovery.is_ready(), "{recovery:?}");
-        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-        runtime
-            .recover_shell_operation_approved(&recovery_approval)
-            .await
-            .unwrap();
+        approve_and_recover_shell(&runtime, &recovery).await;
         for path in [&source, &rendered, &journal_path] {
             assert!(runtime.host().metadata(path).await.is_err());
         }
@@ -159,13 +172,7 @@ async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_pre
                 assert!(runtime.host().metadata(&file.destination).await.is_err());
             }
         }
-        assert!(
-            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-                .await
-                .unwrap()
-                .entries
-                .is_empty()
-        );
+        assert!(shell_manifest(&runtime).await.entries.is_empty());
 
         let retry = runtime.plan_shells(request.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&retry).unwrap();
@@ -179,9 +186,8 @@ async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_pre
         );
         assert!(runtime.host().metadata(&journal_path).await.is_err());
         assert!(
-            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            shell_manifest(&runtime)
                 .await
-                .unwrap()
                 .find("shell/demo/demo")
                 .is_some()
         );
@@ -267,11 +273,7 @@ async fn cache_replacement_recovers_partial_writes_with_mixed_previous_files() {
         assert_eq!(host.read(&journal_path).await.unwrap(), journal_bytes);
         host.remove_file(&paths[failed_index]).await.unwrap();
         let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
-        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-        runtime
-            .recover_shell_operation_approved(&approval)
-            .await
-            .unwrap();
+        approve_and_recover_shell(&runtime, &recovery).await;
         assert_eq!(host.read(&paths[0]).await.unwrap(), old_bytes);
         assert_eq!(
             host.metadata(&paths[0]).await.unwrap().unix_mode,
@@ -415,11 +417,7 @@ async fn cache_removal_recovers_partial_rename_and_preserves_changed_files() {
         );
 
         let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
-        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-        runtime
-            .recover_shell_operation_approved(&approval)
-            .await
-            .unwrap();
+        approve_and_recover_shell(&runtime, &recovery).await;
         for (index, file) in files.iter().enumerate() {
             assert_eq!(
                 host.read(&file.destination).await.unwrap(),
@@ -481,10 +479,7 @@ async fn embedded_shell_cache_receipt_failure_removes_created_files_on_recovery(
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(previous_approval.validate(&recovery).is_err());
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_previous_cache".to_string())
-    }));
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_previous_cache");
     frontend_recover(
         &runtime,
         crate::frontend::ReviewRequest::ShellRecovery,
@@ -493,9 +488,8 @@ async fn embedded_shell_cache_receipt_failure_removes_created_files_on_recovery(
     .await;
     assert!(runtime.host().metadata(&source).await.is_err());
     assert!(
-        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        shell_manifest(&runtime)
             .await
-            .unwrap()
             .find("shell/demo/demo")
             .is_none()
     );
@@ -539,10 +533,7 @@ async fn embedded_shell_cache_marker_failure_restores_previous_files_and_receipt
     };
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     assert!(plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_cache_replace_transaction".to_string())
-    }));
+    assert_plan_diagnostic(&plan, "shell_cache_replace_transaction");
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let journal = runtime
         .context()
@@ -566,20 +557,15 @@ async fn embedded_shell_cache_marker_failure_restores_previous_files_and_receipt
     );
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(
         runtime.host().read(&source).await.unwrap(),
         b"#!/bin/sh\necho demo\n"
     );
     assert!(runtime.host().metadata(&rollback).await.is_err());
     assert_eq!(
-        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        shell_manifest(&runtime)
             .await
-            .unwrap()
             .find("shell/demo/demo")
             .unwrap(),
         &previous_receipt
@@ -607,20 +593,12 @@ async fn rendered_shell_receipt_failure_removes_created_output_on_recovery() {
     assert!(runtime.host().metadata(&rendered).await.is_ok());
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_previous_rendered_file".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_previous_rendered_file");
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert!(runtime.host().metadata(&rendered).await.is_err());
     assert!(
-        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        shell_manifest(&runtime)
             .await
-            .unwrap()
             .find("shell/demo/demo")
             .is_none()
     );
@@ -687,20 +665,15 @@ async fn rendered_shell_marker_failure_restores_previous_output_and_receipt() {
     );
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(
         runtime.host().read(&rendered).await.unwrap(),
         b"#!/bin/sh\necho previous\n"
     );
     assert!(runtime.host().metadata(&rollback).await.is_err());
     assert_eq!(
-        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        shell_manifest(&runtime)
             .await
-            .unwrap()
             .find("shell/demo/demo")
             .unwrap(),
         &previous_receipt
@@ -720,9 +693,7 @@ async fn profile_only_removal_recovery_requires_empty_manifest_and_exact_identit
         .install_shells_approved(install, &approval)
         .await
         .unwrap();
-    let original_manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let original_manifest = shell_manifest(&runtime).await;
     let targeted = shell_uninstall_request();
     let approval =
         PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(targeted.clone()).await.unwrap())
@@ -733,13 +704,7 @@ async fn profile_only_removal_recovery_requires_empty_manifest_and_exact_identit
         .unwrap();
     let manifest_path = runtime.context().shine_dir.join("shell-manifest.toml");
     let empty_manifest = runtime.host().read(&manifest_path).await.unwrap();
-    assert!(
-        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-            .await
-            .unwrap()
-            .entries
-            .is_empty()
-    );
+    assert!(shell_manifest(&runtime).await.entries.is_empty());
     let profile = crate::runtime::managed_shell_profile_path(
         &runtime.context().shine_dir,
         runtime.context().shell,
@@ -821,11 +786,7 @@ async fn profile_only_removal_recovery_requires_empty_manifest_and_exact_identit
     );
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(
         runtime.host().read(&profile).await.unwrap(),
         previous_profile
@@ -919,11 +880,7 @@ async fn shell_profile_recovery_preserves_unrelated_post_interruption_edits() {
             .flat_map(|step| step.diagnostic_codes.iter())
             .collect::<Vec<_>>()
     );
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     let restored = String::from_utf8(runtime.host().read(&config).await.unwrap()).unwrap();
     assert!(restored.contains("before"));
     assert!(restored.contains("user-after-interruption"));
@@ -998,35 +955,23 @@ async fn external_shell_snapshot_marker_failure_restores_receipts_tree_and_launc
     assert!(runtime.host().metadata(&launcher).await.is_ok());
     assert!(runtime.host().metadata(&journal).await.is_ok());
     assert!(
-        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        shell_manifest(&runtime)
             .await
-            .unwrap()
             .find("shell/demo/demo")
             .is_some()
     );
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_previous_snapshot".to_string())
-    }));
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_remove_created_launcher".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_previous_snapshot");
+    assert_plan_diagnostic(&recovery, "shell_recovery_remove_created_launcher");
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert!(runtime.host().metadata(&destination).await.is_err());
     assert!(runtime.host().metadata(&launcher).await.is_err());
     assert!(runtime.host().metadata(&journal).await.is_err());
     assert!(
-        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        shell_manifest(&runtime)
             .await
-            .unwrap()
             .find("shell/demo/demo")
             .is_none()
     );
@@ -1105,15 +1050,8 @@ async fn external_shell_snapshot_uninstall_receipt_failure_restores_tree_and_rec
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_removed_snapshot".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_removed_snapshot");
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(
         runtime
             .host()
@@ -1124,9 +1062,8 @@ async fn external_shell_snapshot_uninstall_receipt_failure_restores_tree_and_rec
     );
     assert!(runtime.host().metadata(&rollback).await.is_err());
     assert!(
-        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        shell_manifest(&runtime)
             .await
-            .unwrap()
             .find("shell/demo/demo")
             .is_some()
     );
@@ -1221,11 +1158,7 @@ async fn external_shell_snapshot_upgrade_marker_failure_restores_previous_tree_a
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(
         runtime
             .host()
@@ -1235,9 +1168,8 @@ async fn external_shell_snapshot_upgrade_marker_failure_restores_previous_tree_a
         previous_script
     );
     assert!(runtime.host().metadata(&rollback).await.is_err());
-    let restored_receipt = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+    let restored_receipt = shell_manifest(&runtime)
         .await
-        .unwrap()
         .find("shell/demo/demo")
         .unwrap()
         .clone();
@@ -1277,11 +1209,7 @@ async fn shell_receipt_failure_leaves_explicit_recovery_that_removes_unchanged_l
     }));
     let recovery_plan = runtime.plan_shell_operation_recovery().await.unwrap();
     assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Shell, true).await;
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    let report = runtime
-        .recover_shell_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    let report = approve_and_recover_shell(&runtime, &recovery_plan).await;
     assert_eq!(report.rolled_back_actions.len(), 3);
     assert!(runtime.host().metadata(&launcher).await.is_err());
     assert!(runtime.host().read(&journal).await.is_err());
@@ -1344,23 +1272,14 @@ async fn shell_recovery_preserves_a_launcher_after_receipt_commit() {
     );
 
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = shell_manifest(&runtime).await;
     assert!(manifest.find("shell/demo/demo").is_some());
     assert!(runtime.host().metadata(&launcher).await.is_ok());
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Shell, true).await;
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_receipt_already_committed".to_string())
-    }));
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    let report = runtime
-        .recover_shell_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_receipt_already_committed");
+    let report = approve_and_recover_shell(&runtime, &recovery).await;
     assert!(report.rolled_back_actions.is_empty());
     assert!(runtime.host().metadata(&launcher).await.is_ok());
     assert!(runtime.host().read(&journal).await.is_err());
@@ -1368,15 +1287,8 @@ async fn shell_recovery_preserves_a_launcher_after_receipt_commit() {
 
 #[tokio::test]
 async fn shell_launcher_update_receipt_failure_recovers_previous_resource() {
-    let original = runtime(shell_launcher_snapshot());
+    let original = installed_shell_runtime().await;
     let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install.clone(), &approval)
-        .await
-        .unwrap();
     let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
     let old_kind = original.host().metadata(&launcher).await.unwrap().kind;
     let old_target = original.host().read_link(&launcher).await.ok();
@@ -1400,15 +1312,8 @@ async fn shell_launcher_update_receipt_failure_recovers_previous_resource() {
     assert!(runtime.host().metadata(&rollback).await.is_ok());
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_previous_launcher".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_previous_launcher");
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(
         runtime.host().metadata(&launcher).await.unwrap().kind,
         old_kind
@@ -1416,23 +1321,14 @@ async fn shell_launcher_update_receipt_failure_recovers_previous_resource() {
     assert_eq!(runtime.host().read_link(&launcher).await.ok(), old_target);
     assert_eq!(runtime.host().read(&launcher).await.ok(), old_bytes);
     assert!(runtime.host().metadata(&rollback).await.is_err());
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = shell_manifest(&runtime).await;
     assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "native");
 }
 
 #[tokio::test]
 async fn shell_launcher_update_write_failure_restores_moved_previous_resource() {
-    let original = runtime(shell_launcher_snapshot());
+    let original = installed_shell_runtime().await;
     let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install.clone(), &approval)
-        .await
-        .unwrap();
     let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
     let old_kind = original.host().metadata(&launcher).await.unwrap().kind;
     let old_target = original.host().read_link(&launcher).await.ok();
@@ -1456,11 +1352,7 @@ async fn shell_launcher_update_write_failure_restores_moved_previous_resource() 
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(
         runtime.host().metadata(&launcher).await.unwrap().kind,
         old_kind
@@ -1472,15 +1364,8 @@ async fn shell_launcher_update_write_failure_restores_moved_previous_resource() 
 
 #[tokio::test]
 async fn shell_launcher_update_rename_failure_recovers_not_started_state() {
-    let original = runtime(shell_launcher_snapshot());
+    let original = installed_shell_runtime().await;
     let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install.clone(), &approval)
-        .await
-        .unwrap();
     let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
     let old_target = original.host().read_link(&launcher).await.ok();
     let old_bytes = original.host().read(&launcher).await.ok();
@@ -1503,30 +1388,16 @@ async fn shell_launcher_update_rename_failure_recovers_not_started_state() {
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_launcher_update_not_started".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_launcher_update_not_started");
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(runtime.host().read_link(&launcher).await.ok(), old_target);
     assert_eq!(runtime.host().read(&launcher).await.ok(), old_bytes);
 }
 
 #[tokio::test]
 async fn shell_launcher_update_commit_failure_cleans_only_exact_rollback() {
-    let original = runtime(shell_launcher_snapshot());
+    let original = installed_shell_runtime().await;
     let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install.clone(), &approval)
-        .await
-        .unwrap();
     let runtime = CoreRuntime::new(
         original.host().clone(),
         original.context().clone(),
@@ -1545,34 +1416,18 @@ async fn shell_launcher_update_commit_failure_cleans_only_exact_rollback() {
     let replacement = runtime.host().read(&launcher).await.unwrap();
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_cleanup_launcher_rollback".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_cleanup_launcher_rollback");
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(runtime.host().read(&launcher).await.unwrap(), replacement);
     assert!(runtime.host().metadata(&rollback).await.is_err());
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = shell_manifest(&runtime).await;
     assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "bun");
 }
 
 #[tokio::test]
 async fn shell_launcher_update_recovery_blocks_modified_replacement() {
-    let original = runtime(shell_launcher_snapshot());
+    let original = installed_shell_runtime().await;
     let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install.clone(), &approval)
-        .await
-        .unwrap();
     let runtime = CoreRuntime::new(
         original.host().clone(),
         original.context().clone(),
@@ -1596,10 +1451,7 @@ async fn shell_launcher_update_recovery_blocks_modified_replacement() {
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(!recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_launcher_update_changed".to_string())
-    }));
+    assert_plan_diagnostic(&recovery, "shell_recovery_launcher_update_changed");
     assert_eq!(
         runtime.host().read(&launcher).await.unwrap(),
         b"#!/bin/sh\necho user change\n"
@@ -1628,20 +1480,11 @@ async fn shell_launcher_removal_receipt_failure_restores_moved_launcher() {
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_removed_launcher".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_removed_launcher");
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert!(runtime.host().metadata(&launcher).await.is_ok());
     assert!(runtime.host().metadata(&rollback).await.is_err());
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = shell_manifest(&runtime).await;
     assert!(manifest.find("shell/demo/demo").is_some());
 }
 
@@ -1655,10 +1498,7 @@ async fn legacy_shell_launcher_manifest_failure_restores_without_creating_a_rece
     let request = shell_uninstall_request();
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     assert!(plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_legacy_launcher_remove_transaction".to_string())
-    }));
+    assert_plan_diagnostic(&plan, "shell_legacy_launcher_remove_transaction");
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let rollback = managed_file_rollback_path(&launcher);
     runtime
@@ -1674,21 +1514,13 @@ async fn legacy_shell_launcher_manifest_failure_restores_without_creating_a_rece
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_removed_legacy_launcher".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_removed_legacy_launcher");
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert!(runtime.host().metadata(&launcher).await.is_ok());
     assert!(runtime.host().metadata(&rollback).await.is_err());
     assert!(
-        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        shell_manifest(&runtime)
             .await
-            .unwrap()
             .find("shell/demo/demo")
             .is_none()
     );
@@ -1712,27 +1544,16 @@ async fn shell_launcher_removal_marker_failure_reconstructs_receipt_before_resto
         .await
         .err()
         .expect("Shell receipt commit marker should fail");
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = shell_manifest(&runtime).await;
     assert!(manifest.find("shell/demo/demo").is_none());
     assert!(runtime.host().metadata(&launcher).await.is_err());
     assert!(runtime.host().metadata(&rollback).await.is_ok());
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_restore_removed_launcher_receipt".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_restore_removed_launcher_receipt");
+    approve_and_recover_shell(&runtime, &recovery).await;
+    let manifest = shell_manifest(&runtime).await;
     assert!(manifest.find("shell/demo/demo").is_some());
     assert!(runtime.host().metadata(&launcher).await.is_ok());
     assert!(runtime.host().metadata(&rollback).await.is_err());
@@ -1752,29 +1573,18 @@ async fn shell_launcher_removal_commit_failure_cleans_only_exact_rollback() {
         .await
         .err()
         .expect("Shell launcher rollback cleanup should fail");
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = shell_manifest(&runtime).await;
     assert!(manifest.find("shell/demo/demo").is_none());
     assert!(runtime.host().metadata(&launcher).await.is_err());
     assert!(runtime.host().metadata(&rollback).await.is_ok());
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_cleanup_removed_launcher".to_string())
-    }));
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    assert_plan_diagnostic(&recovery, "shell_recovery_cleanup_removed_launcher");
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert!(runtime.host().metadata(&launcher).await.is_err());
     assert!(runtime.host().metadata(&rollback).await.is_err());
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = shell_manifest(&runtime).await;
     assert!(manifest.find("shell/demo/demo").is_none());
 }
 
@@ -1800,10 +1610,7 @@ async fn shell_launcher_removal_recovery_blocks_modified_rollback_material() {
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(!recovery.is_ready());
-    assert!(recovery.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_recovery_launcher_removal_changed".to_string())
-    }));
+    assert_plan_diagnostic(&recovery, "shell_recovery_launcher_removal_changed");
     assert_eq!(
         runtime.host().read(&rollback).await.unwrap(),
         b"user-changed rollback"
@@ -1829,11 +1636,7 @@ async fn shell_recovery_removes_a_partial_windows_shim_pair() {
     assert!(runtime.host().metadata(&cmd).await.is_err());
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert!(runtime.host().metadata(&launcher).await.is_err());
     assert!(runtime.host().metadata(&cmd).await.is_err());
 }
@@ -1841,15 +1644,8 @@ async fn shell_recovery_removes_a_partial_windows_shim_pair() {
 #[cfg(not(unix))]
 #[tokio::test]
 async fn shell_recovery_restores_a_partial_windows_launcher_update() {
-    let original = runtime(shell_launcher_snapshot());
+    let original = installed_shell_runtime().await;
     let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install.clone(), &approval)
-        .await
-        .unwrap();
     let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
     let cmd = launcher.with_extension("cmd");
     let old_ps1 = original.host().read(&launcher).await.unwrap();
@@ -1869,11 +1665,7 @@ async fn shell_recovery_restores_a_partial_windows_launcher_update() {
         .expect("second replacement shim write should fail");
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(runtime.host().read(&launcher).await.unwrap(), old_ps1);
     assert_eq!(runtime.host().read(&cmd).await.unwrap(), old_cmd);
 }
@@ -1899,11 +1691,7 @@ async fn shell_recovery_restores_a_partial_windows_launcher_removal() {
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
     assert!(recovery.is_ready());
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert_eq!(
         runtime.host().read(&launcher).await.unwrap(),
         launcher_bytes
@@ -1969,11 +1757,7 @@ async fn partial_shell_removal_recovery_retains_sibling_receipt_cache_and_profil
     assert!(!interrupted_profile.contains("one()"));
 
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
-    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
-        .recover_shell_operation_approved(&approval)
-        .await
-        .unwrap();
+    approve_and_recover_shell(&runtime, &recovery).await;
     assert!(runtime.host().metadata(&one).await.is_ok());
     assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), before);
     assert_eq!(runtime.host().read(&profile).await.unwrap(), profile_before);

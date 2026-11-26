@@ -1,5 +1,37 @@
 //! App transactions regressions.
 use super::*;
+use crate::action::ActionKindV1;
+
+async fn single_approved_action(
+    runtime: &CoreRuntime<InMemoryHost>,
+    request: &AppPlanRequest,
+    plan: &PlanV1,
+    approval: &PlanApprovalV1,
+) -> ActionKindV1 {
+    let irs = runtime
+        .approved_app_file_action_irs(request, plan, approval)
+        .await
+        .unwrap();
+    let [ir]: [_; 1] = irs.try_into().expect("expected exactly one action IR");
+    let [action]: [_; 1] = ir
+        .actions
+        .try_into()
+        .expect("expected exactly one action in the IR");
+    action.kind
+}
+
+async fn assert_no_app_journal(runtime: &CoreRuntime<InMemoryHost>) {
+    let journal = runtime
+        .context()
+        .shine_dir
+        .join(crate::runtime::APP_OPERATION_JOURNAL_FILE);
+    let error = runtime
+        .host()
+        .read(&journal)
+        .await
+        .expect_err("unexpected App operation journal");
+    assert!(error.is_not_found(), "{error:?}");
+}
 
 #[tokio::test]
 async fn whole_app_cleanup_retains_failed_receipts_until_approved_retry() {
@@ -28,18 +60,12 @@ async fn whole_app_cleanup_retains_failed_receipts_until_approved_retry() {
         seed_privileged_static_copy_app(&runtime, b"managed", Some(b"original")).await;
     let backup = backup.unwrap();
     let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
-    let before = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let before = app_manifest(&runtime).await;
     let extra = runtime.context().presets_dir.join("app/demo/extra.txt");
     runtime.host().put_file(&extra, b"extra cache".to_vec());
     let request = AppPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        target: None,
-        force: false,
         purge: true,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
+        ..app_request(LifecycleOperation::Uninstall, None)
     };
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -53,12 +79,7 @@ async fn whole_app_cleanup_retains_failed_receipts_until_approved_retry() {
         .await
         .unwrap();
     assert_eq!(report.lifecycle.summary().failed, 1);
-    assert_eq!(
-        AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-            .await
-            .unwrap(),
-        before
-    );
+    assert_eq!(app_manifest(&runtime).await, before);
     assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
     assert_eq!(runtime.host().read(&backup).await.unwrap(), b"original");
     assert!(runtime.host().read(&extra).await.is_err());
@@ -80,12 +101,7 @@ async fn whole_app_cleanup_retains_failed_receipts_until_approved_retry() {
         .unwrap_err();
     assert!(stale.is::<crate::plan::PlanApprovalError>(), "{stale:#}");
     assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
-    assert_eq!(
-        AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-            .await
-            .unwrap(),
-        before
-    );
+    assert_eq!(app_manifest(&runtime).await, before);
 
     // Re-review the changed cache state; the failed receipt still drives backup restoration.
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -117,14 +133,7 @@ async fn whole_app_cleanup_retains_failed_receipts_until_approved_retry() {
 #[tokio::test]
 async fn waiting_app_install_revalidates_approval_before_preparation_effects() {
     let runtime = runtime(static_copy_app_snapshot());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".into()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let lock_path = runtime.context().shine_dir.join("app-lifecycle.lock");
@@ -179,18 +188,7 @@ async fn waiting_app_install_revalidates_approval_before_preparation_effects() {
             .await
             .is_err()
     );
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::APP_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_err()
-    );
+    assert_no_app_journal(&runtime).await;
     // Rejection releases the outer lifecycle guard as well as preserving resources.
     let next = runtime.host().acquire_operation_lock(&lock_path);
     tokio::pin!(next);
@@ -227,14 +225,7 @@ async fn app_upgrade_ignores_permissions_from_uninstalled_presets() {
     seed_static_copy_app(&runtime, b"managed", None).await;
 
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: None,
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Upgrade, None))
         .await
         .unwrap();
 
@@ -289,14 +280,7 @@ async fn app_upgrade_uses_the_latest_legacy_receipt_after_a_relocation() {
     );
 
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: Some("demo".to_string()),
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Upgrade, Some("demo")))
         .await
         .unwrap();
 
@@ -319,14 +303,7 @@ async fn approved_app_install_rejects_changed_state_before_mutation() {
             .file("app/demo/config.toml", b"desired".to_vec())
             .build();
     let runtime = runtime(snapshot);
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().put_file(
@@ -363,14 +340,7 @@ async fn approved_app_install_journals_create_and_commits_only_after_receipt_wri
             )
             .build();
     let runtime = runtime(snapshot);
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let actions = runtime
@@ -394,9 +364,7 @@ async fn approved_app_install_journals_create_and_commits_only_after_receipt_wri
         .shine_dir
         .join(crate::runtime::APP_OPERATION_JOURNAL_FILE);
     let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(
         manifest
             .find_by_source("app/demo/config.toml")
@@ -454,24 +422,12 @@ async fn approved_json_merge_install_and_uninstall_use_key_owned_actions() {
     runtime
         .host()
         .put_file(&destination, br#"{"theme":"dark"}"#.to_vec());
-    let install_request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let install_request = app_request(LifecycleOperation::Install, Some("demo"));
     let install_plan = runtime.plan_apps(install_request.clone()).await.unwrap();
     let install_approval = PlanApprovalV1::for_reviewed_plan(&install_plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&install_request, &install_plan, &install_approval)
-        .await
-        .unwrap();
-    assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::MergeManagedJson { .. }))
-    ));
+    let kind =
+        single_approved_action(&runtime, &install_request, &install_plan, &install_approval).await;
+    assert!(matches!(kind, ActionKindV1::MergeManagedJson { .. }));
     let mut observer = crate::runtime::NullObserver;
     runtime
         .install_apps_approved(
@@ -488,14 +444,7 @@ async fn approved_json_merge_install_and_uninstall_use_key_owned_actions() {
     assert_eq!(installed["proxy"], "managed");
     assert!(runtime.host().read(&rollback).await.is_err());
 
-    let uninstall_request = AppPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let uninstall_request = app_request(LifecycleOperation::Uninstall, Some("demo"));
     let uninstall_plan = runtime.plan_apps(uninstall_request.clone()).await.unwrap();
     assert!(
         uninstall_plan
@@ -507,14 +456,14 @@ async fn approved_json_merge_install_and_uninstall_use_key_owned_actions() {
             })
     );
     let uninstall_approval = PlanApprovalV1::for_reviewed_plan(&uninstall_plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&uninstall_request, &uninstall_plan, &uninstall_approval)
-        .await
-        .unwrap();
-    assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedJson { .. }))
-    ));
+    let kind = single_approved_action(
+        &runtime,
+        &uninstall_request,
+        &uninstall_plan,
+        &uninstall_approval,
+    )
+    .await;
+    assert!(matches!(kind, ActionKindV1::RemoveManagedJson { .. }));
     runtime
         .uninstall_apps_approved(
             uninstall_request,
@@ -579,14 +528,7 @@ async fn approved_app_upgrade_journals_key_owned_json_relocation() {
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
@@ -597,14 +539,8 @@ async fn approved_app_upgrade_journals_key_owned_json_relocation() {
                 .contains(&"app_destination_relocated".to_string())
     }));
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
-    assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RelocateManagedJson { .. }))
-    ));
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
+    assert!(matches!(kind, ActionKindV1::RelocateManagedJson { .. }));
     for (access, path) in [
         (FilesystemAccessV1::Write, previous.clone()),
         (FilesystemAccessV1::Remove, previous.clone()),
@@ -640,9 +576,7 @@ async fn approved_app_upgrade_journals_key_owned_json_relocation() {
     assert_eq!(previous_json, serde_json::json!({"theme": "dark"}));
     assert_eq!(desired_json, serde_json::json!({"containersProxy": "next"}));
     assert!(runtime.host().read(&rollback).await.is_err());
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     let entry = manifest.find_by_source("app/demo/settings.json").unwrap();
     assert_eq!(entry.destination, desired);
     assert_eq!(
@@ -658,14 +592,7 @@ async fn approved_app_upgrade_journals_key_owned_json_relocation() {
 #[tokio::test]
 async fn approved_privileged_app_install_journals_static_copy_creation() {
     let runtime = runtime(privileged_static_copy_app_snapshot());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(
         plan.permissions
@@ -673,22 +600,13 @@ async fn approved_privileged_app_install_journals_static_copy_creation() {
             .contains(&PermissionV1::Administrator)
     );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(
-            ir.actions.as_slice(),
-            [action] if matches!(
-                action.kind,
-                crate::action::ActionKindV1::CreateManagedFile {
-                    requires_admin: true,
-                    ..
-                }
-            )
-        )
+        kind,
+        ActionKindV1::CreateManagedFile {
+            requires_admin: true,
+            ..
+        }
     ));
 
     // Stall ordinary file execution after the shared preparation has returned.
@@ -725,32 +643,16 @@ async fn approved_privileged_app_install_journals_backup_aware_creation() {
     runtime
         .host()
         .put_file(&destination, b"user-original".to_vec());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(
-            ir.actions.as_slice(),
-            [action] if matches!(
-                action.kind,
-                crate::action::ActionKindV1::CreateManagedFileWithBackup {
-                    requires_admin: true,
-                    ..
-                }
-            )
-        )
+        kind,
+        ActionKindV1::CreateManagedFileWithBackup {
+            requires_admin: true,
+            ..
+        }
     ));
 
     let mut observer = crate::runtime::NullObserver;
@@ -810,24 +712,11 @@ async fn approved_app_upgrade_journals_static_in_place_managed_update() {
         runtime.context().shine_dir.join("app-manifest.toml"),
         toml::to_string(&manifest).unwrap().into_bytes(),
     );
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
-    assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::UpdateManagedFile { .. }))
-    ));
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
+    assert!(matches!(kind, ActionKindV1::UpdateManagedFile { .. }));
     for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
         assert!(
             plan.permissions
@@ -865,21 +754,8 @@ async fn approved_app_upgrade_journals_static_in_place_managed_update() {
         Some(0o100600)
     );
     assert!(runtime.host().read(&rollback).await.is_err());
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::APP_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_err()
-    );
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    assert_no_app_journal(&runtime).await;
+    let manifest = app_manifest(&runtime).await;
     assert_eq!(
         manifest
             .find_by_source("app/demo/config.toml")
@@ -923,14 +799,7 @@ async fn approved_app_upgrade_converges_legacy_duplicate_relocation_receipts() {
         runtime.context().shine_dir.join("app-manifest.toml"),
         toml::to_string(&manifest).unwrap().into_bytes(),
     );
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -956,9 +825,7 @@ async fn approved_app_upgrade_converges_legacy_duplicate_relocation_receipts() {
         runtime.host().read(&previous_destination).await.unwrap(),
         b"previous-managed"
     );
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     let matching = manifest
         .entries
         .iter()
@@ -1009,14 +876,7 @@ async fn approved_app_upgrade_journals_static_copy_relocation() {
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
@@ -1027,14 +887,8 @@ async fn approved_app_upgrade_journals_static_copy_relocation() {
                 .contains(&"app_destination_relocated".to_string())
     }));
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
-    assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RelocateManagedFile { .. }))
-    ));
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
+    assert!(matches!(kind, ActionKindV1::RelocateManagedFile { .. }));
     for (access, path) in [
         (FilesystemAccessV1::Remove, previous.clone()),
         (FilesystemAccessV1::Write, desired.clone()),
@@ -1068,9 +922,7 @@ async fn approved_app_upgrade_journals_static_copy_relocation() {
         b"next-managed"
     );
     assert!(runtime.host().read(&rollback).await.is_err());
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     let entry = manifest.find_by_source("app/demo/config.toml").unwrap();
     assert_eq!(entry.destination, desired);
     assert!(entry.backup.is_none());
@@ -1110,14 +962,7 @@ async fn app_relocation_uses_previous_receipt_administrator_identity() {
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(
         plan.permissions
@@ -1286,9 +1131,7 @@ async fn generated_relocation_restores_backup_and_checks_old_admin_identity() {
             b"user-original"
         );
         assert!(runtime.host().read(&backup).await.is_err());
-        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-            .await
-            .unwrap();
+        let manifest = app_manifest(&runtime).await;
         let entry = manifest.find_by_source("app/demo/config.toml").unwrap();
         assert_eq!(entry.destination, desired);
         assert!(entry.backup.is_none());
@@ -1363,14 +1206,7 @@ async fn app_relocation_rejects_destination_created_after_review() {
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
@@ -1397,18 +1233,7 @@ async fn app_relocation_rejects_destination_created_after_review() {
         runtime.host().read(&desired).await.unwrap(),
         b"late-user-file"
     );
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::APP_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_err()
-    );
+    assert_no_app_journal(&runtime).await;
 }
 
 #[tokio::test]
@@ -1428,32 +1253,16 @@ async fn approved_privileged_app_upgrade_journals_static_copy_update() {
         .await
         .unwrap();
     let rollback = crate::action::managed_file_rollback_path(&destination);
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(
-            ir.actions.as_slice(),
-            [action] if matches!(
-                action.kind,
-                crate::action::ActionKindV1::UpdateManagedFile {
-                    requires_admin: true,
-                    ..
-                }
-            )
-        )
+        kind,
+        ActionKindV1::UpdateManagedFile {
+            requires_admin: true,
+            ..
+        }
     ));
 
     let mut observer = crate::runtime::NullObserver;
@@ -1517,14 +1326,7 @@ async fn approved_app_install_journals_an_existing_static_managed_update() {
         .unwrap()
         .into_bytes(),
     );
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let mut observer = crate::runtime::NullObserver;
@@ -1538,18 +1340,7 @@ async fn approved_app_install_journals_an_existing_static_managed_update() {
         b"next-managed"
     );
     assert!(runtime.host().read(&rollback).await.is_err());
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::APP_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_err()
-    );
+    assert_no_app_journal(&runtime).await;
 }
 
 #[tokio::test]
@@ -1567,14 +1358,7 @@ async fn approved_app_install_journals_backup_creation_and_commits_both_paths() 
     runtime
         .host()
         .put_file(&destination, b"user-original".to_vec());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     for permission in [
@@ -1605,9 +1389,7 @@ async fn approved_app_install_journals_backup_creation_and_commits_both_paths() 
         .await
         .unwrap();
 
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     let entry = manifest
         .find_by_source("app/demo/config.toml")
         .expect("backup-aware receipt");
@@ -1617,18 +1399,7 @@ async fn approved_app_install_journals_backup_creation_and_commits_both_paths() 
         runtime.host().read(&backup).await.unwrap(),
         b"user-original"
     );
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::APP_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_err()
-    );
+    assert_no_app_journal(&runtime).await;
 }
 
 #[tokio::test]
@@ -1647,14 +1418,7 @@ async fn app_install_blocks_instead_of_replacing_an_existing_backup() {
         .host()
         .put_file(&destination, b"user-original".to_vec());
     runtime.host().put_file(&backup, b"older-backup".to_vec());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
 
     let plan = runtime.plan_apps(request).await.unwrap();
     assert!(!plan.is_ready());
@@ -1707,14 +1471,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', se
     runtime
         .host()
         .put_file(&destination, b"user-original".to_vec());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
 
     let ready = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(ready.is_ready());
@@ -1756,14 +1513,7 @@ async fn backup_aware_install_blocks_a_non_regular_destination() {
     let target = runtime.context().home_dir.join("user-config.toml");
     runtime.host().put_file(&target, b"user-original".to_vec());
     runtime.host().symlink(&target, &destination).await.unwrap();
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
 
     let plan = runtime.plan_apps(request).await.unwrap();
     assert!(!plan.is_ready());
@@ -1794,14 +1544,7 @@ async fn approved_backup_install_rejects_a_backup_created_after_review() {
     runtime
         .host()
         .put_file(&destination, b"user-original".to_vec());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().put_file(&backup, b"late-backup".to_vec());
@@ -1817,18 +1560,7 @@ async fn approved_backup_install_rejects_a_backup_created_after_review() {
         b"user-original"
     );
     assert_eq!(runtime.host().read(&backup).await.unwrap(), b"late-backup");
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::APP_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_err()
-    );
+    assert_no_app_journal(&runtime).await;
 }
 
 #[tokio::test]
@@ -2131,14 +1863,7 @@ async fn app_uninstall_can_use_manifest_without_original_preset() {
     );
 
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Uninstall,
-            target: Some("retired".to_string()),
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Uninstall, Some("retired")))
         .await
         .unwrap();
     assert!(plan.is_ready());
@@ -2177,12 +1902,8 @@ async fn approved_app_upgrade_prune_journals_stale_static_copy_removal() {
     .await
     .unwrap();
     let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: None,
-        force: false,
-        purge: false,
         prune_stale: true,
-        input_versions: PlanningInputVersions::default(),
+        ..app_request(LifecycleOperation::Upgrade, None)
     };
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -2208,14 +1929,8 @@ async fn approved_app_upgrade_prune_journals_stale_static_copy_removal() {
         );
     }
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
-    assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedFile { .. }))
-    ));
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
+    assert!(matches!(kind, ActionKindV1::RemoveManagedFile { .. }));
 
     let mut observer = crate::runtime::NullObserver;
     let report = runtime
@@ -2231,21 +1946,8 @@ async fn approved_app_upgrade_prune_journals_stale_static_copy_removal() {
     assert_eq!(report.lifecycle.summary().changed, 1);
     assert!(runtime.host().read(&destination).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::APP_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_err()
-    );
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    assert_no_app_journal(&runtime).await;
+    let manifest = app_manifest(&runtime).await;
     assert!(manifest.entries.is_empty());
 }
 
@@ -2277,24 +1979,14 @@ async fn approved_app_upgrade_prune_journals_stale_json_keys() {
     .await
     .unwrap();
     let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: None,
-        force: false,
-        purge: false,
         prune_stale: true,
-        input_versions: PlanningInputVersions::default(),
+        ..app_request(LifecycleOperation::Upgrade, None)
     };
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
-    assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedJson { .. }))
-    ));
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
+    assert!(matches!(kind, ActionKindV1::RemoveManagedJson { .. }));
 
     let mut observer = crate::runtime::NullObserver;
     runtime
@@ -2314,13 +2006,7 @@ async fn approved_app_upgrade_prune_journals_stale_json_keys() {
 
 #[tokio::test]
 async fn approved_app_uninstall_journals_static_managed_removal() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"managed".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot();
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let rollback = crate::action::managed_file_rollback_path(&destination);
@@ -2342,14 +2028,7 @@ async fn approved_app_uninstall_journals_static_managed_removal() {
         .unwrap()
         .into_bytes(),
     );
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Uninstall, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
@@ -2363,14 +2042,8 @@ async fn approved_app_uninstall_journals_static_managed_removal() {
         );
     }
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
-    assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedFile { .. }))
-    ));
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
+    assert!(matches!(kind, ActionKindV1::RemoveManagedFile { .. }));
 
     let mut observer = crate::runtime::NullObserver;
     let report = runtime
@@ -2380,33 +2053,14 @@ async fn approved_app_uninstall_journals_static_managed_removal() {
     assert_eq!(report.lifecycle.summary().changed, 1);
     assert!(runtime.host().read(&destination).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::APP_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_err()
-    );
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    assert_no_app_journal(&runtime).await;
+    let manifest = app_manifest(&runtime).await;
     assert!(manifest.entries.is_empty());
 }
 
 #[tokio::test]
 async fn approved_app_uninstall_journals_backup_restoration() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"managed".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot();
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let backup = crate::install::backup_path(&destination);
@@ -2430,14 +2084,7 @@ async fn approved_app_uninstall_journals_backup_restoration() {
         .unwrap()
         .into_bytes(),
     );
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Uninstall, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     for (access, path) in [
@@ -2456,13 +2103,10 @@ async fn approved_app_uninstall_journals_backup_restoration() {
         );
     }
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedFileWithBackup { .. }))
+        kind,
+        ActionKindV1::RemoveManagedFileWithBackup { .. }
     ));
 
     let mut observer = crate::runtime::NullObserver;
@@ -2480,21 +2124,8 @@ async fn approved_app_uninstall_journals_backup_restoration() {
     );
     assert!(runtime.host().read(&backup).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::APP_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_err()
-    );
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    assert_no_app_journal(&runtime).await;
+    let manifest = app_manifest(&runtime).await;
     assert!(manifest.entries.is_empty());
 }
 
@@ -2503,14 +2134,7 @@ async fn approved_privileged_app_uninstall_journals_static_copy_removal() {
     let runtime = runtime(privileged_static_copy_app_snapshot());
     let (destination, _) = seed_privileged_static_copy_app(&runtime, b"managed", None).await;
     let rollback = crate::action::managed_file_rollback_path(&destination);
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Uninstall, Some("demo"));
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
@@ -2520,22 +2144,13 @@ async fn approved_privileged_app_uninstall_journals_static_copy_removal() {
             .contains(&PermissionV1::Administrator)
     );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(
-            ir.actions.as_slice(),
-            [action] if matches!(
-                action.kind,
-                crate::action::ActionKindV1::RemoveManagedFile {
-                    requires_admin: true,
-                    ..
-                }
-            )
-        )
+        kind,
+        ActionKindV1::RemoveManagedFile {
+            requires_admin: true,
+            ..
+        }
     ));
 
     let mut observer = crate::runtime::NullObserver;
@@ -2565,12 +2180,8 @@ async fn approved_privileged_forced_app_uninstall_journals_backup_restoration() 
     let backup = backup.unwrap();
     let rollback = crate::action::managed_file_rollback_path(&destination);
     let request = AppPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        target: Some("demo".to_string()),
         force: true,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
+        ..app_request(LifecycleOperation::Uninstall, Some("demo"))
     };
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -2633,12 +2244,8 @@ async fn approved_forced_app_uninstall_journals_modified_static_copy_removal() {
     let (destination, _) = seed_static_copy_app(&runtime, b"user-modified", None).await;
     let rollback = crate::action::managed_file_rollback_path(&destination);
     let request = AppPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        target: Some("demo".to_string()),
         force: true,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
+        ..app_request(LifecycleOperation::Uninstall, Some("demo"))
     };
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -2650,14 +2257,8 @@ async fn approved_forced_app_uninstall_journals_modified_static_copy_removal() {
                 .contains(&"app_user_modification_override".to_string())
     }));
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
-    assert!(matches!(
-        actions.as_slice(),
-        [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::ForceRemoveManagedFile { .. }))
-    ));
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
+    assert!(matches!(kind, ActionKindV1::ForceRemoveManagedFile { .. }));
 
     let mut observer = crate::runtime::NullObserver;
     let report = runtime
@@ -2670,9 +2271,7 @@ async fn approved_forced_app_uninstall_journals_modified_static_copy_removal() {
     );
     assert!(runtime.host().read(&destination).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
-    let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = app_manifest(&runtime).await;
     assert!(manifest.entries.is_empty());
 }
 
@@ -2684,12 +2283,8 @@ async fn approved_forced_app_uninstall_journals_backup_restoration() {
     let backup = backup.unwrap();
     let rollback = crate::action::managed_file_rollback_path(&destination);
     let request = AppPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        target: Some("demo".to_string()),
         force: true,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
+        ..app_request(LifecycleOperation::Uninstall, Some("demo"))
     };
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
