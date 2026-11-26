@@ -1,6 +1,19 @@
 //! Sys regressions.
 use super::*;
 
+fn managed_request(
+    operation: LifecycleOperation,
+    os_id: &str,
+    target: Option<&str>,
+) -> SysManagedPlanRequest {
+    SysManagedPlanRequest {
+        operation,
+        os_id: os_id.into(),
+        target: target.map(str::to_owned),
+        input_versions: PlanningInputVersions::default(),
+    }
+}
+
 #[tokio::test]
 async fn sys_bootstrap_plan_is_observation_only_and_snapshot_bound() {
     let (runtime, host) = observation_runtime(bootstrap_snapshot(PresetSourceKind::Embedded, true));
@@ -280,12 +293,11 @@ async fn sys_unrestricted_code_is_triggered_for_scripts_not_managed_resources() 
             .file("sys/test/managed.txt", b"managed".to_vec())
             .build();
     let managed_plan = runtime(managed_snapshot)
-        .plan_managed_sys(SysManagedPlanRequest {
-            operation: LifecycleOperation::Install,
-            os_id: "test".to_string(),
-            target: Some("managed".to_string()),
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_managed_sys(managed_request(
+            LifecycleOperation::Install,
+            "test",
+            Some("managed"),
+        ))
         .await
         .unwrap();
     assert!(managed_plan.is_ready(), "{managed_plan:?}");
@@ -617,12 +629,7 @@ target = '$HOME/.config/available.txt'
     );
 
     let plan = runtime
-        .plan_managed_sys(SysManagedPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            os_id: "test".to_string(),
-            target: None,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_managed_sys(managed_request(LifecycleOperation::Upgrade, "test", None))
         .await
         .unwrap();
     assert!(plan.steps.iter().any(|step| step.target == "sys/enabled"));
@@ -631,66 +638,34 @@ target = '$HOME/.config/available.txt'
     assert!(!plan.is_converged_upgrade());
 }
 
-#[tokio::test]
-async fn managed_sys_uninstall_can_use_receipt_without_original_preset() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-        .file("app/placeholder/file", b"placeholder".to_vec())
-        .build();
-    let runtime = runtime(snapshot);
-    let destination = runtime.context().home_dir.join(".config/managed.txt");
-    runtime.host().put_file(&destination, b"managed".to_vec());
-    let manifest = SysRunManifest {
-        schema_version: crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
-        entries: vec![SysRunEntry {
-            os_id: "test".to_string(),
-            item_id: "managed".to_string(),
-            label: "Managed".to_string(),
-            status: crate::runtime::SysItemStatus::Installed,
-            detail: String::new(),
-            updated_at: "1".to_string(),
-            managed: true,
-            profile_enabled: false,
-            receipt: Some(SystemReceipt::ManagedFile(
-                crate::runtime::ManagedFileReceipt {
-                    version: crate::runtime::RECEIPT_VERSION,
-                    destination: destination.clone(),
-                    backup: None,
-                    content_hash: crate::install::hash_content(b"managed"),
-                    privileged: false,
-                    restart_hint: None,
-                },
-            )),
-        }],
-    };
-    runtime.host().put_file(
-        runtime.context().shine_dir.join("sys-manifest.toml"),
-        toml::to_string(&manifest).unwrap().into_bytes(),
-    );
-    let plan = runtime
-        .plan_managed_sys(SysManagedPlanRequest {
-            operation: LifecycleOperation::Uninstall,
-            os_id: "test".to_string(),
-            target: Some("managed".to_string()),
-            input_versions: PlanningInputVersions::default(),
-        })
-        .await
-        .unwrap();
-    assert!(plan.is_ready());
-    assert!(
-        plan.steps
-            .iter()
-            .any(|step| step.action == PlanActionV1::Remove)
-    );
+fn split_dns_snapshot(os_id: &str) -> PresetSnapshot {
+    PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                format!("sys/{os_id}/shine.toml"),
+                br#"version = 2
+[[items]]
+id = 'split-dns'
+label = 'Split DNS'
+mode = 'managed'
+driver = 'split-dns'
+requires_admin = true
+required_env = ['PRIVATE_DNS_DOMAIN', 'PRIVATE_DNS_SERVERS']
+permissions = { schema_version = 1, administrator = true, environment = [{ name = 'PRIVATE_DNS_DOMAIN', sensitivity = 'plain' }, { name = 'PRIVATE_DNS_SERVERS', sensitivity = 'plain' }], system = [{ capability = 'split-dns', resource = 'private-domain' }] }
+[items.config]
+domain_env = 'PRIVATE_DNS_DOMAIN'
+servers_env = 'PRIVATE_DNS_SERVERS'
+"#
+                .to_vec(),
+            )
+            .build()
 }
 
-#[tokio::test]
-async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_recovery() {
+fn installed_managed_file_without_preset() -> (CoreRuntime<InMemoryHost>, PathBuf, SysRunEntry) {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
         .file("app/placeholder/file", b"placeholder".to_vec())
         .build();
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/managed.txt");
-    let rollback = crate::action::managed_file_rollback_path(&destination);
     runtime.host().put_file(&destination, b"managed".to_vec());
     let previous_entry = SysRunEntry {
         os_id: "test".to_string(),
@@ -721,12 +696,33 @@ async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_reco
         .unwrap()
         .into_bytes(),
     );
-    let request = SysManagedPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        os_id: "test".to_string(),
-        target: Some("managed".to_string()),
-        input_versions: PlanningInputVersions::default(),
-    };
+    (runtime, destination, previous_entry)
+}
+
+#[tokio::test]
+async fn managed_sys_uninstall_can_use_receipt_without_original_preset() {
+    let (runtime, _, _) = installed_managed_file_without_preset();
+    let plan = runtime
+        .plan_managed_sys(managed_request(
+            LifecycleOperation::Uninstall,
+            "test",
+            Some("managed"),
+        ))
+        .await
+        .unwrap();
+    assert!(plan.is_ready());
+    assert!(
+        plan.steps
+            .iter()
+            .any(|step| step.action == PlanActionV1::Remove)
+    );
+}
+
+#[tokio::test]
+async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_recovery() {
+    let (runtime, destination, previous_entry) = installed_managed_file_without_preset();
+    let rollback = crate::action::managed_file_rollback_path(&destination);
+    let request = managed_request(LifecycleOperation::Uninstall, "test", Some("managed"));
     let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -772,25 +768,7 @@ async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_reco
 }
 
 pub(super) async fn interrupted_split_dns_install() -> (CoreRuntime<InMemoryHost>, PathBuf) {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "sys/macos/shine.toml",
-                br#"version = 2
-[[items]]
-id = 'split-dns'
-label = 'Split DNS'
-mode = 'managed'
-driver = 'split-dns'
-requires_admin = true
-required_env = ['PRIVATE_DNS_DOMAIN', 'PRIVATE_DNS_SERVERS']
-permissions = { schema_version = 1, administrator = true, environment = [{ name = 'PRIVATE_DNS_DOMAIN', sensitivity = 'plain' }, { name = 'PRIVATE_DNS_SERVERS', sensitivity = 'plain' }], system = [{ capability = 'split-dns', resource = 'private-domain' }] }
-[items.config]
-domain_env = 'PRIVATE_DNS_DOMAIN'
-servers_env = 'PRIVATE_DNS_SERVERS'
-"#
-                .to_vec(),
-            )
-            .build();
+    let snapshot = split_dns_snapshot("macos");
     let mut runtime = runtime(snapshot);
     runtime
         .context_mut_for_test()
@@ -800,12 +778,7 @@ servers_env = 'PRIVATE_DNS_SERVERS'
         .context_mut_for_test()
         .env
         .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
-    let request = SysManagedPlanRequest {
-        operation: LifecycleOperation::Install,
-        os_id: "macos".to_string(),
-        target: Some("split-dns".to_string()),
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = managed_request(LifecycleOperation::Install, "macos", Some("split-dns"));
     let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -975,12 +948,7 @@ target = '$HOME/.config/managed.txt'
             .file("sys/test/managed.txt", b"managed".to_vec())
             .build();
     let mut runtime = runtime(snapshot);
-    let request = SysManagedPlanRequest {
-        operation: LifecycleOperation::Install,
-        os_id: "test".to_string(),
-        target: Some("managed".to_string()),
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = managed_request(LifecycleOperation::Install, "test", Some("managed"));
 
     let missing = runtime.plan_managed_sys(request.clone()).await.unwrap();
     assert!(!missing.is_ready());
@@ -1014,25 +982,7 @@ target = '$HOME/.config/managed.txt'
 #[tokio::test]
 async fn split_dns_plan_binds_receipt_and_live_ownership() {
     for os_id in ["macos", "windows"] {
-        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                format!("sys/{os_id}/shine.toml"),
-                br#"version = 2
-[[items]]
-id = 'split-dns'
-label = 'Split DNS'
-mode = 'managed'
-driver = 'split-dns'
-requires_admin = true
-required_env = ['PRIVATE_DNS_DOMAIN', 'PRIVATE_DNS_SERVERS']
-permissions = { schema_version = 1, administrator = true, environment = [{ name = 'PRIVATE_DNS_DOMAIN', sensitivity = 'plain' }, { name = 'PRIVATE_DNS_SERVERS', sensitivity = 'plain' }], system = [{ capability = 'split-dns', resource = 'private-domain' }] }
-[items.config]
-domain_env = 'PRIVATE_DNS_DOMAIN'
-servers_env = 'PRIVATE_DNS_SERVERS'
-"#
-                .to_vec(),
-            )
-            .build();
+        let snapshot = split_dns_snapshot(os_id);
         let base = runtime(snapshot);
         let memory = base.host().clone();
         let mut runtime = CoreRuntime::new(
@@ -1091,12 +1041,7 @@ servers_env = 'PRIVATE_DNS_SERVERS'
             .unwrap()
             .into_bytes(),
         );
-        let request = SysManagedPlanRequest {
-            operation: LifecycleOperation::Install,
-            os_id: os_id.to_string(),
-            target: Some("split-dns".to_string()),
-            input_versions: PlanningInputVersions::default(),
-        };
+        let request = managed_request(LifecycleOperation::Install, os_id, Some("split-dns"));
         let current = runtime.plan_managed_sys(request.clone()).await.unwrap();
         assert!(current.is_ready());
         assert!(
@@ -1234,12 +1179,7 @@ target = '~/.config/b.txt'
     };
     let original = runtime(snapshot(b"old"));
     for target in ["a", "b"] {
-        let request = SysManagedPlanRequest {
-            operation: LifecycleOperation::Install,
-            os_id: "test".into(),
-            target: Some(target.into()),
-            input_versions: PlanningInputVersions::default(),
-        };
+        let request = managed_request(LifecycleOperation::Install, "test", Some(target));
         let approval = PlanApprovalV1::for_reviewed_plan(
             &original.plan_managed_sys(request.clone()).await.unwrap(),
         )
@@ -1269,12 +1209,7 @@ target = '~/.config/b.txt'
         original.context().clone(),
         snapshot(b"new"),
     );
-    let request = SysManagedPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        os_id: "test".into(),
-        target: None,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = managed_request(LifecycleOperation::Upgrade, "test", None);
     let approval = PlanApprovalV1::for_reviewed_plan(
         &runtime.plan_managed_sys(request.clone()).await.unwrap(),
     )
@@ -1441,12 +1376,7 @@ target = '~/.config/managed.txt'
             preview.lifecycle.outcomes[0].status,
             crate::lifecycle::LifecycleStatus::Previewed
         );
-        let request = SysManagedPlanRequest {
-            os_id: "test".into(),
-            target: Some("managed".into()),
-            operation: LifecycleOperation::Uninstall,
-            input_versions: PlanningInputVersions::default(),
-        };
+        let request = managed_request(LifecycleOperation::Uninstall, "test", Some("managed"));
         let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         let report = runtime
@@ -1511,12 +1441,7 @@ target = '$HOME/.config/managed.txt'
             runtime.host().put_file(&destination, bytes.to_vec());
         }
         let mut observer = crate::runtime::NullObserver;
-        let request = |operation| SysManagedPlanRequest {
-            operation,
-            os_id: "test".into(),
-            target: Some("managed".into()),
-            input_versions: PlanningInputVersions::default(),
-        };
+        let request = |operation| managed_request(operation, "test", Some("managed"));
         let install = request(LifecycleOperation::Install);
         let plan = runtime.plan_managed_sys(install.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();

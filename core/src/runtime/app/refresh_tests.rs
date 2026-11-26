@@ -10,6 +10,12 @@ struct Interaction {
     allow: bool,
     calls: usize,
 }
+impl Interaction {
+    fn new(allow: bool) -> Self {
+        Self { allow, calls: 0 }
+    }
+}
+
 impl RuntimeInteraction for Interaction {
     fn confirm(&mut self, _: &'static str, default: bool) -> Result<bool> {
         Ok(default)
@@ -85,6 +91,40 @@ fn request() -> AppRefreshPlanRequest {
         input_versions: Default::default(),
     }
 }
+async fn expect_pending<F: Future>(future: F) -> Pin<Box<F>> {
+    let mut future = Box::pin(future);
+    std::future::poll_fn(|cx| {
+        assert!(
+            future.as_mut().poll(cx).is_pending(),
+            "refresh finished while the lifecycle lock was held"
+        );
+        std::task::Poll::Ready(())
+    })
+    .await;
+    future
+}
+
+fn queue_successful_output(host: &InMemoryHost, stdout: &[u8]) {
+    host.queue_process_output(Ok(ProcessOutput {
+        exit_code: Some(0),
+        stdout: stdout.to_vec(),
+        ..Default::default()
+    }));
+}
+
+#[track_caller]
+fn assert_only_reads_and_locks(operations: &[HostOperation]) {
+    for operation in operations {
+        assert!(
+            matches!(
+                operation,
+                HostOperation::Read(_) | HostOperation::AcquireOperationLock(_)
+            ),
+            "unexpected host operation: {operation:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn refresh_continues_after_file_failure_saves_once_and_runs_hooks_after_receipt() {
     let runtime = runtime(false).await;
@@ -93,15 +133,8 @@ async fn refresh_continues_after_file_failure_saves_once_and_runs_hooks_after_re
         stderr: b"private diagnostic".to_vec(),
         ..Default::default()
     }));
-    runtime.host().queue_process_output(Ok(ProcessOutput {
-        exit_code: Some(0),
-        stdout: b"next".to_vec(),
-        ..Default::default()
-    }));
-    runtime.host().queue_process_output(Ok(ProcessOutput {
-        exit_code: Some(0),
-        ..Default::default()
-    }));
+    queue_successful_output(runtime.host(), b"next");
+    queue_successful_output(runtime.host(), b"");
     let request = request();
     let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
     assert!(plan.is_ready(), "{plan:#?}");
@@ -112,10 +145,7 @@ async fn refresh_continues_after_file_failure_saves_once_and_runs_hooks_after_re
             request,
             &approval,
             &mut NullObserver,
-            &mut Interaction {
-                allow: true,
-                calls: 0,
-            },
+            &mut Interaction::new(true),
         )
         .await
         .unwrap();
@@ -178,17 +208,10 @@ async fn refresh_admin_denial_and_failed_final_receipt_do_not_run_hooks() {
             runtime.host().fail_write_after(&receipt, 0);
         }
         for _ in 0..2 {
-            runtime.host().queue_process_output(Ok(ProcessOutput {
-                exit_code: Some(0),
-                stdout: b"next".to_vec(),
-                ..Default::default()
-            }));
+            queue_successful_output(runtime.host(), b"next");
         }
         let since = runtime.host().operations().len();
-        let mut interaction = Interaction {
-            allow: !deny,
-            calls: 0,
-        };
+        let mut interaction = Interaction::new(!deny);
         assert!(
             runtime
                 .refresh_app_generators_approved(
@@ -229,14 +252,7 @@ async fn refresh_admin_denial_and_failed_final_receipt_do_not_run_hooks() {
             );
         }
         if deny {
-            assert!(
-                runtime.host().operations()[since..]
-                    .iter()
-                    .all(|op| matches!(
-                        op,
-                        HostOperation::Read(_) | HostOperation::AcquireOperationLock(_)
-                    ))
-            );
+            assert_only_reads_and_locks(&runtime.host().operations()[since..]);
         }
     }
 }
@@ -299,11 +315,7 @@ async fn refresh_selection_preserves_declared_order_and_requires_exact_receipt_o
         );
         assert_eq!(runtime.host().read(&receipt).await.unwrap(), before);
         for _ in 0..if foreign { 1 } else { 2 } {
-            runtime.host().queue_process_output(Ok(ProcessOutput {
-                exit_code: Some(0),
-                stdout: b"next".to_vec(),
-                ..Default::default()
-            }));
+            queue_successful_output(runtime.host(), b"next");
         }
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         let report = runtime
@@ -311,10 +323,7 @@ async fn refresh_selection_preserves_declared_order_and_requires_exact_receipt_o
                 request(),
                 &approval,
                 &mut NullObserver,
-                &mut Interaction {
-                    allow: true,
-                    calls: 0,
-                },
+                &mut Interaction::new(true),
             )
             .await
             .unwrap();
@@ -363,21 +372,14 @@ async fn refresh_revalidates_receipts_after_waiting_for_the_lifecycle_lock() {
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let guard = runtime.acquire_app_lifecycle_operation().await.unwrap();
     let mut observer = NullObserver;
-    let mut interaction = Interaction {
-        allow: true,
-        calls: 0,
-    };
+    let mut interaction = Interaction::new(true);
     let since = runtime.host().operations().len();
-    let mut pending = Box::pin(runtime.refresh_app_generators_approved(
+    let pending = expect_pending(runtime.refresh_app_generators_approved(
         request(),
         &approval,
         &mut observer,
         &mut interaction,
-    ));
-    std::future::poll_fn(|cx| {
-        assert!(pending.as_mut().poll(cx).is_pending());
-        std::task::Poll::Ready(())
-    })
+    ))
     .await;
     assert_eq!(
         runtime.host().operations().len(),
@@ -403,14 +405,7 @@ async fn refresh_revalidates_receipts_after_waiting_for_the_lifecycle_lock() {
     );
     assert_eq!(interaction.calls, 0);
     assert!(runtime.host().process_requests().is_empty());
-    assert!(
-        runtime.host().operations()[since..]
-            .iter()
-            .all(|operation| matches!(
-                operation,
-                HostOperation::Read(_) | HostOperation::AcquireOperationLock(_)
-            ))
-    );
+    assert_only_reads_and_locks(&runtime.host().operations()[since..]);
     assert_eq!(runtime.host().read(&receipt).await.unwrap(), changed);
 }
 
@@ -421,20 +416,13 @@ async fn refresh_preserves_unrelated_receipts_added_while_waiting_for_the_lock()
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let guard = runtime.acquire_app_lifecycle_operation().await.unwrap();
     let mut observer = NullObserver;
-    let mut interaction = Interaction {
-        allow: true,
-        calls: 0,
-    };
-    let mut pending = Box::pin(runtime.refresh_app_generators_approved(
+    let mut interaction = Interaction::new(true);
+    let pending = expect_pending(runtime.refresh_app_generators_approved(
         request(),
         &approval,
         &mut observer,
         &mut interaction,
-    ));
-    std::future::poll_fn(|cx| {
-        assert!(pending.as_mut().poll(cx).is_pending());
-        std::task::Poll::Ready(())
-    })
+    ))
     .await;
     let mut manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
         .await
@@ -458,11 +446,7 @@ async fn refresh_preserves_unrelated_receipts_added_while_waiting_for_the_lock()
         .unwrap();
     assert_eq!(runtime.plan_app_refresh(request()).await.unwrap(), plan);
     for _ in 0..2 {
-        runtime.host().queue_process_output(Ok(ProcessOutput {
-            exit_code: Some(0),
-            stdout: b"next".to_vec(),
-            ..Default::default()
-        }));
+        queue_successful_output(runtime.host(), b"next");
     }
     drop(guard);
     let report = pending.await.unwrap();
@@ -529,10 +513,7 @@ async fn refresh_waiting_on_lock_never_recovers_an_interrupted_operation_implici
                 install,
                 &approval,
                 &mut NullObserver,
-                &mut Interaction {
-                    allow: true,
-                    calls: 0
-                }
+                &mut Interaction::new(true)
             )
             .await
             .unwrap_err()
@@ -561,20 +542,13 @@ async fn refresh_waiting_on_lock_never_recovers_an_interrupted_operation_implici
         let before = runtime.host().read(&receipt).await.unwrap();
         let guard = runtime.acquire_app_lifecycle_operation().await.unwrap();
         let mut observer = NullObserver;
-        let mut interaction = Interaction {
-            allow: true,
-            calls: 0,
-        };
-        let mut pending = Box::pin(runtime.refresh_app_generators_approved(
+        let mut interaction = Interaction::new(true);
+        let pending = expect_pending(runtime.refresh_app_generators_approved(
             request(),
             &approval,
             &mut observer,
             &mut interaction,
-        ));
-        std::future::poll_fn(|cx| {
-            assert!(pending.as_mut().poll(cx).is_pending());
-            std::task::Poll::Ready(())
-        })
+        ))
         .await;
         runtime.host().put_file(&journal_path, journal.clone());
         runtime.host().put_file(&resource, content.clone());
@@ -598,14 +572,7 @@ async fn refresh_waiting_on_lock_never_recovers_an_interrupted_operation_implici
         }
         assert_eq!(interaction.calls, 0);
         assert!(runtime.host().process_requests().is_empty());
-        assert!(
-            runtime.host().operations()[since..]
-                .iter()
-                .all(|op| matches!(
-                    op,
-                    HostOperation::Read(_) | HostOperation::AcquireOperationLock(_)
-                ))
-        );
+        assert_only_reads_and_locks(&runtime.host().operations()[since..]);
         assert_eq!(runtime.host().read(&journal_path).await.unwrap(), journal);
         assert_eq!(runtime.host().read(&resource).await.unwrap(), content);
         assert_eq!(runtime.host().read(&receipt).await.unwrap(), before);

@@ -2,6 +2,15 @@
 use super::*;
 use crate::runtime::NullObserver;
 
+#[track_caller]
+fn assert_step_diagnostic(plan: &PlanV1, action: PlanActionV1, code: &str) {
+    assert!(
+        plan.steps.iter().any(|step| step.action == action
+            && step.diagnostic_codes.iter().any(|actual| actual == code)),
+        "missing {action:?} step with diagnostic {code}"
+    );
+}
+
 #[tokio::test]
 async fn modified_generated_file_stops_before_generator_input_and_relocation_planning() {
     let (mut runtime, request, previous, desired, backup) =
@@ -56,14 +65,7 @@ async fn app_approval_rejects_only_executable_intent_changing() {
             .file_with_executable("app/demo/helper", b"helper".to_vec(), executable)
             .build()
     };
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let reviewed = runtime(snapshot(false))
         .plan_apps(request.clone())
         .await
@@ -87,14 +89,7 @@ async fn app_plan_is_pure_ready_and_payload_free() {
     let runtime = runtime(snapshot);
     let host = runtime.host().clone();
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Install,
-            target: Some("demo".to_string()),
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Install, Some("demo")))
         .await
         .unwrap();
     assert!(plan.is_ready());
@@ -129,14 +124,7 @@ async fn unrestricted_opaque_code_is_added_only_when_app_code_is_triggered() {
     let opaque = PermissionV1::OpaqueCode {
         scope: OpaqueCodeScopeV1::Unrestricted,
     };
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let static_snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "app/demo/shine.toml",
@@ -185,14 +173,7 @@ async fn app_script_hook_is_bound_into_the_parent_plan() {
     seed_static_copy_app(&runtime, b"managed", None).await;
 
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: Some("demo".to_string()),
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Upgrade, Some("demo")))
         .await
         .unwrap();
 
@@ -237,14 +218,7 @@ async fn legacy_overlay_metadata_blocks_recursive_artifact_hook_before_trust() {
     let runtime = runtime(snapshot);
 
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Install,
-            target: Some("demo".to_string()),
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Install, Some("demo")))
         .await
         .unwrap();
 
@@ -273,14 +247,7 @@ async fn missing_permission_and_secret_identity_fail_closed() {
         .env
         .insert("TOKEN".to_string(), "plaintext".to_string());
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Install,
-            target: Some("demo".to_string()),
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Install, Some("demo")))
         .await
         .unwrap();
     assert!(!plan.is_ready());
@@ -316,14 +283,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sen
         .context_mut_for_test()
         .env
         .insert("TOKEN".to_string(), "top-secret-value".to_string());
-    let mut request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let mut request = app_request(LifecycleOperation::Install, Some("demo"));
 
     let missing = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(!missing.is_ready());
@@ -364,14 +324,7 @@ generator = { script = 'remote.ts', runtime = 'bun', env = [{ source = 'URL', se
         .file("app/demo/local.ts", b"process.stdout.write('local')".to_vec())
         .build();
     let mut runtime = runtime(snapshot);
-    let mut request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".into()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let mut request = app_request(LifecycleOperation::Install, Some("demo"));
     let executes = |plan: &PlanV1, script: &str| {
         plan.permissions
             .required
@@ -470,14 +423,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sen
     let destination = runtime.context().home_dir.join(".config/demo/config.txt");
     let backup = crate::install::backup_path(&destination);
     runtime.host().put_file(&destination, b"original".to_vec());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".into()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     assert!(plan.code_boundaries.is_empty());
@@ -592,22 +538,10 @@ async fn app_user_modification_is_preserved_unless_force_is_bound() {
         runtime.context().shine_dir.join("app-manifest.toml"),
         toml::to_string(&manifest).unwrap().into_bytes(),
     );
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
 
     let preserved = runtime.plan_apps(request.clone()).await.unwrap();
-    assert!(preserved.steps.iter().any(|step| {
-        step.action == PlanActionV1::Preserve
-            && step
-                .diagnostic_codes
-                .contains(&"app_user_modified".to_string())
-    }));
+    assert_step_diagnostic(&preserved, PlanActionV1::Preserve, "app_user_modified");
     let forced = runtime
         .plan_apps(AppPlanRequest {
             force: true,
@@ -615,12 +549,11 @@ async fn app_user_modification_is_preserved_unless_force_is_bound() {
         })
         .await
         .unwrap();
-    assert!(forced.steps.iter().any(|step| {
-        step.action == PlanActionV1::Update
-            && step
-                .diagnostic_codes
-                .contains(&"app_user_modification_override".to_string())
-    }));
+    assert_step_diagnostic(
+        &forced,
+        PlanActionV1::Update,
+        "app_user_modification_override",
+    );
     assert_ne!(
         preserved.fingerprint().unwrap(),
         forced.fingerprint().unwrap()
@@ -637,14 +570,7 @@ async fn app_plan_fingerprint_binds_manifest_and_live_state() {
             .file("app/demo/config.toml", b"desired".to_vec())
             .build();
     let runtime = runtime(snapshot);
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let initial = runtime.plan_apps(request.clone()).await.unwrap();
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     runtime.host().put_file(&destination, b"foreign".to_vec());
@@ -696,14 +622,7 @@ async fn app_upgrade_permissions_exclude_current_files_and_bind_their_state() {
         .unwrap()
         .into_bytes(),
     );
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Upgrade,
-        target: None,
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Upgrade, None);
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let current = review_path(runtime.context(), &root.join("current"));
     assert!(
@@ -803,23 +722,11 @@ async fn app_managed_update_blocks_an_occupied_transaction_rollback_path() {
         .into_bytes(),
     );
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: Some("demo".to_string()),
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Upgrade, Some("demo")))
         .await
         .unwrap();
     assert!(!plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_update_rollback_occupied".to_string())
-    }));
+    assert_step_diagnostic(&plan, PlanActionV1::Blocked, "app_update_rollback_occupied");
 }
 
 #[tokio::test]
@@ -864,14 +771,7 @@ generator = {{ script = 'gen.ts', runtime = 'bun', env = [{{ source = 'SOURCE', 
         .await
         .unwrap();
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Install,
-            target: None,
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Install, None))
         .await
         .unwrap();
     assert!(plan.is_ready());
@@ -1149,14 +1049,7 @@ async fn app_target_plan_ignores_unrelated_manifest_and_live_state() {
         &manifest_path,
         toml::to_string(&manifest).unwrap().into_bytes(),
     );
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let initial = runtime.plan_apps(request.clone()).await.unwrap();
 
     manifest.entries[1].content_hash = crate::install::hash_content(b"second");
@@ -1203,23 +1096,18 @@ async fn app_upgrade_prune_blocks_stale_copy_with_noncanonical_backup() {
 
     let plan = runtime
         .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: None,
-            force: false,
-            purge: false,
             prune_stale: true,
-            input_versions: PlanningInputVersions::default(),
+            ..app_request(LifecycleOperation::Upgrade, None)
         })
         .await
         .unwrap();
 
     assert!(!plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_stale_removal_unsupported".to_string())
-    }));
+    assert_step_diagnostic(
+        &plan,
+        PlanActionV1::Blocked,
+        "app_stale_removal_unsupported",
+    );
 }
 
 #[tokio::test]
@@ -1279,12 +1167,8 @@ async fn stale_app_hashing_preserves_destination_admission_and_prune_semantics()
         let since = runtime.host().operations().len();
         let plan = runtime
             .plan_apps(AppPlanRequest {
-                operation: LifecycleOperation::Upgrade,
-                target: Some("demo".into()),
-                force: false,
-                purge: false,
                 prune_stale: true,
-                input_versions: PlanningInputVersions::default(),
+                ..app_request(LifecycleOperation::Upgrade, Some("demo"))
             })
             .await
             .unwrap();
@@ -1341,22 +1225,10 @@ async fn stale_app_hashing_preserves_destination_admission_and_prune_semantics()
 async fn preserved_privileged_app_file_does_not_request_admin() {
     let runtime = runtime(privileged_static_copy_app_snapshot());
     let (destination, _) = seed_privileged_static_copy_app(&runtime, b"user-modified", None).await;
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Uninstall,
-        target: Some("demo".to_string()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Uninstall, Some("demo"));
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
-    assert!(plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Preserve
-            && step
-                .diagnostic_codes
-                .contains(&"app_user_modified".to_string())
-    }));
+    assert_step_diagnostic(&plan, PlanActionV1::Preserve, "app_user_modified");
     assert!(
         !plan
             .permissions
@@ -1394,73 +1266,27 @@ async fn forced_app_remove_blocks_an_occupied_transaction_rollback_path() {
 
     let plan = runtime
         .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Uninstall,
-            target: Some("demo".to_string()),
             force: true,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
+            ..app_request(LifecycleOperation::Uninstall, Some("demo"))
         })
         .await
         .unwrap();
     assert!(!plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_remove_rollback_occupied".to_string())
-    }));
+    assert_step_diagnostic(&plan, PlanActionV1::Blocked, "app_remove_rollback_occupied");
 }
 
 #[tokio::test]
 async fn app_managed_remove_blocks_an_occupied_transaction_rollback_path() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"managed".to_vec())
-            .build();
-    let runtime = runtime(snapshot);
-    let destination = runtime.context().home_dir.join(".config/demo/config.toml");
-    runtime.host().put_file(&destination, b"managed".to_vec());
+    let runtime = runtime(static_copy_app_snapshot());
+    let (destination, _) = seed_static_copy_app(&runtime, b"managed", None).await;
     runtime.host().put_file(
         crate::action::managed_file_rollback_path(&destination),
         b"foreign".to_vec(),
     );
-    runtime.host().put_file(
-        runtime.context().shine_dir.join("app-manifest.toml"),
-        toml::to_string(&AppManifest {
-            schema_version: APP_MANIFEST_SCHEMA_VERSION,
-            entries: vec![AppEntry {
-                source: "app/demo/config.toml".to_string(),
-                destination,
-                backup: None,
-                content_hash: crate::install::hash_content(b"managed"),
-                install_strategy: crate::install::AppInstallStrategy::Copy,
-                uses_env: false,
-                requires_admin: false,
-            }],
-        })
-        .unwrap()
-        .into_bytes(),
-    );
     let plan = runtime
-        .plan_apps(AppPlanRequest {
-            operation: LifecycleOperation::Uninstall,
-            target: Some("demo".to_string()),
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        })
+        .plan_apps(app_request(LifecycleOperation::Uninstall, Some("demo")))
         .await
         .unwrap();
     assert!(!plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.action == PlanActionV1::Blocked
-            && step
-                .diagnostic_codes
-                .contains(&"app_remove_rollback_occupied".to_string())
-    }));
+    assert_step_diagnostic(&plan, PlanActionV1::Blocked, "app_remove_rollback_occupied");
 }

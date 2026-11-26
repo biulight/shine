@@ -209,6 +209,45 @@ mod tests {
         crate::test_support::make_temp_dir("shine-check").await
     }
 
+    async fn shell_row(config: &Config, label: &str) -> ShellRow {
+        build_shell_rows(config)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.label == label)
+            .unwrap_or_else(|| panic!("missing Shell status row {label}"))
+    }
+
+    async fn install_trusted_shell(config: &Config, category: &str) {
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(config, "preset").await;
+        crate::shells::handle_install_approved(config, Some(category), false, true)
+            .await
+            .unwrap();
+    }
+
+    async fn install_old_ccenv(dir: &std::path::Path) -> Config {
+        let cat_dir = dir.join("presets/shell/agent");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        let old_source = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
+        fs::write(
+            cat_dir.join("shine.toml"),
+            format!(
+                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\npermissions = {{ schema_version = 1 }}\n"
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join(old_source), b"# old sourced ccenv\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(dir);
+        config.is_external_presets = true;
+        install_trusted_shell(&config, "agent").await;
+        config
+    }
+
     #[cfg(not(unix))]
     #[tokio::test]
     async fn installed_shell_rows_use_windows_shim_path() {
@@ -232,11 +271,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "proxy/setproxy")
-            .expect("proxy/setproxy row should exist");
+        let row = shell_row(&config, "proxy/setproxy").await;
 
         assert_ne!(row.status_text, "not installed");
         assert!(row.is_installed);
@@ -270,18 +305,9 @@ mod tests {
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
-        crate::trust::grant_current_for_test(&config, "preset").await;
+        install_trusted_shell(&config, "proxy").await;
 
-        crate::shells::handle_install_approved(&config, Some("proxy"), false, true)
-            .await
-            .unwrap();
-
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "proxy/setproxy")
-            .expect("proxy/setproxy row should exist");
+        let row = shell_row(&config, "proxy/setproxy").await;
 
         assert_eq!(row.status_sym, "✓");
         assert_eq!(row.status_text, "up-to-date");
@@ -307,20 +333,12 @@ mod tests {
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
-        crate::trust::grant_current_for_test(&config, "preset").await;
-        crate::shells::handle_install_approved(&config, Some("custom"), false, true)
-            .await
-            .unwrap();
+        install_trusted_shell(&config, "custom").await;
         fs::remove_file(config.bin_dir().join("mytool"))
             .await
             .unwrap();
 
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "custom/mytool")
-            .unwrap();
+        let row = shell_row(&config, "custom/mytool").await;
         assert_eq!(row.status_text, "update available");
         assert_eq!(
             row.changes,
@@ -332,11 +350,7 @@ mod tests {
         fs::remove_file(config.shine_dir().join("shell-manifest.toml"))
             .await
             .unwrap();
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "custom/mytool")
-            .unwrap();
+        let row = shell_row(&config, "custom/mytool").await;
         assert!(!row.is_installed);
         assert_eq!(row.status_text, "not installed");
         assert!(row.changes.is_empty());
@@ -366,12 +380,7 @@ mod tests {
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
-        crate::trust::grant_current_for_test(&config, "preset").await;
-
-        crate::shells::handle_install_approved(&config, Some("proxy"), false, true)
-            .await
-            .unwrap();
+        install_trusted_shell(&config, "proxy").await;
 
         fs::write(
             &script,
@@ -380,11 +389,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "proxy/setproxy")
-            .expect("proxy/setproxy row should exist");
+        let row = shell_row(&config, "proxy/setproxy").await;
 
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "update available");
@@ -421,20 +426,12 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "custom/mytool")
-            .unwrap();
+        let row = shell_row(&config, "custom/mytool").await;
         assert_eq!(row.status_sym, "✓");
         assert_eq!(row.status_text, "live source");
 
         crate::trust::grant_current_for_test(&config, "preset").await;
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "custom/mytool")
-            .unwrap();
+        let row = shell_row(&config, "custom/mytool").await;
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "development trust required");
         assert!(row.changes.iter().any(|change| matches!(
@@ -481,11 +478,7 @@ mod tests {
         new_config.is_external_presets = true;
         new_config.external_shell_mode = crate::config::ExternalShellMode::Live;
 
-        let rows = build_shell_rows(&new_config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "custom/mytool")
-            .unwrap();
+        let row = shell_row(&new_config, "custom/mytool").await;
         assert_eq!(row.status_text, "development trust required");
         assert_eq!(
             row.changes,
@@ -508,11 +501,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let rows = build_shell_rows(&new_config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "custom/mytool")
-            .unwrap();
+        let row = shell_row(&new_config, "custom/mytool").await;
         assert_eq!(
             row.changes,
             vec![
@@ -553,22 +542,14 @@ mod tests {
         let mut old_config =
             Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(old_overlay.clone()));
         old_config.is_external_presets = true;
-        fs::create_dir_all(old_config.bin_dir()).await.unwrap();
-        crate::trust::grant_current_for_test(&old_config, "preset").await;
-        crate::shells::handle_install_approved(&old_config, Some("custom"), false, true)
-            .await
-            .unwrap();
+        install_trusted_shell(&old_config, "custom").await;
 
         fs::rename(&old_overlay, &new_overlay).await.unwrap();
         let mut new_config =
             Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(new_overlay));
         new_config.is_external_presets = true;
 
-        let rows = build_shell_rows(&new_config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "custom/mytool")
-            .unwrap();
+        let row = shell_row(&new_config, "custom/mytool").await;
         assert_eq!(row.status_text, "up-to-date");
         assert!(row.changes.is_empty());
 
@@ -624,11 +605,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "custom/mytool")
-            .unwrap();
+        let row = shell_row(&config, "custom/mytool").await;
         assert_eq!(row.status_text, "update available");
         assert_eq!(
             row.changes,
@@ -690,11 +667,7 @@ mod tests {
             .unwrap();
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
-        crate::trust::grant_current_for_test(&config, "preset").await;
-        crate::shells::handle_install_approved(&config, Some("custom"), false, true)
-            .await
-            .unwrap();
+        install_trusted_shell(&config, "custom").await;
 
         fs::write(
             category.join("bun.lock"),
@@ -702,11 +675,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "custom/mytool")
-            .unwrap();
+        let row = shell_row(&config, "custom/mytool").await;
         assert_eq!(row.status_text, "update available");
         assert!(row.changes.iter().any(|change| matches!(
             change,
@@ -735,11 +704,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "agent/ccenv")
-            .expect("agent/ccenv row should exist");
+        let row = shell_row(&config, "agent/ccenv").await;
 
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "update available");
@@ -750,35 +715,10 @@ mod tests {
     #[tokio::test]
     async fn embedded_shell_source_rename_reports_update_available() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/agent");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        let old_source = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
-        fs::write(
-            cat_dir.join("shine.toml"),
-            format!(
-                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\npermissions = {{ schema_version = 1 }}\n"
-            ),
-        )
-        .await
-        .unwrap();
-        fs::write(cat_dir.join(old_source), b"# old sourced ccenv\n")
-            .await
-            .unwrap();
-
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
-        crate::trust::grant_current_for_test(&config, "preset").await;
-        crate::shells::handle_install_approved(&config, Some("agent"), false, true)
-            .await
-            .unwrap();
+        let mut config = install_old_ccenv(&dir).await;
 
         config.is_external_presets = false;
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "agent/ccenv")
-            .expect("embedded agent/ccenv row should exist");
+        let row = shell_row(&config, "agent/ccenv").await;
 
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "update available");
@@ -789,28 +729,8 @@ mod tests {
     #[tokio::test]
     async fn external_shell_runtime_and_source_change_reports_update_available() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/agent");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        let old_source = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
-        fs::write(
-            cat_dir.join("shine.toml"),
-            format!(
-                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\npermissions = {{ schema_version = 1 }}\n"
-            ),
-        )
-        .await
-        .unwrap();
-        fs::write(cat_dir.join(old_source), b"# old sourced ccenv\n")
-            .await
-            .unwrap();
-
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
-        crate::trust::grant_current_for_test(&config, "preset").await;
-        crate::shells::handle_install_approved(&config, Some("agent"), false, true)
-            .await
-            .unwrap();
+        let config = install_old_ccenv(&dir).await;
+        let cat_dir = config.presets_dir().join("shell/agent");
 
         fs::write(
             cat_dir.join("shine.toml"),
@@ -822,11 +742,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "agent/ccenv")
-            .expect("external agent/ccenv row should exist");
+        let row = shell_row(&config, "agent/ccenv").await;
 
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "update available");
@@ -855,23 +771,14 @@ mod tests {
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
-        crate::trust::grant_current_for_test(&config, "preset").await;
-
-        crate::shells::handle_install_approved(&config, Some("proxy"), false, true)
-            .await
-            .unwrap();
+        install_trusted_shell(&config, "proxy").await;
 
         config.env.insert(
             "PROXY_NO_PROXY".to_string(),
             "localhost,127.0.0.1,::1,.local".to_string(),
         );
 
-        let rows = build_shell_rows(&config).await.unwrap();
-        let row = rows
-            .iter()
-            .find(|row| row.label == "proxy/setproxy")
-            .expect("proxy/setproxy row should exist");
+        let row = shell_row(&config, "proxy/setproxy").await;
 
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "update available");
@@ -956,7 +863,7 @@ mod tests {
         fs::write(
             preset.join("shine.toml"),
             format!(
-                "dest = {:?}\n[[files]]\nsource = \"config.toml\"\n[[files]]\nsource = \"theme.toml\"\n",
+                "metadata_schema_version = 2\nlist_mode = 'files'\ndest = {:?}\n[[files]]\nsource = \"config.toml\"\n[[files]]\nsource = \"theme.toml\"\n",
                 dir.join(".config/sample").display().to_string()
             ),
         )
@@ -969,54 +876,11 @@ mod tests {
             .await
             .unwrap();
 
-        let category = AppCategory {
-            secret_files: Vec::new(),
-            name: "sample".to_string(),
-            description: None,
-            destination_root: Some(dir.join(".config/sample").display().to_string()),
-            files: vec![
-                AppFile {
-                    source_rel: PathBuf::from("config.toml"),
-                    target_rel: PathBuf::from("config.toml"),
-                    destination_root: None,
-                    description: None,
-                    display_name: None,
-                    legacy_dest_annotation: None,
-                    transforms: vec![],
-                    install_strategy: AppInstallStrategy::Copy,
-                    requires_admin: false,
-                    restart_hint: None,
-                    generator: None,
-                },
-                AppFile {
-                    source_rel: PathBuf::from("theme.toml"),
-                    target_rel: PathBuf::from("theme.toml"),
-                    destination_root: None,
-                    description: None,
-                    display_name: None,
-                    legacy_dest_annotation: None,
-                    transforms: vec![],
-                    install_strategy: AppInstallStrategy::Copy,
-                    requires_admin: false,
-                    restart_hint: None,
-                    generator: None,
-                },
-            ],
-            list_mode: AppListMode::Files,
-            post_upgrade: Vec::new(),
-            post_install: Vec::new(),
-            uses_metadata: true,
-            has_explicit_files: true,
-            artifact: None,
-            permissions: None,
-            metadata_schema_version: 2,
-            metadata_is_overlay: false,
-        };
-
         let mut service = crate::core_runtime::frontend_from_config(&config)
             .await
             .unwrap();
-        let (rows, _, _) = build_app_rows_with_lifecycle_options(&mut service, &[category], false)
+        let categories = service.runtime().app_categories(Some("sample")).unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&mut service, &categories, false)
             .await
             .unwrap();
 

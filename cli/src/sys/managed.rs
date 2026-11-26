@@ -215,31 +215,6 @@ async fn run_managed_with_result(
     .await
 }
 
-#[cfg(test)]
-async fn run_managed_for_os_with_result(
-    config: &Config,
-    os_id: &str,
-    requested: Option<&str>,
-    action: SysAction,
-    dry_run: bool,
-    output_mode: ManagedOutputMode,
-    sep: Option<&mut crate::output::SectionSeparator>,
-) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    run_managed_for_os_with_result_approved(
-        ManagedRunRequest {
-            config,
-            os_id,
-            requested,
-            action,
-            dry_run,
-            yes: true,
-            output_mode,
-        },
-        sep,
-    )
-    .await
-}
-
 async fn run_managed_for_os_with_result_approved(
     request: ManagedRunRequest<'_>,
     sep: Option<&mut crate::output::SectionSeparator>,
@@ -500,20 +475,13 @@ mod tests {
     use crate::config::Config;
     use crate::sys::run_manifest::SYS_MANIFEST_FILE;
     use crate::sys::run_manifest::SysRunManifest;
+    use crate::test_support::RecordingReporter;
     use shine_core::lifecycle::{LifecycleEffect, LifecycleStatus};
     use std::path::PathBuf;
     use tokio::fs;
 
     #[test]
     fn managed_output_distinguishes_previews_from_execution() {
-        #[derive(Default)]
-        struct RecordingReporter(Vec<PresentationEvent>);
-        impl LifecycleReporter for RecordingReporter {
-            fn emit(&mut self, event: PresentationEvent) {
-                self.0.push(event);
-            }
-        }
-
         for (action, dry_run, header, expected_row) in [
             (
                 SysAction::Remove,
@@ -577,7 +545,7 @@ mod tests {
                 };
                 finish_managed_report(core, ManagedOutputMode::Explicit, &mut observer).unwrap();
                 let lines = reporter
-                    .0
+                    .events()
                     .iter()
                     .filter_map(|event| match event {
                         PresentationEvent::Line { text, .. } => Some(text.as_str()),
@@ -630,14 +598,6 @@ mod tests {
 
     #[test]
     fn managed_result_rows_share_the_visible_labels_width() {
-        #[derive(Default)]
-        struct RecordingReporter(Vec<PresentationEvent>);
-        impl LifecycleReporter for RecordingReporter {
-            fn emit(&mut self, event: PresentationEvent) {
-                self.0.push(event);
-            }
-        }
-
         for mode in [
             ManagedOutputMode::Explicit,
             ManagedOutputMode::Upgrade { verbose: false },
@@ -679,12 +639,12 @@ mod tests {
                 &mut observer,
             )
             .unwrap();
-            assert!(reporter.0.iter().any(|event| matches!(
+            assert!(reporter.events().iter().any(|event| matches!(
                 event,
                 PresentationEvent::Line { text, .. } if text.contains(r"resource label\n")
             )));
             let prefixes = reporter
-                .0
+                .events()
                 .iter()
                 .filter_map(|event| match event {
                     PresentationEvent::Line { text, .. } => text
@@ -696,6 +656,28 @@ mod tests {
             let expected_label_width = if mode.is_explicit() { 55 } else { 30 };
             assert_eq!(prefixes, vec![expected_label_width + 5; 4]);
         }
+    }
+
+    async fn run_fixture_item(
+        config: &Config,
+        requested: Option<&str>,
+        action: SysAction,
+        dry_run: bool,
+        output_mode: ManagedOutputMode,
+    ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+        run_managed_for_os_with_result_approved(
+            ManagedRunRequest {
+                config,
+                os_id: "fakeos",
+                requested,
+                action,
+                dry_run,
+                yes: true,
+                output_mode,
+            },
+            None,
+        )
+        .await
     }
 
     async fn make_temp_dir() -> PathBuf {
@@ -761,14 +743,12 @@ target = {:?}
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        let (first_install, first_lifecycle) = run_managed_for_os_with_result(
+        let (first_install, first_lifecycle) = run_fixture_item(
             &config,
-            "fakeos",
             Some("first"),
             SysAction::Apply,
             false,
             ManagedOutputMode::Explicit,
-            None,
         )
         .await
         .unwrap();
@@ -778,14 +758,12 @@ target = {:?}
                 && outcome.status == LifecycleStatus::Changed
                 && outcome.effects.contains(&LifecycleEffect::BackupCreated)
         }));
-        let (second_install, second_lifecycle) = run_managed_for_os_with_result(
+        let (second_install, second_lifecycle) = run_fixture_item(
             &config,
-            "fakeos",
             Some("second"),
             SysAction::Apply,
             false,
             ManagedOutputMode::Explicit,
-            None,
         )
         .await
         .unwrap();
@@ -821,14 +799,12 @@ target = {:?}
             outcome.target == "sys/second" && outcome.status == LifecycleStatus::Unchanged
         }));
 
-        let (upgrade, upgrade_lifecycle) = run_managed_for_os_with_result(
+        let (upgrade, upgrade_lifecycle) = run_fixture_item(
             &config,
-            "fakeos",
             Some("first"),
             SysAction::Apply,
             false,
             ManagedOutputMode::Upgrade { verbose: false },
-            None,
         )
         .await
         .unwrap();
@@ -873,14 +849,12 @@ target = {:?}
                 .all(|outcome| { matches!(outcome.status, LifecycleStatus::Unchanged) })
         );
 
-        let (uninstall, uninstall_lifecycle) = run_managed_for_os_with_result(
+        let (uninstall, uninstall_lifecycle) = run_fixture_item(
             &config,
-            "fakeos",
             Some("first"),
             SysAction::Remove,
             false,
             ManagedOutputMode::Explicit,
-            None,
         )
         .await
         .unwrap();
@@ -1094,14 +1068,12 @@ target = {:?}
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        let (applied, applied_lifecycle) = run_managed_for_os_with_result(
+        let (applied, applied_lifecycle) = run_fixture_item(
             &config,
-            "fakeos",
             Some("managed-file-test"),
             SysAction::Apply,
             false,
             ManagedOutputMode::Explicit,
-            None,
         )
         .await
         .unwrap();
@@ -1114,14 +1086,12 @@ target = {:?}
         );
         assert_eq!(fs::read_to_string(&destination).await.unwrap(), "managed");
 
-        let (unchanged, unchanged_lifecycle) = run_managed_for_os_with_result(
+        let (unchanged, unchanged_lifecycle) = run_fixture_item(
             &config,
-            "fakeos",
             None,
             SysAction::Apply,
             false,
             ManagedOutputMode::Upgrade { verbose: false },
-            None,
         )
         .await
         .unwrap();
@@ -1130,14 +1100,12 @@ target = {:?}
         assert_eq!(unchanged_lifecycle.summary().unchanged, 1);
 
         fs::write(&destination, "user edit").await.unwrap();
-        let (preserved, preserved_lifecycle) = run_managed_for_os_with_result(
+        let (preserved, preserved_lifecycle) = run_fixture_item(
             &config,
-            "fakeos",
             Some("managed-file-test"),
             SysAction::Remove,
             false,
             ManagedOutputMode::Explicit,
-            None,
         )
         .await
         .unwrap();
@@ -1151,14 +1119,12 @@ target = {:?}
         fs::write(&destination, "managed").await.unwrap();
 
         fs::remove_dir_all(&os_dir).await.unwrap();
-        let (removed, removed_lifecycle) = run_managed_for_os_with_result(
+        let (removed, removed_lifecycle) = run_fixture_item(
             &config,
-            "fakeos",
             Some("managed-file-test"),
             SysAction::Remove,
             false,
             ManagedOutputMode::Explicit,
-            None,
         )
         .await
         .unwrap();
@@ -1212,14 +1178,12 @@ target = {:?}
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        let (report, lifecycle) = run_managed_for_os_with_result(
+        let (report, lifecycle) = run_fixture_item(
             &config,
-            "fakeos",
             Some("managed-file-test"),
             SysAction::Apply,
             true,
             ManagedOutputMode::Explicit,
-            None,
         )
         .await
         .unwrap();
@@ -1279,14 +1243,12 @@ target = {:?}
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        let error = run_managed_for_os_with_result(
+        let error = run_fixture_item(
             &config,
-            "fakeos",
             Some("managed-file-test"),
             SysAction::Apply,
             false,
             ManagedOutputMode::Explicit,
-            None,
         )
         .await
         .unwrap_err();
@@ -1326,15 +1288,6 @@ target = {:?}
 
     #[tokio::test]
     async fn verbose_upgrade_hides_current_sys_items_and_full_plan_restores_them() {
-        #[derive(Default)]
-        struct RecordingReporter(Vec<PresentationEvent>);
-
-        impl LifecycleReporter for RecordingReporter {
-            fn emit(&mut self, event: PresentationEvent) {
-                self.0.push(event);
-            }
-        }
-
         let report = || shine_core::runtime::SysManagedReport {
             items: vec![SysItemOutcome {
                 item_id: "split-dns".into(),
@@ -1347,25 +1300,7 @@ target = {:?}
             lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, false),
         };
         let mode = ManagedOutputMode::Upgrade { verbose: true };
-        let mut reporter = RecordingReporter::default();
-        let mut observer = ManagedObserver {
-            reporter: &mut reporter,
-            action: SysAction::Apply,
-            dry_run: false,
-            started: false,
-            show_item_progress: mode.show_all_outcomes(),
-        };
-        shine_core::runtime::RuntimeObserver::emit(
-            &mut observer,
-            shine_core::runtime::RuntimeEvent::Progress {
-                code: "sys_managed_item",
-                target: "Private split DNS".into(),
-            },
-        );
-        finish_managed_report(report(), mode, &mut observer).unwrap();
-        assert!(reporter.0.is_empty());
-
-        crate::presentation::with_full_upgrade_plan(true, async {
+        let capture = || {
             let mut reporter = RecordingReporter::default();
             let mut observer = ManagedObserver {
                 reporter: &mut reporter,
@@ -1382,7 +1317,13 @@ target = {:?}
                 },
             );
             finish_managed_report(report(), mode, &mut observer).unwrap();
-            assert!(reporter.0.iter().any(|event| matches!(
+            reporter
+        };
+        assert!(capture().events().is_empty());
+
+        crate::presentation::with_full_upgrade_plan(true, async {
+            let reporter = capture();
+            assert!(reporter.events().iter().any(|event| matches!(
                 event,
                 PresentationEvent::Line { text, .. } if text.contains("already installed")
             )));

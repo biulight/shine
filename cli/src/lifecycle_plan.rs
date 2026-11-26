@@ -818,6 +818,35 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    fn plan_inputs(preset: &str, state: &str) -> PlanInputsV1 {
+        PlanInputsV1 {
+            preset: digest(preset),
+            state: digest(state),
+        }
+    }
+
+    fn app_upgrade_request(target: Option<&str>) -> LifecyclePlanRequest {
+        LifecyclePlanRequest::App(AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: target.map(str::to_owned),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        })
+    }
+
+    fn shell_upgrade_request(target: Option<&str>) -> LifecyclePlanRequest {
+        LifecyclePlanRequest::Shell(ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: target.map(str::to_owned),
+            force: false,
+            purge: false,
+
+            input_versions: PlanningInputVersions::default(),
+        })
+    }
+
     fn digest(label: &str) -> shine_core::plan::SnapshotDigestV1 {
         let mut builder = SnapshotDigestV1::builder("test");
         builder.add_observation(label, b"value").unwrap();
@@ -1162,10 +1191,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         );
         let mut plan = PlanV1::new(
             PlanOperationV1::SysBootstrap,
-            PlanInputsV1 {
-                preset: digest("preset"),
-                state: digest("state"),
-            },
+            plan_inputs("preset", "state"),
             vec![
                 PlanStepV1::new("sys/rust", Some("bootstrap"), PlanActionV1::Execute),
                 PlanStepV1::new("sys/fzf", Some("bootstrap"), PlanActionV1::Update),
@@ -1492,10 +1518,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn protected_uninstall_compacts_known_notices_without_changing_review_identity() {
         let plan = PlanV1::new(
             LifecycleOperation::Uninstall,
-            PlanInputsV1 {
-                preset: digest("preset"),
-                state: digest("state"),
-            },
+            plan_inputs("preset", "state"),
             vec![
                 PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Preserve)
                     .with_diagnostic_code("app_user_modified"),
@@ -1628,10 +1651,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         };
         let plan = PlanV1::new(
             LifecycleOperation::Install,
-            PlanInputsV1 {
-                preset: digest("preset"),
-                state: digest("state"),
-            },
+            plan_inputs("preset", "state"),
             vec![
                 PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Create),
                 PlanStepV1::new("app/demo", Some("generated"), PlanActionV1::Update),
@@ -1661,10 +1681,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         use shine_core::plan::{FilesystemPurposeV1, FilesystemReviewGroupV1};
         let mut plan = PlanV1::new(
             LifecycleOperation::Install,
-            PlanInputsV1 {
-                preset: digest("preset"),
-                state: digest("state"),
-            },
+            plan_inputs("preset", "state"),
             vec![PlanStepV1::new(
                 "shell/test/mytool",
                 None::<String>,
@@ -2024,10 +2041,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn compact_upgrade_renderer_groups_scopes_and_preset_cache_steps() {
         let shell = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("shell-preset"),
-                state: digest("shell-state"),
-            },
+            plan_inputs("shell-preset", "shell-state"),
             vec![PlanStepV1::new(
                 "shell/proxy/setproxy",
                 None::<String>,
@@ -2039,10 +2053,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         );
         let app = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("app-preset"),
-                state: digest("app-state"),
-            },
+            plan_inputs("app-preset", "app-state"),
             vec![
                 PlanStepV1::new(
                     "app/starship",
@@ -2074,27 +2085,8 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
             std::iter::empty::<String>(),
         );
         let planned = vec![
-            (
-                LifecyclePlanRequest::Shell(ShellPlanRequest {
-                    operation: LifecycleOperation::Upgrade,
-                    target: None,
-                    force: false,
-                    purge: false,
-                    input_versions: PlanningInputVersions::default(),
-                }),
-                shell,
-            ),
-            (
-                LifecyclePlanRequest::App(AppPlanRequest {
-                    operation: LifecycleOperation::Upgrade,
-                    target: None,
-                    force: false,
-                    purge: false,
-                    prune_stale: false,
-                    input_versions: PlanningInputVersions::default(),
-                }),
-                app,
-            ),
+            (shell_upgrade_request(None), shell),
+            (app_upgrade_request(None), app),
         ];
 
         let rendered = render_compact_plan_lines(&planned, "present:0123456789abcdef")
@@ -2122,10 +2114,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn compact_upgrade_summarizes_cache_only_work_but_retains_warnings_and_permissions() {
         let plan = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("preset"),
-                state: digest("state"),
-            },
+            plan_inputs("preset", "state"),
             vec![
                 PlanStepV1::new("shell/proxy", Some("preset-cache"), PlanActionV1::Update)
                     .with_diagnostic_code("shell_cache_replace_transaction"),
@@ -2171,17 +2160,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
             &PermissionSetV1::default(),
             std::iter::empty::<String>(),
         );
-        let planned = vec![(
-            LifecyclePlanRequest::App(AppPlanRequest {
-                operation: LifecycleOperation::Upgrade,
-                target: None,
-                force: false,
-                purge: false,
-                prune_stale: false,
-                input_versions: PlanningInputVersions::default(),
-            }),
-            plan,
-        )];
+        let planned = vec![(app_upgrade_request(None), plan)];
         let fingerprint = planned[0].1.fingerprint().unwrap();
         let permissions = planned[0].1.permissions.required.clone();
         let compact = render_compact_plan_lines(&planned, "config")
@@ -2236,10 +2215,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         }]);
         let mut app = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("preset"),
-                state: digest("state"),
-            },
+            plan_inputs("preset", "state"),
             vec![
                 PlanStepV1::new(
                     "app/git",
@@ -2258,14 +2234,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
             target: "app/git".into(),
             permissions: required,
         });
-        let request = LifecyclePlanRequest::App(AppPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: None,
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        });
+        let request = app_upgrade_request(None);
         let fingerprint = app.fingerprint().unwrap();
         let planned = vec![(request, app)];
         let render = |planned: &[(LifecyclePlanRequest, PlanV1)]| {
@@ -2334,10 +2303,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn compact_upgrade_hides_manual_refresh_and_fully_unchanged_scopes() {
         let mut app = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("app-preset"),
-                state: digest("app-state"),
-            },
+            plan_inputs("app-preset", "app-state"),
             vec![
                 PlanStepV1::new("app/surge", Some("generated.conf"), PlanActionV1::None)
                     .with_diagnostic_code("app_manual_refresh_required"),
@@ -2350,14 +2316,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         app.author_capabilities = PermissionSetV1::new([PermissionV1::Network {
             scope: NetworkScopeV1::Any,
         }]);
-        let request = LifecyclePlanRequest::App(AppPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: None,
-            force: false,
-            purge: false,
-            prune_stale: false,
-            input_versions: PlanningInputVersions::default(),
-        });
+        let request = app_upgrade_request(None);
         let mut planned = vec![(request, app)];
 
         assert!(
@@ -2387,10 +2346,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn verbose_upgrade_expands_only_scopes_and_steps_needing_review() {
         let shell = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("shell-preset"),
-                state: digest("shell-state"),
-            },
+            plan_inputs("shell-preset", "shell-state"),
             vec![
                 PlanStepV1::new("shell/agent/ccenv", None::<String>, PlanActionV1::None),
                 PlanStepV1::new("shell/utils", Some("shared-snapshot"), PlanActionV1::Update)
@@ -2406,10 +2362,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         );
         let mut app = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("app-preset"),
-                state: digest("app-state"),
-            },
+            plan_inputs("app-preset", "app-state"),
             vec![
                 PlanStepV1::new(
                     "app/surge",
@@ -2427,10 +2380,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         }]);
         let sys = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("sys-preset"),
-                state: digest("sys-state"),
-            },
+            plan_inputs("sys-preset", "sys-state"),
             vec![PlanStepV1::new(
                 "sys/split-dns",
                 None::<String>,
@@ -2441,27 +2391,8 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
             std::iter::empty::<String>(),
         );
         let planned = vec![
-            (
-                LifecyclePlanRequest::Shell(ShellPlanRequest {
-                    operation: LifecycleOperation::Upgrade,
-                    target: None,
-                    force: false,
-                    purge: false,
-                    input_versions: PlanningInputVersions::default(),
-                }),
-                shell,
-            ),
-            (
-                LifecyclePlanRequest::App(AppPlanRequest {
-                    operation: LifecycleOperation::Upgrade,
-                    target: None,
-                    force: false,
-                    purge: false,
-                    prune_stale: false,
-                    input_versions: PlanningInputVersions::default(),
-                }),
-                app,
-            ),
+            (shell_upgrade_request(None), shell),
+            (app_upgrade_request(None), app),
             (
                 LifecyclePlanRequest::Sys(SysManagedPlanRequest {
                     operation: LifecycleOperation::Upgrade,
@@ -2504,10 +2435,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn compact_upgrade_keeps_permissions_and_unexpected_diagnostics_visible() {
         let mut plan = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("shell-preset"),
-                state: digest("shell-state"),
-            },
+            plan_inputs("shell-preset", "shell-state"),
             vec![PlanStepV1::new(
                 "shell/demo/tool",
                 None::<String>,
@@ -2520,13 +2448,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
             &PermissionSetV1::default(),
             std::iter::empty::<String>(),
         );
-        let request = LifecyclePlanRequest::Shell(ShellPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: None,
-            force: false,
-            purge: false,
-            input_versions: PlanningInputVersions::default(),
-        });
+        let request = shell_upgrade_request(None);
         let mut planned = vec![(request, plan.clone())];
         let rendered = render_compact_plan_lines(&planned, "config")
             .unwrap()
@@ -2558,10 +2480,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn compact_upgrade_separates_internal_shell_integration_from_presets() {
         let plan = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("shell-preset"),
-                state: digest("shell-state"),
-            },
+            plan_inputs("shell-preset", "shell-state"),
             vec![
                 PlanStepV1::new("shell/utils", Some("shared-snapshot"), PlanActionV1::Update),
                 PlanStepV1::new("shell/profile", Some("home:.zshrc"), PlanActionV1::Update)
@@ -2571,16 +2490,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
             &PermissionSetV1::default(),
             std::iter::empty::<String>(),
         );
-        let planned = vec![(
-            LifecyclePlanRequest::Shell(ShellPlanRequest {
-                operation: LifecycleOperation::Upgrade,
-                target: None,
-                force: false,
-                purge: false,
-                input_versions: PlanningInputVersions::default(),
-            }),
-            plan,
-        )];
+        let planned = vec![(shell_upgrade_request(None), plan)];
         let rendered = render_compact_plan_lines(&planned, "config")
             .unwrap()
             .join("\n");
@@ -2593,10 +2503,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn blocked_upgrade_error_explains_legacy_overlay_metadata_migration() {
         let plan = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("preset"),
-                state: digest("state"),
-            },
+            plan_inputs("preset", "state"),
             vec![
                 PlanStepV1::new("app/clash-verge", Some("hook:0"), PlanActionV1::Blocked)
                     .with_diagnostic_code("app_legacy_overlay_metadata"),
@@ -2605,17 +2512,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
             &PermissionSetV1::default(),
             std::iter::empty::<String>(),
         );
-        let planned = vec![(
-            LifecyclePlanRequest::App(AppPlanRequest {
-                operation: LifecycleOperation::Upgrade,
-                target: Some("clash-verge".to_string()),
-                force: false,
-                purge: false,
-                prune_stale: false,
-                input_versions: PlanningInputVersions::default(),
-            }),
-            plan,
-        )];
+        let planned = vec![(app_upgrade_request(Some("clash-verge")), plan)];
         let diagnostics =
             std::collections::BTreeSet::from(["app_legacy_overlay_metadata".to_string()]);
 
@@ -2632,10 +2529,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn blocked_app_error_explains_inspection_and_trust_enrollment() {
         let plan = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("preset"),
-                state: digest("state"),
-            },
+            plan_inputs("preset", "state"),
             vec![
                 PlanStepV1::new("app/surge", Some("hook:0"), PlanActionV1::Blocked)
                     .with_diagnostic_code("app_external_code_not_allowed"),
@@ -2644,17 +2538,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
             &PermissionSetV1::default(),
             std::iter::empty::<String>(),
         );
-        let planned = vec![(
-            LifecyclePlanRequest::App(AppPlanRequest {
-                operation: LifecycleOperation::Upgrade,
-                target: Some("surge".to_string()),
-                force: false,
-                purge: false,
-                prune_stale: false,
-                input_versions: PlanningInputVersions::default(),
-            }),
-            plan,
-        )];
+        let planned = vec![(app_upgrade_request(Some("surge")), plan)];
         let diagnostics =
             std::collections::BTreeSet::from(["app_external_code_not_allowed".to_string()]);
 
@@ -2668,10 +2552,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     fn blocked_shell_error_explains_command_scoped_inspection_and_trust_enrollment() {
         let plan = PlanV1::new(
             LifecycleOperation::Upgrade,
-            PlanInputsV1 {
-                preset: digest("preset"),
-                state: digest("state"),
-            },
+            plan_inputs("preset", "state"),
             vec![
                 PlanStepV1::new(
                     "shell/proxy/setproxy",
@@ -2684,16 +2565,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
             &PermissionSetV1::default(),
             std::iter::empty::<String>(),
         );
-        let planned = vec![(
-            LifecyclePlanRequest::Shell(ShellPlanRequest {
-                operation: LifecycleOperation::Upgrade,
-                target: Some("proxy".to_string()),
-                force: false,
-                purge: false,
-                input_versions: PlanningInputVersions::default(),
-            }),
-            plan,
-        )];
+        let planned = vec![(shell_upgrade_request(Some("proxy")), plan)];
         let diagnostics =
             std::collections::BTreeSet::from(["shell_external_code_not_allowed".to_string()]);
 

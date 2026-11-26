@@ -148,6 +148,10 @@ mod reporter {
         }
     }
     impl RecordingReporter {
+        pub(crate) fn events(&self) -> &[PresentationEvent] {
+            &self.0
+        }
+
         pub(crate) fn clear(&mut self) {
             self.0.clear();
         }
