@@ -358,19 +358,32 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test(flavor = "current_thread")]
-    async fn install_then_uninstall_roundtrip() {
-        let _admin_guard = crate::test_support::admin_category_test_lock().await;
-        let _guard = env_lock();
+    async fn temp_home_config() -> (
+        crate::test_support::TestEnvironmentGuard,
+        std::path::PathBuf,
+        Config,
+    ) {
+        let guard = env_lock();
         let dir = make_temp_dir().await;
-
-        // Point HOME at the temp dir so ~ expands there
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
-
+        // SAFETY: the caller holds the environment guard until the test finishes.
+        unsafe { std::env::set_var("HOME", &dir) };
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
+        (guard, dir, config)
+    }
+
+    async fn read_manifest(config: &Config) -> AppManifest {
+        AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn install_then_uninstall_roundtrip() {
+        let _admin_guard = crate::test_support::admin_category_test_lock().await;
+        let (_guard, dir, config) = temp_home_config().await;
 
         let install_result = handle_install_with_result(&config, Some("git"), false, false)
             .await
@@ -391,9 +404,7 @@ mod tests {
         );
 
         // At least the manifest should have entries
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest = read_manifest(&config).await;
         assert!(
             !manifest.entries.is_empty(),
             "manifest should have entries after install"
@@ -425,9 +436,7 @@ mod tests {
         let serialized = serde_json::to_string(&uninstall_result).unwrap();
         assert!(!serialized.contains(&dir.display().to_string()));
 
-        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest_after = read_manifest(&config).await;
         assert!(
             manifest_after.entries.is_empty(),
             "manifest should be empty after uninstall"
@@ -637,29 +646,18 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn install_is_idempotent() {
         let _admin_guard = crate::test_support::admin_category_test_lock().await;
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
-
-        let config = Config::new_for_test(&dir);
-        fs::create_dir_all(config.presets_dir()).await.unwrap();
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let (_guard, dir, config) = temp_home_config().await;
 
         handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
-        let manifest_first = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest_first = read_manifest(&config).await;
         let count_first = manifest_first.entries.len();
 
         handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
-        let manifest_second = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest_second = read_manifest(&config).await;
 
         assert_eq!(
             manifest_second.entries.len(),
@@ -905,9 +903,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             })
         );
 
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest = read_manifest(&config).await;
         assert!(
             manifest.entries.is_empty(),
             "docker-desktop uninstall should clear manifest entries"
@@ -917,112 +913,82 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     }
 
     #[cfg(unix)]
-    #[tokio::test(flavor = "current_thread")]
-    async fn install_places_vim_under_directory_root() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
-
-        let config = Config::new_for_test(&dir);
-        fs::create_dir_all(config.presets_dir()).await.unwrap();
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-        presets::extract_embedded_prefix("app/vim", config.presets_dir(), false)
+    async fn assert_installed_destinations(
+        category: &str,
+        source: &str,
+        bytes: &[u8],
+        destinations: &[(&str, &str)],
+    ) {
+        let (_guard, dir, config) = temp_home_config().await;
+        let prefix = format!("app/{category}");
+        presets::extract_embedded_prefix(&prefix, config.presets_dir(), false)
             .await
             .unwrap();
-
-        let installed_bytes = b"# installed vim fixture\n";
-        fs::write(config.presets_dir().join("app/vim/vimrc"), installed_bytes)
+        fs::write(config.presets_dir().join(prefix).join(source), bytes)
             .await
             .unwrap();
-
         let runtime = crate::core_runtime::from_installed_presets(&config)
             .await
             .unwrap();
-        let categories = runtime.app_categories(Some("vim")).unwrap();
-        let vim = categories.iter().find(|c| c.name == "vim").unwrap();
-        let vimrc = vim
-            .files
-            .iter()
-            .find(|f| f.source_rel == std::path::Path::new("vimrc"))
-            .unwrap();
-        assert!(
-            runtime.app_source_bytes("vim", vimrc).unwrap() == installed_bytes,
+        let categories = runtime.app_categories(Some(category)).unwrap();
+        let app = categories.iter().find(|app| app.name == category).unwrap();
+        let installed_file = |name: &str| {
+            app.files
+                .iter()
+                .find(|file| file.source_rel == std::path::Path::new(name))
+                .unwrap()
+        };
+        assert_eq!(
+            runtime
+                .app_source_bytes(category, installed_file(source))
+                .unwrap(),
+            bytes,
             "destination tests must read the installed fixture, not an embedded fallback"
         );
-        let destination = runtime.app_destination(vim, vimrc).unwrap();
-        assert_eq!(destination, dir.join(".vim").join("vimrc"));
-
+        for &(name, expected) in destinations {
+            assert_eq!(
+                runtime.app_destination(app, installed_file(name)).unwrap(),
+                dir.join(expected),
+                "{category}/{name}"
+            );
+        }
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn install_places_vim_under_directory_root() {
+        assert_installed_destinations(
+            "vim",
+            "vimrc",
+            b"# installed vim fixture\n",
+            &[("vimrc", ".vim/vimrc")],
+        )
+        .await;
     }
 
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_places_ghostty_config_under_config_root() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
-
-        let config = Config::new_for_test(&dir);
-        fs::create_dir_all(config.presets_dir()).await.unwrap();
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-        presets::extract_embedded_prefix("app/ghostty", config.presets_dir(), false)
-            .await
-            .unwrap();
-
-        let installed_bytes = b"# installed ghostty fixture\n";
-        fs::write(
-            config.presets_dir().join("app/ghostty/config.ghostty"),
-            installed_bytes,
+        assert_installed_destinations(
+            "ghostty",
+            "config.ghostty",
+            b"# installed ghostty fixture\n",
+            &[
+                ("config.ghostty", ".config/ghostty/config.ghostty"),
+                (
+                    "themes/iTerm2 Solarized Light",
+                    ".config/ghostty/themes/light_iTerm2 Solarized Light",
+                ),
+            ],
         )
-        .await
-        .unwrap();
-
-        let runtime = crate::core_runtime::from_installed_presets(&config)
-            .await
-            .unwrap();
-        let categories = runtime.app_categories(Some("ghostty")).unwrap();
-        let ghostty = categories.iter().find(|c| c.name == "ghostty").unwrap();
-        let config_file = ghostty
-            .files
-            .iter()
-            .find(|f| f.source_rel == std::path::Path::new("config.ghostty"))
-            .unwrap();
-        assert!(
-            runtime.app_source_bytes("ghostty", config_file).unwrap() == installed_bytes,
-            "destination tests must read the installed fixture, not an embedded fallback"
-        );
-        let destination = runtime.app_destination(ghostty, config_file).unwrap();
-        assert_eq!(
-            destination,
-            dir.join(".config/ghostty").join("config.ghostty")
-        );
-
-        let light_theme = ghostty
-            .files
-            .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/iTerm2 Solarized Light"))
-            .unwrap();
-        let light_destination = runtime.app_destination(ghostty, light_theme).unwrap();
-        assert_eq!(
-            light_destination,
-            dir.join(".config/ghostty")
-                .join("themes/light_iTerm2 Solarized Light")
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
+        .await;
     }
 
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_renders_ghostty_light_and_dark_background_images() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
-
-        let mut config = Config::new_for_test(&dir);
+        let (_guard, dir, mut config) = temp_home_config().await;
         config.env.insert(
             "GHOSTTY_BG_LIGHT".into(),
             "/tmp/shine-light-wallpaper.png".into(),
@@ -1031,8 +997,6 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             "GHOSTTY_BG_DARK".into(),
             "/tmp/shine-dark-wallpaper.png".into(),
         );
-        fs::create_dir_all(config.presets_dir()).await.unwrap();
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         handle_install_approved(&config, Some("ghostty"), false, false, true)
             .await

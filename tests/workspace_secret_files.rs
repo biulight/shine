@@ -213,6 +213,48 @@ impl Fixture {
     fn release_export(&self) {
         fs::write(self.root.join("export-release"), "go").unwrap();
     }
+    fn sealed() -> Self {
+        let fixture = Self::new();
+        fixture.prepare();
+        fixture
+    }
+
+    #[track_caller]
+    fn assert_exported_files(&self) {
+        assert_eq!(
+            fs::read(self.root.join(".signing/key")).unwrap(),
+            [0, 255, 10, 13, 128]
+        );
+        assert!(
+            fs::read(self.root.join("other/password"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[track_caller]
+    fn assert_plaintext_dirs_absent(&self) {
+        for name in [".signing", "other"] {
+            assert!(!self.root.join(name).exists(), "{name} should be absent");
+        }
+    }
+
+    fn configure_phone_identity(&self) -> PathBuf {
+        let identity = self.root.join("identity.txt");
+        fs::write(&identity, "AGE-PLUGIN-PHONE-1EXAMPLE\n").unwrap();
+        let mut config: toml::Table = toml::from_str("schema_version=2").unwrap();
+        config.insert(
+            "age_identity".into(),
+            identity.to_string_lossy().as_ref().into(),
+        );
+        fs::write(
+            self.root.join("state/config.toml"),
+            toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        identity
+    }
+
     fn prepare(&self) {
         good(self.seal(&["--remove-plaintext"]));
         fs::remove_dir(self.root.join(".signing")).unwrap();
@@ -240,8 +282,7 @@ fn error(output: Output, expected: &str) {
 #[test]
 fn file_groups_clean_unreadable_owned_plaintext_before_propagating_child_status() {
     for code in [0, 42] {
-        let f = Fixture::new();
-        f.prepare();
+        let f = Fixture::sealed();
         let output = f
             .run("unreadable")
             .env("PROBE_EXIT", code.to_string())
@@ -254,13 +295,11 @@ fn file_groups_clean_unreadable_owned_plaintext_before_propagating_child_status(
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(!f.root.join(".signing/key").exists());
-        assert!(!f.root.join(".signing").exists());
-        assert!(!f.root.join("other").exists());
+        f.assert_plaintext_dirs_absent();
     }
     // Permission-independent inspection must still preserve a substituted file.
     use std::os::unix::fs::PermissionsExt;
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     error(
         f.run("replace-unreadable").output().unwrap(),
         "plaintext target was replaced",
@@ -273,20 +312,8 @@ fn file_groups_clean_unreadable_owned_plaintext_before_propagating_child_status(
 #[test]
 fn file_groups_age_keeps_phone_authorization_interactive_and_stdout_binary() {
     use base64::Engine;
-    let f = Fixture::new();
-    f.prepare();
-    let identity = f.root.join("identity.txt");
-    fs::write(&identity, "AGE-PLUGIN-PHONE-1EXAMPLE\n").unwrap();
-    let mut config: toml::Table = toml::from_str("schema_version=2").unwrap();
-    config.insert(
-        "age_identity".into(),
-        identity.to_string_lossy().as_ref().into(),
-    );
-    fs::write(
-        f.root.join("state/config.toml"),
-        toml::to_string(&config).unwrap(),
-    )
-    .unwrap();
+    let f = Fixture::sealed();
+    let identity = f.configure_phone_identity();
     let cipher = format!(
         "age:{}",
         base64::engine::general_purpose::STANDARD.encode(b"age-encryption.org/v1\nfixture")
@@ -340,8 +367,7 @@ fn file_groups_seal_and_run_binary_empty_multiple_modes_and_exit_codes() {
     assert!(f.root.join(".secrets/prod/key.enc").exists());
     f.prepare();
     good(f.run("check").output().unwrap());
-    assert!(!f.root.join(".signing").exists());
-    assert!(!f.root.join("other").exists());
+    f.assert_plaintext_dirs_absent();
     let out = f.run("check").env("PROBE_EXIT", "23").output().unwrap();
     assert_eq!(out.status.code(), Some(23));
     assert!(!f.root.join(".signing/key").exists());
@@ -629,8 +655,7 @@ fn file_groups_verification_and_decryption_failures_preserve_plaintext() {
 fn file_groups_accept_targets_removed_by_child_and_keep_exit_status() {
     for mode in ["remove", "remove-parent"] {
         for code in [0, 42] {
-            let f = Fixture::new();
-            f.prepare();
+            let f = Fixture::sealed();
             let output = f
                 .run(mode)
                 .env("PROBE_EXIT", code.to_string())
@@ -652,8 +677,7 @@ fn file_groups_accept_targets_removed_by_child_and_keep_exit_status() {
 
 #[test]
 fn file_groups_preserve_replacement_directories_during_cleanup() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     error(f.run("replace-directory").output().unwrap(), "cleanup");
     assert!(f.root.join(".signing/key").is_dir());
     assert!(!f.root.join("other").exists());
@@ -662,8 +686,7 @@ fn file_groups_preserve_replacement_directories_during_cleanup() {
 #[cfg(unix)]
 #[test]
 fn file_groups_preserve_dangling_replacement_links_during_cleanup() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     error(f.run("replace-dangling-link").output().unwrap(), "cleanup");
     assert!(
         fs::symlink_metadata(f.root.join(".signing/key"))
@@ -677,8 +700,7 @@ fn file_groups_preserve_dangling_replacement_links_during_cleanup() {
 
 #[test]
 fn file_groups_refuse_existing_targets_and_preserve_replacements() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     fs::create_dir(f.root.join(".signing")).unwrap();
     fs::write(f.root.join(".signing/key"), "existing").unwrap();
     error(f.run("check").output().unwrap(), "already exists");
@@ -860,8 +882,7 @@ fn file_groups_reject_tracked_case_and_unicode_aliases_before_decryption() {
         (".signing/k\u{e9}y", ".signing/ke\u{301}y"),
         (".signing/ke\u{301}y", ".signing/k\u{e9}y"),
     ] {
-        let f = Fixture::new();
-        f.prepare();
+        let f = Fixture::sealed();
         fixture_git(&f.root, &["init"]);
         // Keep the exact Unicode spelling in the index on macOS too.
         fixture_git(&f.root, &["config", "core.precomposeunicode", "false"]);
@@ -914,8 +935,7 @@ fn file_groups_reject_tracked_case_and_unicode_aliases_before_decryption() {
 
 #[test]
 fn file_groups_check_nested_git_targets_even_outside_a_parent_repository() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     // The signing target's parent is absent: discover from its closest existing ancestor.
     fs::create_dir(f.root.join("other")).unwrap();
     fixture_git(&f.root.join("other"), &["init"]);
@@ -950,8 +970,7 @@ fn file_groups_check_nested_git_targets_even_outside_a_parent_repository() {
 
 #[test]
 fn file_groups_stop_on_git_discovery_errors_before_decrypting() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     fixture_git(&f.root, &["init"]);
     fs::write(f.root.join(".git/config"), "[broken\n").unwrap();
     let log = f.root.join("backend-log");
@@ -1008,8 +1027,7 @@ fn file_groups_accept_only_confirmed_git_absence_at_mount_boundaries() {
         ),
         ("fatal: bad config\n".into(), "", "128", false, false),
     ] {
-        let f = Fixture::new();
-        f.prepare();
+        let f = Fixture::sealed();
         if marker {
             fs::write(f.root.join(".git"), "gitdir: missing\n").unwrap();
         }
@@ -1044,8 +1062,7 @@ fn file_groups_accept_only_confirmed_git_absence_at_mount_boundaries() {
 
 #[test]
 fn file_groups_preserve_exact_child_stdout_and_keep_preview_on_stderr() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     let output = f.run("output").output().unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, [0, 255, 10, 13, 128]);
@@ -1116,8 +1133,7 @@ fn file_groups_reject_links_and_create_private_files() {
 #[cfg(unix)]
 #[test]
 fn file_groups_serialize_conflicting_runs_and_clean_on_interrupt() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     let child = f
         .run("wait")
         .stdout(Stdio::null())
@@ -1133,8 +1149,7 @@ fn file_groups_serialize_conflicting_runs_and_clean_on_interrupt() {
     }
     let out = child.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(130));
-    assert!(!f.root.join(".signing").exists());
-    assert!(!f.root.join("other").exists());
+    f.assert_plaintext_dirs_absent();
     good(f.run("check").output().unwrap());
 }
 
@@ -1223,8 +1238,7 @@ fn file_groups_cli_rejects_conflicting_or_unscoped_flags() {
 #[test]
 fn file_groups_roll_back_partial_materialization_and_keep_failed_child_status() {
     use std::os::unix::fs::PermissionsExt;
-    let mut f = Fixture::new();
-    f.prepare();
+    let mut f = Fixture::sealed();
     fs::create_dir(f.root.join("other")).unwrap();
     fs::set_permissions(f.root.join("other"), fs::Permissions::from_mode(0o500)).unwrap();
     let output = f.run("check").output().unwrap();
@@ -1305,11 +1319,7 @@ fn file_export_persists_binary_and_empty_files_without_changing_inputs() {
         assert!(String::from_utf8_lossy(&output.stdout).contains("Exported 2 files"));
         assert!(String::from_utf8_lossy(&output.stderr).contains("remain on disk"));
         good(output);
-        assert_eq!(
-            fs::read(f.root.join(".signing/key")).unwrap(),
-            [0, 255, 10, 13, 128]
-        );
-        assert!(fs::read(f.root.join("other/password")).unwrap().is_empty());
+        f.assert_exported_files();
         assert_eq!(fs::read(source).unwrap(), cipher);
         assert_eq!(
             fs::read(f.root.join("shine.workspace.toml")).unwrap(),
@@ -1353,8 +1363,7 @@ fn file_export_persists_binary_and_empty_files_without_changing_inputs() {
 
 #[test]
 fn file_export_preview_and_preflight_never_decrypt_or_compile_env_sources() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     let workspace = f.root.join("shine.workspace.toml");
     let text = fs::read_to_string(&workspace)
         .unwrap()
@@ -1377,8 +1386,7 @@ fn file_export_preview_and_preflight_never_decrypt_or_compile_env_sources() {
 
 #[test]
 fn file_export_invalid_selection_and_existing_targets_fail_before_backend() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     let log = f.root.join("backend-log");
     error(
         f.export()
@@ -1422,8 +1430,7 @@ fn file_export_invalid_selection_and_existing_targets_fail_before_backend() {
 #[test]
 fn file_export_decrypt_failure_and_snapshot_changes_leave_no_plaintext() {
     for mutation in ["decrypt", "second-decrypt", "workspace", "ciphertext"] {
-        let f = Fixture::new();
-        f.prepare();
+        let f = Fixture::sealed();
         let mut cmd = f.export();
         let expected = match mutation {
             "decrypt" => {
@@ -1446,15 +1453,13 @@ fn file_export_decrypt_failure_and_snapshot_changes_leave_no_plaintext() {
         let output = cmd.output().unwrap();
         assert!(!String::from_utf8_lossy(&output.stderr).contains("must-not-leak-plaintext"));
         error(output, expected);
-        assert!(!f.root.join(".signing").exists());
-        assert!(!f.root.join("other").exists());
+        f.assert_plaintext_dirs_absent();
     }
 }
 
 #[test]
 fn file_export_rechecks_late_targets_and_shares_locks_across_config_scopes() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     let mut first = f.blocked_export();
     f.await_export(&mut first);
     let second_state = f.root.join("second-state");
@@ -1488,8 +1493,7 @@ fn file_export_rechecks_late_targets_and_shares_locks_across_config_scopes() {
 #[test]
 fn file_export_git_policy_follows_nested_targets_and_fails_closed() {
     for policy in ["ignored", "unignored", "tracked", "broken"] {
-        let f = Fixture::new();
-        f.prepare();
+        let f = Fixture::sealed();
         fixture_git(&f.root, &["init"]);
         fs::write(f.root.join(".gitignore"), ".signing/\nother/\n").unwrap();
         fs::create_dir(f.root.join("other")).unwrap();
@@ -1530,8 +1534,7 @@ fn file_export_git_policy_follows_nested_targets_and_fails_closed() {
 #[test]
 fn file_export_uses_private_permissions_and_rejects_links() {
     use std::os::unix::fs::{PermissionsExt, symlink};
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     symlink("missing", f.root.join("other")).unwrap();
     error(f.export().output().unwrap(), "linked file-group path");
     fs::remove_file(f.root.join("other")).unwrap();
@@ -1561,8 +1564,7 @@ fn file_export_uses_private_permissions_and_rejects_links() {
 #[cfg(unix)]
 #[test]
 fn file_export_interrupt_during_authorization_releases_locks() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     let mut child = f.blocked_export();
     f.await_export(&mut child);
     unsafe {
@@ -1572,28 +1574,15 @@ fn file_export_interrupt_during_authorization_releases_locks() {
         child.wait_with_output().unwrap(),
         "file-group preparation interrupted",
     );
-    assert!(!f.root.join(".signing").exists());
-    assert!(!f.root.join("other").exists());
+    f.assert_plaintext_dirs_absent();
     good(f.export().output().unwrap());
 }
 
 #[test]
 fn file_export_age_preserves_binary_files_and_phone_authorization() {
     use base64::{Engine, engine::general_purpose::STANDARD as B64};
-    let f = Fixture::new();
-    f.prepare();
-    let identity = f.root.join("identity.txt");
-    fs::write(&identity, "AGE-PLUGIN-PHONE-1EXAMPLE\n").unwrap();
-    let mut config: toml::Table = toml::from_str("schema_version=2").unwrap();
-    config.insert(
-        "age_identity".into(),
-        identity.to_string_lossy().as_ref().into(),
-    );
-    fs::write(
-        f.root.join("state/config.toml"),
-        toml::to_string(&config).unwrap(),
-    )
-    .unwrap();
+    let f = Fixture::sealed();
+    f.configure_phone_identity();
     for (name, payload) in [("key", &b"fixture"[..]), ("password", &b"empty"[..])] {
         let bytes = [b"age-encryption.org/v1\n".as_slice(), payload].concat();
         let cipher = format!("age:{}", B64.encode(bytes));
@@ -1607,11 +1596,7 @@ fn file_export_age_preserves_binary_files_and_phone_authorization() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("phone-authorization-prompt"));
     assert!(!output.stdout.contains(&255));
     good(output);
-    assert_eq!(
-        fs::read(f.root.join(".signing/key")).unwrap(),
-        [0, 255, 10, 13, 128]
-    );
-    assert!(fs::read(f.root.join("other/password")).unwrap().is_empty());
+    f.assert_exported_files();
 }
 
 // Frozen hybrid wire fixture: the stand-in GPG wrapper transports the data key;
@@ -1655,8 +1640,7 @@ fn hybrid_file_fixture(plaintext: &[u8]) -> String {
 #[test]
 fn file_export_hybrid_honors_local_preference_and_never_falls_back_on_failure() {
     for fail in [false, true] {
-        let f = Fixture::new();
-        f.prepare();
+        let f = Fixture::sealed();
         fs::write(
             f.root.join("state/config.toml"),
             "schema_version=2\nhybrid_decrypt_backend='age'\n",
@@ -1682,23 +1666,17 @@ fn file_export_hybrid_honors_local_preference_and_never_falls_back_on_failure() 
         assert!(!String::from_utf8_lossy(&output.stderr).contains("must-not-leak-plaintext"));
         if fail {
             error(output, "file decryption failed");
-            assert!(!f.root.join(".signing").exists());
-            assert!(!f.root.join("other").exists());
+            f.assert_plaintext_dirs_absent();
         } else {
             good(output);
-            assert_eq!(
-                fs::read(f.root.join(".signing/key")).unwrap(),
-                [0, 255, 10, 13, 128]
-            );
-            assert!(fs::read(f.root.join("other/password")).unwrap().is_empty());
+            f.assert_exported_files();
         }
     }
 }
 
 #[test]
 fn file_export_concurrent_invocations_have_one_successful_owner() {
-    let f = Fixture::new();
-    f.prepare();
+    let f = Fixture::sealed();
     let mut first = f.blocked_export();
     f.await_export(&mut first);
     error(
@@ -1711,9 +1689,5 @@ fn file_export_concurrent_invocations_have_one_successful_owner() {
         f.export().output().unwrap(),
         "plaintext target already exists",
     );
-    assert_eq!(
-        fs::read(f.root.join(".signing/key")).unwrap(),
-        [0, 255, 10, 13, 128]
-    );
-    assert!(fs::read(f.root.join("other/password")).unwrap().is_empty());
+    f.assert_exported_files();
 }

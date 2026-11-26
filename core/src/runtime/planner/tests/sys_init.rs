@@ -19,13 +19,34 @@ fn snapshot(kind: PresetSourceKind, pre: Option<&str>, post: Option<&str>) -> Pr
     }
     builder.build()
 }
-async fn apply(runtime: &CoreRuntime<InMemoryHost>) -> crate::runtime::SysItemOutcome {
+fn enabled_tool_manifest(os_id: &str, detail: &str) -> Vec<u8> {
+    toml::to_string(&SysRunManifest {
+        schema_version: crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
+        entries: vec![SysRunEntry {
+            os_id: os_id.into(),
+            item_id: "tool".into(),
+            label: "Tool".into(),
+            status: crate::runtime::SysItemStatus::Installed,
+            detail: detail.into(),
+            updated_at: "1".into(),
+            managed: false,
+            profile_enabled: true,
+            receipt: None,
+        }],
+    })
+    .unwrap()
+    .into_bytes()
+}
+
+async fn approve_init(runtime: &CoreRuntime<InMemoryHost>) -> PlanApprovalV1 {
     let plan = runtime.plan_sys_init(request()).await.unwrap();
+    PlanApprovalV1::for_reviewed_plan(&plan).unwrap()
+}
+
+async fn apply(runtime: &CoreRuntime<InMemoryHost>) -> crate::runtime::SysItemOutcome {
+    let approval = approve_init(runtime).await;
     runtime
-        .init_sys_profile_approved(
-            request(),
-            &PlanApprovalV1::for_reviewed_plan(&plan).unwrap(),
-        )
+        .init_sys_profile_approved(request(), &approval)
         .await
         .unwrap()
 }
@@ -156,8 +177,7 @@ async fn sys_init_rejects_changes_to_every_profile_input_and_manifest_before_wri
             Some("export PRE=1\n"),
             None,
         ));
-        let plan = runtime.plan_sys_init(request()).await.unwrap();
-        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let approval = approve_init(&runtime).await;
         runtime.host().put_file(
             runtime.context().home_dir.join(relative),
             b"changed".to_vec(),
@@ -272,22 +292,7 @@ fragment = 'profile/tool.sh'
         .overlay_file("sys/ubuntu/profile/tool.sh", b"export TOOL=1\n".to_vec())
         .build();
     let mut runtime = runtime(preset);
-    let manifest = toml::to_string(&SysRunManifest {
-        schema_version: crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
-        entries: vec![SysRunEntry {
-            os_id: "ubuntu".into(),
-            item_id: "tool".into(),
-            label: "Tool".into(),
-            status: crate::runtime::SysItemStatus::Installed,
-            detail: "original".into(),
-            updated_at: "1".into(),
-            managed: false,
-            profile_enabled: true,
-            receipt: None,
-        }],
-    })
-    .unwrap()
-    .into_bytes();
+    let manifest = enabled_tool_manifest("ubuntu", "original");
     let manifest_path = runtime.context().shine_dir.join("sys-manifest.toml");
     runtime.host().put_file(&manifest_path, manifest.clone());
     assert!(
@@ -369,8 +374,7 @@ async fn sys_init_frontend_supports_one_time_base_confirmation_and_stale_source_
         context.clone(),
         snapshot(PresetSourceKind::Embedded, Some("before\n"), None),
     );
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&before.plan_sys_init(request()).await.unwrap()).unwrap();
+    let approval = approve_init(&before).await;
     let after = CoreRuntime::new(
         host.clone(),
         context,
@@ -585,23 +589,9 @@ fragment = 'profile/tool.sh'
         .file("sys/arch/profile/tool.sh", b"export TOOL=arch\n".to_vec())
         .build();
     let runtime = runtime(preset);
-    let manifest = SysRunManifest {
-        schema_version: crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
-        entries: vec![SysRunEntry {
-            os_id: "arch".into(),
-            item_id: "tool".into(),
-            label: "Tool".into(),
-            status: crate::runtime::SysItemStatus::Installed,
-            detail: String::new(),
-            updated_at: "1".into(),
-            managed: false,
-            profile_enabled: true,
-            receipt: None,
-        }],
-    };
     runtime.host().put_file(
         runtime.context().shine_dir.join("sys-manifest.toml"),
-        toml::to_string(&manifest).unwrap().into_bytes(),
+        enabled_tool_manifest("arch", ""),
     );
     // The legacy platform-only query assumes Ubuntu; an explicit operation must not use it.
     assert!(
@@ -670,8 +660,7 @@ async fn sys_init_interrupted_publication_retries_without_software_or_recovery_s
             Some("pre\n"),
             Some("post\n"),
         ));
-        let plan = runtime.plan_sys_init(request()).await.unwrap();
-        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let approval = approve_init(&runtime).await;
         runtime
             .host()
             .fail_write_after(runtime.context().home_dir.join(fail_path), 0);
@@ -823,30 +812,13 @@ fragment = 'profile/tool.sh'
         .file("sys/ubuntu/profile/tool.sh", vec![0xff])
         .build();
     let runtime = runtime(preset);
-    let manifest = SysRunManifest {
-        schema_version: crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
-        entries: vec![SysRunEntry {
-            os_id: "ubuntu".into(),
-            item_id: "tool".into(),
-            label: "Tool".into(),
-            status: crate::runtime::SysItemStatus::Installed,
-            detail: String::new(),
-            updated_at: "1".into(),
-            managed: false,
-            profile_enabled: true,
-            receipt: None,
-        }],
-    };
     runtime.host().put_file(
         runtime.context().shine_dir.join("sys-manifest.toml"),
-        toml::to_string(&manifest).unwrap().into_bytes(),
+        enabled_tool_manifest("ubuntu", ""),
     );
-    let plan = runtime.plan_sys_init(request()).await.unwrap();
+    let approval = approve_init(&runtime).await;
     let error = runtime
-        .init_sys_profile_approved(
-            request(),
-            &PlanApprovalV1::for_reviewed_plan(&plan).unwrap(),
-        )
+        .init_sys_profile_approved(request(), &approval)
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("not UTF-8"));
@@ -934,12 +906,9 @@ async fn sys_init_conflict_artifacts_do_not_follow_links_or_change_target_permis
         .symlink(&victim, &dir.join("ubuntu-sys.pre.new.sh"))
         .await
         .unwrap();
-    let plan = runtime.plan_sys_init(request()).await.unwrap();
+    let approval = approve_init(&runtime).await;
     let error = runtime
-        .init_sys_profile_approved(
-            request(),
-            &PlanApprovalV1::for_reviewed_plan(&plan).unwrap(),
-        )
+        .init_sys_profile_approved(request(), &approval)
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("not a regular file"));
