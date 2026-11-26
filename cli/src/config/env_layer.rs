@@ -9,8 +9,6 @@ use tokio::fs;
 
 #[cfg(test)]
 use super::EnvOverrideKind;
-#[cfg(test)]
-use super::discovery::ProjectConfig;
 use super::{Config, PROJECT_ENV_FILE};
 
 const REMOVED_GLOBAL_ENV_FILE: &str = "env.toml";
@@ -205,18 +203,25 @@ async fn read_env_file(path: &Path) -> Result<Option<EnvOverrides>> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::{config_in, make_temp_dir, restore_current_dir};
+    use super::super::test_util::{config_in, make_temp_dir};
     use super::*;
     use crate::config::PROJECT_CONFIG_FILE;
+    use crate::test_support::env_lock;
+
+    async fn write_env_file(dir: &Path, contents: &str) {
+        fs::create_dir_all(dir).await.unwrap();
+        fs::write(dir.join("shine.env.toml"), contents)
+            .await
+            .unwrap();
+    }
 
     impl Config {
-        async fn resolve_with_project(&mut self, project: &ProjectConfig) -> Result<()> {
+        async fn resolve_with_project(&mut self, project_dir: &Path) -> Result<()> {
             self.is_project_config = true;
-            self.config_path = project.path.clone();
+            self.config_path = project_dir.join(PROJECT_CONFIG_FILE);
             self.resolve_env_layers().await
         }
     }
-    use crate::test_support::env_lock;
 
     #[test]
     fn detailed_env_values_are_normalized_with_descriptions() {
@@ -227,8 +232,8 @@ mod tests {
         "#;
         let config: Config = toml::from_str(contents).unwrap();
 
-        assert_eq!(config.env.get("PLAIN").map(String::as_str), Some("value"));
-        assert_eq!(config.env.get("TOKEN").map(String::as_str), Some("secret"));
+        assert_eq!(config.env["PLAIN"], "value");
+        assert_eq!(config.env["TOKEN"], "secret");
         assert_eq!(
             parse_env_descriptions(contents)
                 .get("TOKEN")
@@ -264,9 +269,6 @@ mod tests {
             "rejection must happen before config initialization"
         );
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -281,12 +283,11 @@ mod tests {
         )
         .await
         .unwrap();
-        fs::write(
-            dir.join("shine.env.toml"),
+        write_env_file(
+            &dir,
             "HTTP_PROXY_PORT = \"2222\"\nSIDECAR_ONLY = \"sidecar\"\n",
         )
-        .await
-        .unwrap();
+        .await;
 
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
@@ -297,35 +298,22 @@ mod tests {
 
         let config = Config::load_or_init().await.unwrap();
 
-        assert_eq!(
-            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
-            Some("2222")
-        );
-        assert_eq!(
-            config.env.get("CONFIG_ONLY").map(String::as_str),
-            Some("config")
-        );
-        assert_eq!(
-            config.env.get("SIDECAR_ONLY").map(String::as_str),
-            Some("sidecar")
-        );
+        assert_eq!(config.env["HTTP_PROXY_PORT"], "2222");
+        assert_eq!(config.env["CONFIG_ONLY"], "config");
+        assert_eq!(config.env["SIDECAR_ONLY"], "sidecar");
         let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
         assert!(
             !content.contains("SIDECAR_ONLY"),
             "global shine.env.toml overrides should not be written into config.toml"
         );
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn project_shine_env_overrides_global_shine_env() {
-        let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
+        let guard = env_lock();
         let project_dir = make_temp_dir().await;
         let child_dir = project_dir.join("subdir");
         fs::create_dir_all(&child_dir).await.unwrap();
@@ -336,18 +324,16 @@ mod tests {
         )
         .await
         .unwrap();
-        fs::write(
-            state_dir.join("shine.env.toml"),
+        write_env_file(
+            &state_dir,
             "HTTP_PROXY_PORT = \"2222\"\nGLOBAL_ONLY = \"global\"\n",
         )
-        .await
-        .unwrap();
-        fs::write(
-            project_dir.join("shine.env.toml"),
+        .await;
+        write_env_file(
+            &project_dir,
             "HTTP_PROXY_PORT = \"3333\"\nPROJECT_ONLY = \"project\"\n",
         )
-        .await
-        .unwrap();
+        .await;
 
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
@@ -359,27 +345,12 @@ mod tests {
 
         let config = Config::load_or_init().await.unwrap();
 
-        assert_eq!(
-            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
-            Some("3333")
-        );
-        assert_eq!(
-            config.env.get("CONFIG_ONLY").map(String::as_str),
-            Some("config")
-        );
-        assert_eq!(
-            config.env.get("GLOBAL_ONLY").map(String::as_str),
-            Some("global")
-        );
-        assert_eq!(
-            config.env.get("PROJECT_ONLY").map(String::as_str),
-            Some("project")
-        );
+        assert_eq!(config.env["HTTP_PROXY_PORT"], "3333");
+        assert_eq!(config.env["CONFIG_ONLY"], "config");
+        assert_eq!(config.env["GLOBAL_ONLY"], "global");
+        assert_eq!(config.env["PROJECT_ONLY"], "project");
 
-        restore_current_dir(&original_dir);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        drop(guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
     }
@@ -401,12 +372,11 @@ mod tests {
         )
         .await
         .unwrap();
-        fs::write(
-            dir.join("shine.env.toml"),
+        write_env_file(
+            &dir,
             "HTTP_PROXY_PORT = \"3333\"\nSIDECAR_ONLY = \"sidecar\"\n",
         )
-        .await
-        .unwrap();
+        .await;
         let original_config = fs::read_to_string(dir.join("config.toml")).await.unwrap();
         let original_removed = fs::read_to_string(dir.join("env.toml")).await.unwrap();
         let original_override = fs::read_to_string(dir.join("shine.env.toml"))
@@ -437,9 +407,6 @@ mod tests {
             original_override
         );
 
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -456,13 +423,7 @@ mod tests {
         .unwrap();
         let mut config = config_in(&dir);
 
-        config
-            .resolve_with_project(&ProjectConfig {
-                path: project_dir.join(PROJECT_CONFIG_FILE),
-                root: project_dir,
-            })
-            .await
-            .unwrap();
+        config.resolve_with_project(&project_dir).await.unwrap();
 
         assert!(!config.env.contains_key("GENERIC_DOTENV_VALUE"));
         fs::remove_dir_all(&dir).await.unwrap();
@@ -473,76 +434,43 @@ mod tests {
         let dir = make_temp_dir().await;
         let overlay_dir = dir.join("overlay");
         let project_dir = dir.join("project");
-        fs::create_dir_all(&overlay_dir).await.unwrap();
-        fs::create_dir_all(&project_dir).await.unwrap();
-        fs::write(
-            dir.join(PROJECT_ENV_FILE),
+        write_env_file(
+            &dir,
             "SHARED = { value = \"global\", description = \"global description\" }\n\
              DETAILED = { value = \"global\", description = \"global detail\" }\n",
         )
-        .await
-        .unwrap();
-        fs::write(
-            overlay_dir.join(PROJECT_ENV_FILE),
+        .await;
+        write_env_file(
+            &overlay_dir,
             "SHARED = { value = \"overlay\", description = \"overlay description\" }\n\
              DETAILED = { value = \"overlay\", description = \"overlay detail\" }\n\
              OVERLAY_ONLY = { value = \"yes\", description = \"overlay only\" }\n",
         )
-        .await
-        .unwrap();
-        fs::write(
-            project_dir.join(PROJECT_ENV_FILE),
+        .await;
+        write_env_file(
+            &project_dir,
             "SHARED = \"project\"\n\
              DETAILED = { value = \"project\", description = \"project detail\" }\n",
         )
-        .await
-        .unwrap();
+        .await;
 
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(overlay_dir);
         config.resolve_env_layers().await.unwrap();
         config.resolve_env_layers().await.unwrap();
-        assert_eq!(config.env.get("SHARED").map(String::as_str), Some("global"));
-        assert_eq!(
-            config.env.get("OVERLAY_ONLY").map(String::as_str),
-            Some("yes")
-        );
-        assert_eq!(
-            config.env_descriptions.get("SHARED").map(String::as_str),
-            Some("global description")
-        );
-        assert_eq!(
-            config
-                .env_descriptions
-                .get("OVERLAY_ONLY")
-                .map(String::as_str),
-            Some("overlay only")
-        );
+        assert_eq!(config.env["SHARED"], "global");
+        assert_eq!(config.env["OVERLAY_ONLY"], "yes");
+        assert_eq!(config.env_descriptions["SHARED"], "global description");
+        assert_eq!(config.env_descriptions["OVERLAY_ONLY"], "overlay only");
 
-        config
-            .resolve_with_project(&ProjectConfig {
-                path: project_dir.join(PROJECT_CONFIG_FILE),
-                root: project_dir,
-            })
-            .await
-            .unwrap();
+        config.resolve_with_project(&project_dir).await.unwrap();
+        assert_eq!(config.env["SHARED"], "project");
         assert_eq!(
-            config.env.get("SHARED").map(String::as_str),
-            Some("project")
-        );
-        assert_eq!(
-            config.env_descriptions.get("SHARED").map(String::as_str),
-            Some("global description"),
+            config.env_descriptions["SHARED"], "global description",
             "a plain override must preserve the inherited description"
         );
-        assert_eq!(
-            config.env.get("DETAILED").map(String::as_str),
-            Some("project")
-        );
-        assert_eq!(
-            config.env_descriptions.get("DETAILED").map(String::as_str),
-            Some("project detail")
-        );
+        assert_eq!(config.env["DETAILED"], "project");
+        assert_eq!(config.env_descriptions["DETAILED"], "project detail");
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -584,22 +512,13 @@ mod tests {
     async fn overlay_env_is_loaded_when_external_presets_are_active() {
         let dir = make_temp_dir().await;
         let overlay_dir = dir.join("overlay");
-        fs::create_dir_all(&overlay_dir).await.unwrap();
-        fs::write(
-            overlay_dir.join(PROJECT_ENV_FILE),
-            "OVERLAY_ONLY = \"yes\"\n",
-        )
-        .await
-        .unwrap();
+        write_env_file(&overlay_dir, "OVERLAY_ONLY = \"yes\"\n").await;
 
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(overlay_dir);
         config.is_external_presets = true;
         config.resolve_env_layers().await.unwrap();
-        assert_eq!(
-            config.env.get("OVERLAY_ONLY").map(String::as_str),
-            Some("yes")
-        );
+        assert_eq!(config.env["OVERLAY_ONLY"], "yes");
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -607,9 +526,7 @@ mod tests {
     #[tokio::test]
     async fn global_override_records_key_source() {
         let dir = make_temp_dir().await;
-        fs::write(dir.join(PROJECT_ENV_FILE), "TOKEN = \"global\"\n")
-            .await
-            .unwrap();
+        write_env_file(&dir, "TOKEN = \"global\"\n").await;
 
         let mut config = config_in(&dir);
         config.resolve_env_layers().await.unwrap();
@@ -626,10 +543,7 @@ mod tests {
     async fn manual_overlay_override_records_unmanaged_source() {
         let dir = make_temp_dir().await;
         let overlay_dir = dir.join("overlay");
-        fs::create_dir_all(&overlay_dir).await.unwrap();
-        fs::write(overlay_dir.join(PROJECT_ENV_FILE), "TOKEN = \"overlay\"\n")
-            .await
-            .unwrap();
+        write_env_file(&overlay_dir, "TOKEN = \"overlay\"\n").await;
 
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(overlay_dir.clone());
@@ -650,10 +564,7 @@ mod tests {
     async fn managed_git_overlay_override_records_managed_source() {
         let dir = make_temp_dir().await;
         let overlay_dir = dir.join("overlay");
-        fs::create_dir_all(&overlay_dir).await.unwrap();
-        fs::write(overlay_dir.join(PROJECT_ENV_FILE), "TOKEN = \"overlay\"\n")
-            .await
-            .unwrap();
+        write_env_file(&overlay_dir, "TOKEN = \"overlay\"\n").await;
 
         let mut config = config_in(&dir);
         // No manual override configured; the managed checkout existing on disk
@@ -677,17 +588,9 @@ mod tests {
         let dir = make_temp_dir().await;
         let overlay_dir = dir.join("overlay");
         let project_dir = dir.join("project");
-        fs::create_dir_all(&overlay_dir).await.unwrap();
-        fs::create_dir_all(&project_dir).await.unwrap();
-        fs::write(dir.join(PROJECT_ENV_FILE), "SHARED = \"global\"\n")
-            .await
-            .unwrap();
-        fs::write(overlay_dir.join(PROJECT_ENV_FILE), "SHARED = \"overlay\"\n")
-            .await
-            .unwrap();
-        fs::write(project_dir.join(PROJECT_ENV_FILE), "SHARED = \"project\"\n")
-            .await
-            .unwrap();
+        write_env_file(&dir, "SHARED = \"global\"\n").await;
+        write_env_file(&overlay_dir, "SHARED = \"overlay\"\n").await;
+        write_env_file(&project_dir, "SHARED = \"project\"\n").await;
 
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(overlay_dir.clone());
@@ -699,13 +602,7 @@ mod tests {
             "global layer must overwrite the overlay layer's recorded source"
         );
 
-        config
-            .resolve_with_project(&ProjectConfig {
-                path: project_dir.join(PROJECT_CONFIG_FILE),
-                root: project_dir.clone(),
-            })
-            .await
-            .unwrap();
+        config.resolve_with_project(&project_dir).await.unwrap();
         assert_eq!(
             config.env_override_source("SHARED").unwrap().path,
             project_dir.join(PROJECT_ENV_FILE),

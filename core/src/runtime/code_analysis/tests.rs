@@ -30,6 +30,30 @@ fn request(operation: LifecycleOperation) -> AppPlanRequest {
     }
 }
 
+async fn install_plan(runtime: &CoreRuntime<InMemoryHost>) -> crate::plan::PlanV1 {
+    runtime
+        .plan_apps(request(LifecycleOperation::Install))
+        .await
+        .unwrap()
+}
+
+fn generator_inspection_options() -> AppInspectionOptions {
+    AppInspectionOptions {
+        run_generators: true,
+        ..Default::default()
+    }
+}
+
+fn parsed_files(runtime: &CoreRuntime<InMemoryHost>) -> usize {
+    runtime.analysis.0.lock().unwrap().sources.parsed_files()
+}
+
+fn only_reads(operations: &[HostOperation]) -> bool {
+    operations
+        .iter()
+        .all(|op| matches!(op, HostOperation::Read(_)))
+}
+
 #[tokio::test]
 async fn plan_prepares_once_and_locked_planning_only_consumes() {
     let runtime = runtime(
@@ -42,23 +66,17 @@ async fn plan_prepares_once_and_locked_planning_only_consumes() {
         .await
         .unwrap();
     assert!(!missing.is_ready());
-    assert_eq!(runtime.analysis.0.lock().unwrap().sources.parsed_files(), 0);
-    let prepared = runtime
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
+    assert_eq!(parsed_files(&runtime), 0);
+    let prepared = install_plan(&runtime).await;
     assert!(prepared.is_ready(), "{prepared:?}");
-    assert_eq!(runtime.analysis.0.lock().unwrap().sources.parsed_files(), 1);
+    assert_eq!(parsed_files(&runtime), 1);
     let checked = runtime
         .plan_apps_prepared(request(LifecycleOperation::Install))
         .await
         .unwrap();
     assert_eq!(prepared, checked);
-    runtime
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
-    assert_eq!(runtime.analysis.0.lock().unwrap().sources.parsed_files(), 1);
+    install_plan(&runtime).await;
+    assert_eq!(parsed_files(&runtime), 1);
     PlanApprovalV1::for_reviewed_plan(&prepared).unwrap();
 }
 
@@ -74,10 +92,7 @@ async fn shadowed_and_replaced_builtins_do_not_block_lifecycle_approval() {
         "require('node:fs', Object.assign(require('node:fs'),{readFileSync:()=>0})).readFileSync('in');",
     ] {
         let runtime = runtime(code, "", true);
-        let plan = runtime
-            .plan_apps(request(LifecycleOperation::Install))
-            .await
-            .unwrap();
+        let plan = install_plan(&runtime).await;
         assert!(plan.is_ready(), "{plan:?}");
         assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_ok());
         let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
@@ -110,10 +125,7 @@ async fn preserved_builtin_calls_still_block_lifecycle_approval() {
         "declare class Typed { [Object.assign(globalThis,{fetch:other})]: unknown } fetch('https://example.org');",
     ] {
         let runtime = runtime(code, "", true);
-        let plan = runtime
-            .plan_apps(request(LifecycleOperation::Install))
-            .await
-            .unwrap();
+        let plan = install_plan(&runtime).await;
         assert!(!plan.is_ready(), "{plan:?}");
         assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
         assert!(
@@ -152,10 +164,7 @@ async fn pattern_bindings_and_writes_preserve_lifecycle_admission() {
         ),
     ] {
         let runtime = runtime(code, "", true);
-        let plan = runtime
-            .plan_apps(request(LifecycleOperation::Install))
-            .await
-            .unwrap();
+        let plan = install_plan(&runtime).await;
         assert_eq!(plan.is_ready(), allowed, "{code}: {plan:?}");
         assert_eq!(PlanApprovalV1::for_reviewed_plan(&plan).is_ok(), allowed);
         let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
@@ -182,10 +191,7 @@ async fn definite_difference_blocks_approval_with_gaps_retained() {
         "",
         true,
     );
-    let plan = runtime
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
+    let plan = install_plan(&runtime).await;
     assert!(!plan.is_ready());
     assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
     let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
@@ -204,19 +210,16 @@ async fn definite_difference_blocks_approval_with_gaps_retained() {
 #[tokio::test]
 async fn untriggered_generators_do_not_parse_invalid_source() {
     let runtime = runtime("const broken = ;", "", false);
-    let plan = runtime
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
+    let plan = install_plan(&runtime).await;
     assert!(plan.code_analysis.is_empty());
-    assert_eq!(runtime.analysis.0.lock().unwrap().sources.parsed_files(), 0);
+    assert_eq!(parsed_files(&runtime), 0);
     let runtime = super::tests::runtime("const broken = ;", "", true);
     let plan = runtime
         .plan_apps(request(LifecycleOperation::Upgrade))
         .await
         .unwrap();
     assert!(plan.code_analysis.is_empty());
-    assert_eq!(runtime.analysis.0.lock().unwrap().sources.parsed_files(), 0);
+    assert_eq!(parsed_files(&runtime), 0);
 }
 
 #[tokio::test]
@@ -226,10 +229,7 @@ async fn declarations_and_new_source_invalidate_approved_evidence() {
         "network=[{scope='host',host='example.org'}]",
         true,
     );
-    let plan = first
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
+    let plan = install_plan(&first).await;
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let mut changed = runtime(
         "fetch('https://changed.example');",
@@ -243,22 +243,13 @@ async fn declarations_and_new_source_invalidate_approved_evidence() {
         .unwrap();
     assert!(!unchecked.is_ready());
     assert!(approval.validate(&unchecked).is_err());
-    let checked = changed
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
+    let checked = install_plan(&changed).await;
     assert!(!checked.is_ready());
-    assert_eq!(changed.analysis.0.lock().unwrap().sources.parsed_files(), 2);
+    assert_eq!(parsed_files(&changed), 2);
     let mut declaration = runtime("fetch('https://example.org');", "", true);
     declaration.analysis = first.analysis.clone();
-    assert!(
-        !declaration
-            .plan_apps(request(LifecycleOperation::Install))
-            .await
-            .unwrap()
-            .is_ready()
-    );
-    assert_eq!(first.analysis.0.lock().unwrap().sources.parsed_files(), 2);
+    assert!(!install_plan(&declaration).await.is_ready());
+    assert_eq!(parsed_files(&first), 2);
 }
 
 #[tokio::test]
@@ -582,10 +573,7 @@ async fn p1_rule_fixes_preserve_author_readiness_trust_and_approval_boundaries()
                 .file("app/demo/dep.ts", b"fetch('https://example.org');".to_vec())
                 .build(),
         );
-        let plan = live
-            .plan_apps(request(LifecycleOperation::Install))
-            .await
-            .unwrap();
+        let plan = install_plan(&live).await;
         assert_eq!(plan.is_ready(), allowed, "{code}: {plan:?}");
         assert_eq!(PlanApprovalV1::for_reviewed_plan(&plan).is_ok(), allowed);
         let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
@@ -604,12 +592,7 @@ async fn p1_rule_fixes_preserve_author_readiness_trust_and_approval_boundaries()
             "{code}: {diagnostics:?}"
         );
         assert!(live.host().process_requests().is_empty());
-        assert!(
-            live.host()
-                .operations()
-                .iter()
-                .all(|op| matches!(op, HostOperation::Read(_)))
-        );
+        assert!(only_reads(&live.host().operations()));
 
         let source = InMemoryHost::new();
         for (path, bytes) in live.presets().files() {
@@ -651,24 +634,13 @@ async fn p1_rule_fixes_preserve_author_readiness_trust_and_approval_boundaries()
             );
         }
         assert!(source.process_requests().is_empty());
-        assert!(
-            source
-                .operations()
-                .iter()
-                .all(|op| matches!(op, HostOperation::Read(_)))
-        );
+        assert!(only_reads(&source.operations()));
         if !allowed {
             // Explicit evaluation has no lifecycle Plan approval. The same
             // findings must stop it before any invocation write or process.
             let service = crate::frontend::FrontendService::new(live);
             let result = service
-                .inspect_apps_with_options(
-                    AppInspectionOptions {
-                        run_generators: true,
-                        ..Default::default()
-                    },
-                    &mut NullObserver,
-                )
+                .inspect_apps_with_options(generator_inspection_options(), &mut NullObserver)
                 .await
                 .unwrap();
             assert!(!result.report.code_analysis.is_empty(), "{code}");
@@ -680,15 +652,7 @@ async fn p1_rule_fixes_preserve_author_readiness_trust_and_approval_boundaries()
                     .all(|scope| !scope.report.allowed),
                 "{code}"
             );
-            assert!(
-                service
-                    .runtime()
-                    .host()
-                    .operations()
-                    .iter()
-                    .all(|op| matches!(op, HostOperation::Read(_))),
-                "{code}"
-            );
+            assert!(only_reads(&service.runtime().host().operations()), "{code}");
         }
     }
 }
@@ -779,13 +743,7 @@ async fn explicit_inspection_blocks_bad_file_but_evaluates_independent_file() {
             ..Default::default()
         }));
         let files = runtime
-            .inspect_apps_with_options(
-                AppInspectionOptions {
-                    run_generators: true,
-                    ..Default::default()
-                },
-                &mut NullObserver,
-            )
+            .inspect_apps_with_options(generator_inspection_options(), &mut NullObserver)
             .await
             .unwrap();
         let bad = files
@@ -829,13 +787,7 @@ async fn interrupted_generator_terminates_command_and_cleans_snapshot() {
         ..Default::default()
     }));
     let error = runtime
-        .inspect_apps_with_options(
-            AppInspectionOptions {
-                run_generators: true,
-                ..Default::default()
-            },
-            &mut NullObserver,
-        )
+        .inspect_apps_with_options(generator_inspection_options(), &mut NullObserver)
         .await
         .unwrap_err();
     assert!(error.is::<TerminalFailure>(), "{error:#}");
@@ -847,13 +799,7 @@ async fn interrupted_generator_terminates_command_and_cleans_snapshot() {
         .count();
     assert!(
         runtime
-            .inspect_apps_with_options(
-                AppInspectionOptions {
-                    run_generators: true,
-                    ..Default::default()
-                },
-                &mut NullObserver
-            )
+            .inspect_apps_with_options(generator_inspection_options(), &mut NullObserver)
             .await
             .is_err()
     );
@@ -1031,13 +977,7 @@ async fn shared_source_keeps_entry_declarations_and_environment_mapping_independ
         ..Default::default()
     }));
     let files = runtime
-        .inspect_apps_with_options(
-            AppInspectionOptions {
-                run_generators: true,
-                ..Default::default()
-            },
-            &mut NullObserver,
-        )
+        .inspect_apps_with_options(generator_inspection_options(), &mut NullObserver)
         .await
         .unwrap();
     let a = files.iter().find(|f| f.category.name == "a").unwrap();
@@ -1045,7 +985,7 @@ async fn shared_source_keeps_entry_declarations_and_environment_mapping_independ
     assert!(!a.code_analysis.as_ref().unwrap().report.allowed);
     assert!(b.code_analysis.as_ref().unwrap().report.allowed);
     assert_eq!(b.desired_content.as_deref(), Some(b"second".as_slice()));
-    assert_eq!(runtime.analysis.0.lock().unwrap().sources.parsed_files(), 1);
+    assert_eq!(parsed_files(&runtime), 1);
     let processes = runtime.host().process_requests();
     assert_eq!(processes.len(), 1);
     assert_eq!(processes[0].env.get("MAPPED").unwrap(), "second");
@@ -1059,13 +999,7 @@ async fn frontend_explicit_evaluation_cannot_bypass_core_admission() {
         true,
     ));
     let result = service
-        .inspect_apps_with_options(
-            AppInspectionOptions {
-                run_generators: true,
-                ..Default::default()
-            },
-            &mut NullObserver,
-        )
+        .inspect_apps_with_options(generator_inspection_options(), &mut NullObserver)
         .await
         .unwrap();
     assert_eq!(result.report.code_analysis.len(), 1);
@@ -1073,23 +1007,13 @@ async fn frontend_explicit_evaluation_cannot_bypass_core_admission() {
     let json = serde_json::to_string(&result.report).unwrap();
     assert!(!json.contains("SECRET_LITERAL"));
     assert!(!json.contains("private.example"));
-    assert!(
-        service
-            .runtime()
-            .host()
-            .operations()
-            .iter()
-            .all(|op| matches!(op, HostOperation::Read(_)))
-    );
+    assert!(only_reads(&service.runtime().host().operations()));
 }
 
 #[tokio::test]
 async fn changed_mapping_sensitivity_and_newly_triggered_scope_require_fresh_evidence() {
     let first = runtime("console.log(process.env.ENABLE)", "", true);
-    let plan = first
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
+    let plan = install_plan(&first).await;
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     for (from, to) in [
         (
@@ -1143,10 +1067,7 @@ async fn changed_mapping_sensitivity_and_newly_triggered_scope_require_fresh_evi
         assert!(approval.validate(&current).is_err());
     }
     let mut disabled = runtime("console.log(process.env.ENABLE)", "", false);
-    let old = disabled
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
+    let old = install_plan(&disabled).await;
     assert!(old.code_analysis.is_empty());
     let old_approval = PlanApprovalV1::for_reviewed_plan(&old).unwrap();
     disabled
@@ -1159,18 +1080,9 @@ async fn changed_mapping_sensitivity_and_newly_triggered_scope_require_fresh_evi
         .unwrap();
     assert!(!missing.is_ready());
     assert!(old_approval.validate(&missing).is_err());
-    assert_eq!(
-        disabled.analysis.0.lock().unwrap().sources.parsed_files(),
-        0
-    );
-    disabled
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
-    assert_eq!(
-        disabled.analysis.0.lock().unwrap().sources.parsed_files(),
-        1
-    );
+    assert_eq!(parsed_files(&disabled), 0);
+    install_plan(&disabled).await;
+    assert_eq!(parsed_files(&disabled), 1);
 }
 
 #[tokio::test]
@@ -1203,10 +1115,7 @@ source='config'
         )
         .build();
     let runtime = CoreRuntime::new(InMemoryHost::new(), base.context().clone(), snapshot);
-    let install = runtime
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
+    let install = install_plan(&runtime).await;
     assert!(!install.is_ready());
     assert!(
         install
@@ -1255,11 +1164,7 @@ source='config'
         assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
         assert!(plan.code_analysis.iter().any(|b| !b.scope.report.allowed));
     }
-    assert!(
-        runtime.host().operations()[before..]
-            .iter()
-            .all(|op| matches!(op, HostOperation::Read(_)))
-    );
+    assert!(only_reads(&runtime.host().operations()[before..]));
 }
 
 #[tokio::test]
@@ -1291,10 +1196,7 @@ generator={script='nested\gen.ts',runtime='bun',env=[{ source='ENABLE', sensitiv
         .file("app/demo/nested/gen.ts", b"export {};".to_vec())
         .build();
     let runtime = CoreRuntime::new(InMemoryHost::new(), base.context().clone(), snapshot);
-    let plan = runtime
-        .plan_apps(request(LifecycleOperation::Install))
-        .await
-        .unwrap();
+    let plan = install_plan(&runtime).await;
     assert!(plan.is_ready(), "{plan:?}");
     assert_eq!(
         plan.code_analysis[0].scope.script.as_deref(),
@@ -1306,20 +1208,14 @@ generator={script='nested\gen.ts',runtime='bun',env=[{ source='ENABLE', sensitiv
         ..Default::default()
     }));
     let inspected = runtime
-        .inspect_apps_with_options(
-            AppInspectionOptions {
-                run_generators: true,
-                ..Default::default()
-            },
-            &mut NullObserver,
-        )
+        .inspect_apps_with_options(generator_inspection_options(), &mut NullObserver)
         .await
         .unwrap();
     assert_eq!(
         inspected[0].desired_content.as_deref(),
         Some(b"generated".as_slice())
     );
-    assert_eq!(runtime.analysis.0.lock().unwrap().sources.parsed_files(), 1);
+    assert_eq!(parsed_files(&runtime), 1);
 }
 
 #[tokio::test]

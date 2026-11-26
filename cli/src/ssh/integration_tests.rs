@@ -68,24 +68,19 @@ fn context_in(local_dir: &Path) -> SessionContext {
     }
 }
 
-async fn start_agent(token: &str, context: SessionContext) -> PathBuf {
-    let sock_dir = TempDir::new();
-    let sock_path = sock_dir.path().join("local.sock");
+async fn send_request(
+    work: &TempDir,
+    agent_token: &str,
+    message: ClientMessage,
+) -> tokio::net::UnixStream {
+    let sock_path = work.path().join("local.sock");
     let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
-    let tasks = agent::new_connection_tasks();
     tokio::spawn(agent::LocalListener::Unix(listener).serve(
-        token.to_string(),
-        Arc::new(context),
+        agent_token.to_string(),
+        Arc::new(context_in(work.path())),
         None,
-        tasks,
+        agent::new_connection_tasks(),
     ));
-    // Keep the socket file alive for the test's lifetime; each test uses a
-    // fresh uuid-named path so leaked directories never collide.
-    std::mem::forget(sock_dir);
-    sock_path
-}
-
-async fn handshake(sock_path: &Path) -> tokio::net::UnixStream {
     let mut stream = tokio::net::UnixStream::connect(sock_path).await.unwrap();
     protocol::write_message(
         &mut stream,
@@ -97,7 +92,22 @@ async fn handshake(sock_path: &Path) -> tokio::net::UnixStream {
     .unwrap();
     let ack: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
     assert!(matches!(ack, ServerMessage::HelloAck { .. }));
+    protocol::write_message(&mut stream, &message)
+        .await
+        .unwrap();
     stream
+}
+
+fn download(token: &str) -> ClientMessage {
+    ClientMessage::Transfer {
+        token: token.to_string(),
+        direction: Direction::Download,
+        remote_spec: "/abs/file".to_string(),
+        local_spec: None,
+        force: false,
+        dry_run: false,
+        use_scp: false,
+    }
 }
 
 /// Reads frames until `Done`/`Error`, concatenating all `Log` chunks.
@@ -124,22 +134,7 @@ async fn download_relays_child_output_and_zero_exit_code() {
     let stub = write_stub(work.path(), 0);
     unsafe { std::env::set_var("SHINE_TEST_RSYNC", &stub) };
 
-    let sock = start_agent("tok", context_in(work.path())).await;
-    let mut stream = handshake(&sock).await;
-    protocol::write_message(
-        &mut stream,
-        &ClientMessage::Transfer {
-            token: "tok".to_string(),
-            direction: Direction::Download,
-            remote_spec: "/abs/file".to_string(),
-            local_spec: None,
-            force: false,
-            dry_run: false,
-            use_scp: false,
-        },
-    )
-    .await
-    .unwrap();
+    let mut stream = send_request(&work, "tok", download("tok")).await;
 
     let (logs, code) = drain(&mut stream).await;
     assert!(logs.contains("STUB-OUT"), "stdout not relayed: {logs:?}");
@@ -154,22 +149,7 @@ async fn nonzero_child_exit_code_is_reported() {
     let stub = write_stub(work.path(), 7);
     unsafe { std::env::set_var("SHINE_TEST_RSYNC", &stub) };
 
-    let sock = start_agent("tok", context_in(work.path())).await;
-    let mut stream = handshake(&sock).await;
-    protocol::write_message(
-        &mut stream,
-        &ClientMessage::Transfer {
-            token: "tok".to_string(),
-            direction: Direction::Download,
-            remote_spec: "/abs/file".to_string(),
-            local_spec: None,
-            force: false,
-            dry_run: false,
-            use_scp: false,
-        },
-    )
-    .await
-    .unwrap();
+    let mut stream = send_request(&work, "tok", download("tok")).await;
 
     let (_logs, code) = drain(&mut stream).await;
     assert_eq!(code, Some(7));
@@ -178,22 +158,7 @@ async fn nonzero_child_exit_code_is_reported() {
 #[tokio::test]
 async fn invalid_token_is_rejected_without_running_anything() {
     let work = TempDir::new();
-    let sock = start_agent("correct", context_in(work.path())).await;
-    let mut stream = handshake(&sock).await;
-    protocol::write_message(
-        &mut stream,
-        &ClientMessage::Transfer {
-            token: "wrong".to_string(),
-            direction: Direction::Download,
-            remote_spec: "/abs/file".to_string(),
-            local_spec: None,
-            force: false,
-            dry_run: false,
-            use_scp: false,
-        },
-    )
-    .await
-    .unwrap();
+    let mut stream = send_request(&work, "correct", download("wrong")).await;
 
     let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
     assert!(matches!(response, ServerMessage::Error { .. }));
@@ -211,11 +176,10 @@ async fn scp_dry_run_synthesizes_a_preview_without_spawning() {
     )
     .unwrap();
     unsafe { std::env::set_var("SHINE_TEST_SCP", &stub) };
-    let sock = start_agent("tok", context_in(work.path())).await;
-    let mut stream = handshake(&sock).await;
-    protocol::write_message(
-        &mut stream,
-        &ClientMessage::Transfer {
+    let mut stream = send_request(
+        &work,
+        "tok",
+        ClientMessage::Transfer {
             token: "tok".to_string(),
             direction: Direction::Download,
             remote_spec: "/abs/a b".to_string(),
@@ -225,8 +189,7 @@ async fn scp_dry_run_synthesizes_a_preview_without_spawning() {
             use_scp: true,
         },
     )
-    .await
-    .unwrap();
+    .await;
 
     let starting: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
     assert!(
@@ -271,11 +234,10 @@ async fn upload_glob_with_no_matches_is_an_error() {
     let stub = write_stub(work.path(), 0);
     unsafe { std::env::set_var("SHINE_TEST_RSYNC", &stub) };
 
-    let sock = start_agent("tok", context_in(work.path())).await;
-    let mut stream = handshake(&sock).await;
-    protocol::write_message(
-        &mut stream,
-        &ClientMessage::Transfer {
+    let mut stream = send_request(
+        &work,
+        "tok",
+        ClientMessage::Transfer {
             token: "tok".to_string(),
             direction: Direction::Upload,
             remote_spec: "/remote/dir".to_string(),
@@ -285,8 +247,7 @@ async fn upload_glob_with_no_matches_is_an_error() {
             use_scp: false,
         },
     )
-    .await
-    .unwrap();
+    .await;
 
     let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
     unsafe { std::env::remove_var("SHINE_TEST_RSYNC") };
@@ -296,16 +257,14 @@ async fn upload_glob_with_no_matches_is_an_error() {
 #[tokio::test]
 async fn status_reports_host_and_local_dir() {
     let work = TempDir::new();
-    let sock = start_agent("tok", context_in(work.path())).await;
-    let mut stream = handshake(&sock).await;
-    protocol::write_message(
-        &mut stream,
-        &ClientMessage::Status {
+    let mut stream = send_request(
+        &work,
+        "tok",
+        ClientMessage::Status {
             token: "tok".to_string(),
         },
     )
-    .await
-    .unwrap();
+    .await;
 
     let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
     match response {
@@ -323,16 +282,14 @@ async fn status_reports_host_and_local_dir() {
 #[tokio::test]
 async fn status_with_an_invalid_token_is_rejected() {
     let work = TempDir::new();
-    let sock = start_agent("correct", context_in(work.path())).await;
-    let mut stream = handshake(&sock).await;
-    protocol::write_message(
-        &mut stream,
-        &ClientMessage::Status {
+    let mut stream = send_request(
+        &work,
+        "correct",
+        ClientMessage::Status {
             token: "wrong".to_string(),
         },
     )
-    .await
-    .unwrap();
+    .await;
 
     let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
     assert!(matches!(response, ServerMessage::Error { .. }));

@@ -632,10 +632,6 @@ pub(super) mod test_util {
     pub(crate) async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-test").await
     }
-
-    pub(crate) fn restore_current_dir(dir: &Path) {
-        crate::test_support::restore_current_dir(dir)
-    }
 }
 
 #[cfg(test)]
