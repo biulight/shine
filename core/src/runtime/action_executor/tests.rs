@@ -248,108 +248,83 @@ fn privileged_managed_file_ir(mut ir: ActionIrV1) -> ActionIrV1 {
     ir
 }
 
-fn approved_install_plan(
+fn approved_plan(
     runtime: &CoreRuntime<InMemoryHost>,
     ir: &ActionIrV1,
+    operation: PlanOperationV1,
+    state_label: &str,
+    step: PlanStepV1,
 ) -> (PlanV1, PlanApprovalV1) {
     let required = ir
         .permission_requirements(|path| review_path(runtime.context(), path))
         .required;
     let plan = PlanV1::new(
-        PlanOperationV1::Install,
+        operation,
         PlanInputsV1 {
             preset: runtime.presets().digest_v1().unwrap(),
-            state: SnapshotDigestV1::builder("test-state").finish(),
+            state: SnapshotDigestV1::builder(state_label).finish(),
         },
-        vec![PlanStepV1::new(
-            "app/demo",
-            Some("config"),
-            PlanActionV1::Create,
-        )],
+        vec![step],
         required.clone(),
         &required,
         std::iter::empty::<String>(),
     );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     (plan, approval)
+}
+
+fn approved_install_plan(
+    runtime: &CoreRuntime<InMemoryHost>,
+    ir: &ActionIrV1,
+) -> (PlanV1, PlanApprovalV1) {
+    approved_plan(
+        runtime,
+        ir,
+        PlanOperationV1::Install,
+        "test-state",
+        PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Create),
+    )
 }
 
 fn approved_update_plan(
     runtime: &CoreRuntime<InMemoryHost>,
     ir: &ActionIrV1,
 ) -> (PlanV1, PlanApprovalV1) {
-    let required = ir
-        .permission_requirements(|path| review_path(runtime.context(), path))
-        .required;
-    let plan = PlanV1::new(
+    approved_plan(
+        runtime,
+        ir,
         PlanOperationV1::Upgrade,
-        PlanInputsV1 {
-            preset: runtime.presets().digest_v1().unwrap(),
-            state: SnapshotDigestV1::builder("test-update-state").finish(),
-        },
-        vec![PlanStepV1::new(
-            "app/demo",
-            Some("config"),
-            PlanActionV1::Update,
-        )],
-        required.clone(),
-        &required,
-        std::iter::empty::<String>(),
-    );
-    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    (plan, approval)
+        "test-update-state",
+        PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Update),
+    )
 }
 
 fn approved_remove_plan(
     runtime: &CoreRuntime<InMemoryHost>,
     ir: &ActionIrV1,
 ) -> (PlanV1, PlanApprovalV1) {
-    let required = ir
-        .permission_requirements(|path| review_path(runtime.context(), path))
-        .required;
-    let plan = PlanV1::new(
+    approved_plan(
+        runtime,
+        ir,
         PlanOperationV1::Uninstall,
-        PlanInputsV1 {
-            preset: runtime.presets().digest_v1().unwrap(),
-            state: SnapshotDigestV1::builder("test-remove-state").finish(),
-        },
-        vec![PlanStepV1::new(
-            "app/demo",
-            Some("config"),
-            PlanActionV1::Remove,
-        )],
-        required.clone(),
-        &required,
-        std::iter::empty::<String>(),
-    );
-    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    (plan, approval)
+        "test-remove-state",
+        PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Remove),
+    )
 }
 
 fn approved_forced_remove_plan(
     runtime: &CoreRuntime<InMemoryHost>,
     ir: &ActionIrV1,
 ) -> (PlanV1, PlanApprovalV1) {
-    let required = ir
-        .permission_requirements(|path| review_path(runtime.context(), path))
-        .required;
-    let plan = PlanV1::new(
+    approved_plan(
+        runtime,
+        ir,
         PlanOperationV1::Uninstall,
-        PlanInputsV1 {
-            preset: runtime.presets().digest_v1().unwrap(),
-            state: SnapshotDigestV1::builder("test-forced-remove-state").finish(),
-        },
-        vec![
-            PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Remove)
-                .with_kind(PlanStepKindV1::AppForcedRemoval)
-                .with_diagnostic_code("app_user_modification_override"),
-        ],
-        required.clone(),
-        &required,
-        std::iter::empty::<String>(),
-    );
-    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    (plan, approval)
+        "test-forced-remove-state",
+        PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Remove)
+            .with_kind(PlanStepKindV1::AppForcedRemoval)
+            .with_diagnostic_code("app_user_modification_override"),
+    )
 }
 
 #[track_caller]
@@ -370,6 +345,40 @@ async fn approve_and_recover(
         .recover_app_operation_approved(&approval)
         .await
         .unwrap()
+}
+
+fn fail_journal_write_after(runtime: &CoreRuntime<InMemoryHost>, successful_writes: usize) {
+    runtime.host().fail_write_after(
+        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+        successful_writes,
+    );
+}
+
+async fn seed_receipted_file(
+    runtime: &CoreRuntime<InMemoryHost>,
+    on_disk: &[u8],
+    receipted: &[u8],
+) -> (PathBuf, PathBuf) {
+    let destination = runtime.context().home_dir.join(".config/demo/config");
+    let rollback = managed_file_rollback_path(&destination);
+    runtime.host().put_file(&destination, on_disk.to_vec());
+    save_matching_receipt(runtime, receipted).await;
+    (destination, rollback)
+}
+
+async fn seed_receipted_file_with_backup(
+    runtime: &CoreRuntime<InMemoryHost>,
+    on_disk: &[u8],
+    receipted: &[u8],
+    original: &[u8],
+) -> (PathBuf, PathBuf, PathBuf) {
+    let destination = runtime.context().home_dir.join(".config/demo/config");
+    let backup = crate::install::backup_path(&destination);
+    let rollback = managed_file_rollback_path(&destination);
+    runtime.host().put_file(&destination, on_disk.to_vec());
+    runtime.host().put_file(&backup, original.to_vec());
+    save_matching_receipt_with_backup(runtime, receipted, Some(backup.clone())).await;
+    (destination, backup, rollback)
 }
 
 async fn save_matching_receipt(runtime: &CoreRuntime<InMemoryHost>, content: &[u8]) {
@@ -588,10 +597,7 @@ async fn interrupted_creation_rolls_back_only_after_a_fresh_recovery_plan() {
     let content = b"managed-content";
     let ir = action_ir(&runtime, content);
     let (plan, approval) = approved_install_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     assert!(
         runtime
             .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
@@ -655,10 +661,7 @@ async fn recovery_plan_blocks_after_the_created_file_is_modified() {
     let content = b"managed-content";
     let ir = action_ir(&runtime, content);
     let (plan, approval) = approved_install_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let _ = runtime
         .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
         .await;
@@ -692,10 +695,7 @@ async fn creation_recovery_blocks_a_symlink_even_when_target_bytes_match() {
     let content = b"managed-content";
     let ir = action_ir(&runtime, content);
     let (plan, approval) = approved_install_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let _ = runtime
         .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
         .await;
@@ -828,10 +828,7 @@ async fn interruption_after_managed_write_removes_it_before_restoring_backup() {
     let destination = runtime.context().home_dir.join(".config/demo/config");
     let backup = crate::install::backup_path(&destination);
     runtime.host().put_file(&destination, original.to_vec());
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let ir = backup_action_ir(&runtime, original, content);
     let (plan, approval) = approved_install_plan(&runtime, &ir);
     assert!(
@@ -857,10 +854,7 @@ async fn privileged_backup_creation_recovery_uses_privileged_paths() {
     let destination = runtime.context().home_dir.join(".config/demo/config");
     let backup = crate::install::backup_path(&destination);
     runtime.host().put_file(&destination, original.to_vec());
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let ir = privileged_managed_file_ir(backup_action_ir(&runtime, original, content));
     let (plan, approval) = approved_install_plan(&runtime, &ir);
     assert!(
@@ -897,10 +891,7 @@ async fn backup_recovery_blocks_when_either_path_changed() {
         let destination = runtime.context().home_dir.join(".config/demo/config");
         let backup = crate::install::backup_path(&destination);
         runtime.host().put_file(&destination, original.to_vec());
-        runtime.host().fail_write_after(
-            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-            1,
-        );
+        fail_journal_write_after(&runtime, 1);
         let ir = backup_action_ir(&runtime, original, content);
         let (plan, approval) = approved_install_plan(&runtime, &ir);
         let _ = runtime
@@ -938,10 +929,7 @@ async fn backup_recovery_blocks_a_symlink_even_when_target_bytes_match() {
     let backup = crate::install::backup_path(&destination);
     let symlink_target = runtime.context().home_dir.join("same-content");
     runtime.host().put_file(&destination, original.to_vec());
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let ir = backup_action_ir(&runtime, original, content);
     let (plan, approval) = approved_install_plan(&runtime, &ir);
     let _ = runtime
@@ -1022,10 +1010,7 @@ async fn future_journal_schema_fails_before_recovery_mutation() {
     let content = b"managed-content";
     let ir = action_ir(&runtime, content);
     let (plan, approval) = approved_install_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let _ = runtime
         .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
         .await;
@@ -1053,10 +1038,7 @@ async fn managed_update_retains_previous_bytes_until_receipt_commit() {
     let runtime = runtime();
     let original = b"previous-managed";
     let content = b"next-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = update_action_ir(&runtime, original, content);
     let (plan, approval) = approved_update_plan(&runtime, &ir);
 
@@ -1141,16 +1123,10 @@ async fn interrupted_managed_update_restores_previous_receipt_bytes() {
     let runtime = runtime();
     let original = b"previous-managed";
     let content = b"next-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = update_action_ir(&runtime, original, content);
     let (plan, approval) = approved_update_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     assert!(
         runtime
             .execute_app_managed_file_update_approved(&plan, &approval, ir, content)
@@ -1175,16 +1151,10 @@ async fn managed_update_recovery_blocks_changed_rollback_material() {
     let runtime = runtime();
     let original = b"previous-managed";
     let content = b"next-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = update_action_ir(&runtime, original, content);
     let (plan, approval) = approved_update_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let _ = runtime
         .execute_app_managed_file_update_approved(&plan, &approval, ir, content)
         .await;
@@ -1209,16 +1179,10 @@ async fn managed_update_recovery_blocks_a_rollback_mode_change() {
     let runtime = runtime();
     let original = b"previous-managed";
     let content = b"next-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = update_action_ir(&runtime, original, content);
     let (plan, approval) = approved_update_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let _ = runtime
         .execute_app_managed_file_update_approved(&plan, &approval, ir, content)
         .await;
@@ -1240,10 +1204,7 @@ async fn recovery_after_update_receipt_commit_cleans_only_rollback_material() {
     let runtime = runtime();
     let original = b"previous-managed";
     let content = b"next-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = update_action_ir(&runtime, original, content);
     let (plan, approval) = approved_update_plan(&runtime, &ir);
     runtime
@@ -1281,10 +1242,7 @@ async fn interrupted_json_update_restores_only_managed_keys() {
         next_source,
     );
     let (plan, approval) = approved_update_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     assert!(
         runtime
             .execute_app_managed_json_merge_approved(&plan, &approval, ir, next_source)
@@ -1320,10 +1278,7 @@ async fn interrupted_json_creation_removes_only_created_keys() {
     let destination = runtime.context().home_dir.join(".config/demo/config");
     let ir = json_merge_action_ir(&runtime, None, None, source);
     let (plan, approval) = approved_install_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let _ = runtime
         .execute_app_managed_json_merge_approved(&plan, &approval, ir, source)
         .await;
@@ -1352,10 +1307,7 @@ async fn interrupted_json_removal_restores_receipt_and_only_managed_keys() {
     save_json_receipt(&runtime, source).await;
     let ir = json_remove_action_ir(&runtime, source, current);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let _ = runtime
         .execute_app_managed_json_removal_approved(&plan, &approval, ir)
         .await;
@@ -1452,10 +1404,7 @@ async fn forced_removal_retains_modified_bytes_until_receipt_removal_commit() {
     let runtime = runtime();
     let managed = b"managed";
     let current = b"user-modified";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, current.to_vec());
-    save_matching_receipt(&runtime, managed).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, current, managed).await;
     let ir = forced_remove_action_ir(&runtime, managed, current, None);
     let (plan, approval) = approved_forced_remove_plan(&runtime, &ir);
 
@@ -1488,14 +1437,8 @@ async fn interrupted_forced_removal_restores_modified_file_and_receipt() {
     let runtime = runtime();
     let managed = b"managed";
     let current = b"user-modified";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, current.to_vec());
-    save_matching_receipt(&runtime, managed).await;
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    let (destination, rollback) = seed_receipted_file(&runtime, current, managed).await;
+    fail_journal_write_after(&runtime, 1);
     let ir = forced_remove_action_ir(&runtime, managed, current, None);
     let (plan, approval) = approved_forced_remove_plan(&runtime, &ir);
     assert!(
@@ -1529,10 +1472,7 @@ async fn forced_removal_receipt_gap_restores_modified_file_and_receipt() {
     let runtime = runtime();
     let managed = b"managed";
     let current = b"user-modified";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, current.to_vec());
-    save_matching_receipt(&runtime, managed).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, current, managed).await;
     let ir = forced_remove_action_ir(&runtime, managed, current, None);
     let (plan, approval) = approved_forced_remove_plan(&runtime, &ir);
     runtime
@@ -1564,10 +1504,7 @@ async fn committed_forced_removal_recovery_cleans_only_exact_rollback() {
     let runtime = runtime();
     let managed = b"managed";
     let current = b"user-modified";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, current.to_vec());
-    save_matching_receipt(&runtime, managed).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, current, managed).await;
     let ir = forced_remove_action_ir(&runtime, managed, current, None);
     let (plan, approval) = approved_forced_remove_plan(&runtime, &ir);
     runtime
@@ -1603,14 +1540,8 @@ async fn forced_removal_recovery_blocks_changed_modified_rollback() {
     let runtime = runtime();
     let managed = b"managed";
     let current = b"user-modified";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, current.to_vec());
-    save_matching_receipt(&runtime, managed).await;
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    let (destination, rollback) = seed_receipted_file(&runtime, current, managed).await;
+    fail_journal_write_after(&runtime, 1);
     let ir = forced_remove_action_ir(&runtime, managed, current, None);
     let (plan, approval) = approved_forced_remove_plan(&runtime, &ir);
     let _ = runtime
@@ -1640,12 +1571,8 @@ async fn forced_backup_removal_commits_restored_user_file() {
     let managed = b"managed";
     let current = b"user-modified";
     let original = b"user-original";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, current.to_vec());
-    runtime.host().put_file(&backup, original.to_vec());
-    save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+    let (destination, backup, rollback) =
+        seed_receipted_file_with_backup(&runtime, current, managed, original).await;
     let ir = forced_remove_action_ir(&runtime, managed, current, Some(original));
     let (plan, approval) = approved_forced_remove_plan(&runtime, &ir);
 
@@ -1675,16 +1602,9 @@ async fn interrupted_forced_backup_removal_restores_modified_file_and_backup() {
     let managed = b"managed";
     let current = b"user-modified";
     let original = b"user-original";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, current.to_vec());
-    runtime.host().put_file(&backup, original.to_vec());
-    save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    let (destination, backup, rollback) =
+        seed_receipted_file_with_backup(&runtime, current, managed, original).await;
+    fail_journal_write_after(&runtime, 1);
     let ir = forced_remove_action_ir(&runtime, managed, current, Some(original));
     let (plan, approval) = approved_forced_remove_plan(&runtime, &ir);
     assert!(
@@ -1714,10 +1634,7 @@ async fn interrupted_privileged_removal_requires_admin_and_uses_privileged_recov
     let rollback = managed_file_rollback_path(&destination);
     runtime.host().put_file(&destination, managed.to_vec());
     save_matching_privileged_receipt(&runtime, managed, None).await;
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let ir = privileged_removal_ir(remove_action_ir(&runtime, managed));
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
     assert!(
@@ -1839,10 +1756,7 @@ async fn privileged_removal_receipt_only_recovery_does_not_request_admin() {
 async fn managed_removal_retains_previous_bytes_until_receipt_removal_commit() {
     let runtime = runtime();
     let original = b"previous-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = remove_action_ir(&runtime, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
 
@@ -1881,16 +1795,10 @@ async fn managed_removal_retains_previous_bytes_until_receipt_removal_commit() {
 async fn interrupted_managed_removal_restores_file_while_receipt_remains() {
     let runtime = runtime();
     let original = b"previous-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = remove_action_ir(&runtime, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     assert!(
         runtime
             .execute_app_managed_file_removal_approved(&plan, &approval, ir)
@@ -1916,10 +1824,7 @@ async fn interrupted_managed_removal_restores_file_while_receipt_remains() {
 async fn removal_receipt_absence_without_marker_rolls_back_file_and_receipt() {
     let runtime = runtime();
     let original = b"previous-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = remove_action_ir(&runtime, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
     runtime
@@ -1951,10 +1856,7 @@ async fn removal_receipt_absence_without_marker_rolls_back_file_and_receipt() {
 async fn removal_receipt_commit_marker_allows_rollback_cleanup() {
     let runtime = runtime();
     let original = b"previous-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = remove_action_ir(&runtime, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
     runtime
@@ -1989,12 +1891,8 @@ async fn backup_restoring_removal_commits_only_after_receipt_removal() {
     let runtime = runtime();
     let managed = b"managed";
     let original = b"user-original";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, managed.to_vec());
-    runtime.host().put_file(&backup, original.to_vec());
-    save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+    let (destination, backup, rollback) =
+        seed_receipted_file_with_backup(&runtime, managed, managed, original).await;
     let ir = backup_remove_action_ir(&runtime, managed, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
 
@@ -2035,12 +1933,8 @@ async fn interruption_between_removal_renames_restores_managed_file() {
     let runtime = runtime();
     let managed = b"managed";
     let original = b"user-original";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, managed.to_vec());
-    runtime.host().put_file(&backup, original.to_vec());
-    save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+    let (destination, backup, rollback) =
+        seed_receipted_file_with_backup(&runtime, managed, managed, original).await;
     runtime.host().fail_rename_after(&backup, &destination, 0);
     let ir = backup_remove_action_ir(&runtime, managed, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
@@ -2071,16 +1965,9 @@ async fn interruption_after_backup_restoration_recreates_pre_uninstall_state() {
     let runtime = runtime();
     let managed = b"managed";
     let original = b"user-original";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, managed.to_vec());
-    runtime.host().put_file(&backup, original.to_vec());
-    save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    let (destination, backup, rollback) =
+        seed_receipted_file_with_backup(&runtime, managed, managed, original).await;
+    fail_journal_write_after(&runtime, 1);
     let ir = backup_remove_action_ir(&runtime, managed, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
     assert!(
@@ -2105,12 +1992,8 @@ async fn backup_removal_receipt_gap_restores_file_backup_and_receipt() {
     let runtime = runtime();
     let managed = b"managed";
     let original = b"user-original";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, managed.to_vec());
-    runtime.host().put_file(&backup, original.to_vec());
-    save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+    let (destination, backup, rollback) =
+        seed_receipted_file_with_backup(&runtime, managed, managed, original).await;
     let ir = backup_remove_action_ir(&runtime, managed, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
     runtime
@@ -2143,12 +2026,8 @@ async fn committed_backup_removal_recovery_keeps_user_file_and_cleans_rollback()
     let runtime = runtime();
     let managed = b"managed";
     let original = b"user-original";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, managed.to_vec());
-    runtime.host().put_file(&backup, original.to_vec());
-    save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+    let (destination, backup, rollback) =
+        seed_receipted_file_with_backup(&runtime, managed, managed, original).await;
     let ir = backup_remove_action_ir(&runtime, managed, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
     runtime
@@ -2189,10 +2068,7 @@ async fn backup_removal_recovery_blocks_changed_restored_user_file() {
     runtime.host().put_file(&destination, managed.to_vec());
     runtime.host().put_file(&backup, original.to_vec());
     save_matching_receipt_with_backup(&runtime, managed, Some(backup)).await;
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let ir = backup_remove_action_ir(&runtime, managed, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
     let _ = runtime
@@ -2225,10 +2101,7 @@ async fn backup_removal_recovery_blocks_a_restored_user_file_mode_change() {
     runtime.host().put_file(&destination, managed.to_vec());
     runtime.host().put_file(&backup, original.to_vec());
     save_matching_receipt_with_backup(&runtime, managed, Some(backup)).await;
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let ir = backup_remove_action_ir(&runtime, managed, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
     let _ = runtime
@@ -2254,16 +2127,10 @@ async fn backup_removal_recovery_blocks_a_restored_user_file_mode_change() {
 async fn managed_removal_recovery_blocks_changed_rollback_material() {
     let runtime = runtime();
     let original = b"previous-managed";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    save_matching_receipt(&runtime, original).await;
+    let (destination, rollback) = seed_receipted_file(&runtime, original, original).await;
     let ir = remove_action_ir(&runtime, original);
     let (plan, approval) = approved_remove_plan(&runtime, &ir);
-    runtime.host().fail_write_after(
-        runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
-        1,
-    );
+    fail_journal_write_after(&runtime, 1);
     let _ = runtime
         .execute_app_managed_file_removal_approved(&plan, &approval, ir)
         .await;

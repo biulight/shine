@@ -2,7 +2,7 @@
 use std::{
     fs,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
 };
 
 struct Fixture(PathBuf);
@@ -17,6 +17,21 @@ impl Fixture {
     fn command(&self) -> Command {
         self.configure(Command::new(env!("CARGO_BIN_EXE_shine")))
     }
+    fn run_no_color(&self, args: &[&str]) -> Output {
+        self.command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    #[track_caller]
+    fn run_expect_code(&self, args: &[&str], code: i32) -> Output {
+        let output = self.run_no_color(args);
+        assert_eq!(output.status.code(), Some(code), "{args:?}: {output:?}");
+        output
+    }
+
     fn configure(&self, mut command: Command) -> Command {
         command
             .current_dir(&self.0)
@@ -85,12 +100,7 @@ fn converged_upgrade_does_not_initialize_an_empty_configuration() {
         vec!["upgrade", "--yes"],
         vec!["upgrade", "--verbose", "--full-plan"],
     ] {
-        let output = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(&args)
-            .output()
-            .unwrap();
+        let output = fixture.run_no_color(&args);
         assert!(output.status.success(), "{args:?}: {output:?}");
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("Nothing to upgrade."),
@@ -122,21 +132,13 @@ fn converged_upgrade_is_read_only_for_all_domains_and_output_modes() {
     )
     .unwrap();
     fs::write(shell.join(script), "# Never executed\n").unwrap();
-    let run = |args: &[&str]| {
-        fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(args)
-            .output()
-            .unwrap()
-    };
     for args in [
         vec!["app", "install", "demo", "--yes"],
         vec!["trust", "grant", "shell/demo/tool", "--yes"],
         vec!["shell", "install", "demo", "--yes"],
         vec!["sys", "apply", "--yes", "--", "plain"],
     ] {
-        let output = run(&args);
+        let output = fixture.run_no_color(&args);
         assert!(output.status.success(), "{args:?}: {output:?}");
     }
     // No-op planning must not depend on the advisory version gate or recreate
@@ -172,7 +174,7 @@ fn converged_upgrade_is_read_only_for_all_domains_and_output_modes() {
                 args.push(target);
             }
             args.extend(options);
-            let output = run(&args);
+            let output = fixture.run_no_color(&args);
             assert!(output.status.success(), "{args:?}: {output:?}");
             let text = String::from_utf8_lossy(&output.stdout);
             assert!(text.contains("Nothing to upgrade."), "{args:?}: {output:?}");
@@ -188,7 +190,7 @@ fn converged_upgrade_is_read_only_for_all_domains_and_output_modes() {
     }
     fs::remove_file(state.join("config.toml")).unwrap();
     let before = upgrade_tree_state(&fixture.0);
-    let output = run(&["upgrade", "--yes"]);
+    let output = fixture.run_no_color(&["upgrade", "--yes"]);
     assert!(output.status.success(), "{output:?}");
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("Nothing to upgrade."),
@@ -214,19 +216,11 @@ fn snapshot_only_upgrade_still_requires_approval_and_preserves_trust() {
         "latest_version": env!("CARGO_PKG_VERSION"),
         "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
     })).unwrap()).unwrap();
-    let run = |args: &[&str]| {
-        fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(args)
-            .output()
-            .unwrap()
-    };
     for args in [
         vec!["trust", "grant", "shell/demo/tool", "--yes"],
         vec!["shell", "install", "demo", "--yes"],
     ] {
-        let output = run(&args);
+        let output = fixture.run_no_color(&args);
         assert!(output.status.success(), "{output:?}");
     }
     let trust = fs::read(state.join("trust.toml")).unwrap();
@@ -236,7 +230,7 @@ fn snapshot_only_upgrade_still_requires_approval_and_preserves_trust() {
         metadata.replace("'old'", "'new'"),
     )
     .unwrap();
-    let denied = run(&["upgrade", "demo"]);
+    let denied = fixture.run_no_color(&["upgrade", "demo"]);
     assert_eq!(denied.status.code(), Some(1), "{denied:?}");
     assert!(
         String::from_utf8_lossy(&denied.stderr).contains("approval requires"),
@@ -250,11 +244,11 @@ fn snapshot_only_upgrade_still_requires_approval_and_preserves_trust() {
         fs::read(state.join("shell-manifest.toml")).unwrap(),
         receipt
     );
-    let applied = run(&["upgrade", "demo", "--yes"]);
+    let applied = fixture.run_no_color(&["upgrade", "demo", "--yes"]);
     assert!(applied.status.success(), "{applied:?}");
     assert_eq!(fs::read(state.join("trust.toml")).unwrap(), trust);
     let before = upgrade_tree_state(&fixture.0);
-    let noop = run(&["upgrade", "demo", "--verbose", "--full-plan"]);
+    let noop = fixture.run_no_color(&["upgrade", "demo", "--verbose", "--full-plan"]);
     assert!(noop.status.success(), "{noop:?}");
     assert!(String::from_utf8_lossy(&noop.stdout).contains("Nothing to upgrade."));
     assert_eq!(upgrade_tree_state(&fixture.0), before);
@@ -264,7 +258,7 @@ fn snapshot_only_upgrade_still_requires_approval_and_preserves_trust() {
         .permissions();
     fs::remove_file(state.join("trust.toml")).unwrap();
     let before = upgrade_tree_state(&fixture.0);
-    let noop = run(&["upgrade", "demo"]);
+    let noop = fixture.run_no_color(&["upgrade", "demo"]);
     assert!(noop.status.success(), "{noop:?}");
     assert!(String::from_utf8_lossy(&noop.stdout).contains("Nothing to upgrade."));
     assert_eq!(upgrade_tree_state(&fixture.0), before);
@@ -279,7 +273,7 @@ fn snapshot_only_upgrade_still_requires_approval_and_preserves_trust() {
     let current_profile = fs::read(&profile).unwrap();
     fs::write(&profile, "outdated profile\n").unwrap();
     let receipt = fs::read(state.join("shell-manifest.toml")).unwrap();
-    let denied = run(&["upgrade", "demo"]);
+    let denied = fixture.run_no_color(&["upgrade", "demo"]);
     assert_eq!(denied.status.code(), Some(1), "{denied:?}");
     assert!(
         String::from_utf8_lossy(&denied.stderr).contains("approval requires"),
@@ -291,14 +285,14 @@ fn snapshot_only_upgrade_still_requires_approval_and_preserves_trust() {
         fs::read(state.join("shell-manifest.toml")).unwrap(),
         receipt
     );
-    let repaired = run(&["upgrade", "demo", "--yes"]);
+    let repaired = fixture.run_no_color(&["upgrade", "demo", "--yes"]);
     assert!(repaired.status.success(), "{repaired:?}");
     assert_eq!(fs::read(&profile).unwrap(), current_profile);
     assert_eq!(fs::read(state.join("trust.toml")).unwrap(), trust);
     // Changed code still needs a matching grant with --yes; snapshot-only
     // convergence cannot be used to bypass the external-code boundary.
     fs::write(preset.join(script), "# Changed code\n").unwrap();
-    let blocked = run(&["upgrade", "demo", "--yes"]);
+    let blocked = fixture.run_no_color(&["upgrade", "demo", "--yes"]);
     assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");
     assert!(
         String::from_utf8_lossy(&blocked.stdout).contains("shell_external_code_not_allowed"),
@@ -858,12 +852,7 @@ fn broker_lookup_errors_encode_names_without_repairing_or_creating_policies() {
             "not-executed",
         ],
     ] {
-        let out = f
-            .command()
-            .env("NO_COLOR", "1")
-            .args(&args)
-            .output()
-            .unwrap();
+        let out = f.run_no_color(&args);
         assert_eq!(out.status.code(), Some(1), "{out:?}");
         assert!(out.stdout.is_empty());
         let text = String::from_utf8(out.stderr).unwrap();
@@ -955,12 +944,7 @@ fn task_failure_diagnostics_encode_operands_without_changing_registry_or_exit() 
         );
         let original = toml::to_string(&manifest).unwrap();
         fs::write(state.join("tasks.toml"), &original).unwrap();
-        let out = f
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["task", "run", "demo"])
-            .output()
-            .unwrap();
+        let out = f.run_no_color(&["task", "run", "demo"]);
         assert_eq!(out.status.code(), Some(1), "{out:?}");
         assert!(out.stdout.is_empty());
         let stderr = String::from_utf8(out.stderr).unwrap();
@@ -1008,12 +992,7 @@ fn verbose_pull_non_repository_notice_encodes_selected_path() {
         "latest_version": env!("CARGO_PKG_VERSION"),
         "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
     })).unwrap()).unwrap();
-    let out = f
-        .command()
-        .env("NO_COLOR", "1")
-        .args(["update", "--pull", "--verbose"])
-        .output()
-        .unwrap();
+    let out = f.run_no_color(&["update", "--pull", "--verbose"]);
     assert!(out.status.success(), "{out:?}");
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(text.contains("not a Git repository:") && text.contains("Nothing to pull."));
@@ -1244,13 +1223,7 @@ fn app_lifecycle_display_preserves_raw_destinations_backups_and_exit_policy() {
     let receipt = state.join("app-manifest.toml");
     fs::write(&target, b"original\n").unwrap();
     let run = |args: &[&str], status| {
-        let output = f
-            .command()
-            .env("NO_COLOR", "1")
-            .args(args)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(status), "{args:?}: {output:?}");
+        let output = f.run_expect_code(args, status);
         for bytes in [&output.stdout, &output.stderr] {
             let text = String::from_utf8_lossy(bytes);
             assert!(!text.contains(['\r', '\t', '\u{1b}']), "{args:?}: {text:?}");
@@ -1337,24 +1310,14 @@ fn stored_task_names_encode_controls_align_columns_and_retain_lookup_identity() 
     }
     let original = toml::to_string(&manifest).unwrap();
     fs::write(state.join("tasks.toml"), &original).unwrap();
-    let list = f
-        .command()
-        .env("NO_COLOR", "1")
-        .args(["task", "list"])
-        .output()
-        .unwrap();
+    let list = f.run_no_color(&["task", "list"]);
     assert!(list.status.success(), "{list:?}");
     let text = String::from_utf8(list.stdout).unwrap();
     assert_eq!(text.lines().count(), names.len() + 1, "{text:?}");
     assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
     let mut columns = Vec::new();
     for name in names {
-        let info = f
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["task", "info", name])
-            .output()
-            .unwrap();
+        let info = f.run_no_color(&["task", "info", name]);
         assert!(info.status.success(), "{info:?}");
         let info = String::from_utf8(info.stdout).unwrap();
         assert_eq!(info.lines().count(), 2, "{info:?}");
@@ -1383,12 +1346,7 @@ fn stored_task_names_encode_controls_align_columns_and_retain_lookup_identity() 
         columns.push(console::measure_text_width(
             row.strip_suffix(command).unwrap(),
         ));
-        let run = f
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["task", "run", name])
-            .output()
-            .unwrap();
+        let run = f.run_no_color(&["task", "run", name]);
         assert!(run.status.success(), "{run:?}");
         assert!(run.stdout.starts_with(b"shine "), "{run:?}");
         let error = String::from_utf8(run.stderr).unwrap();
@@ -2156,12 +2114,7 @@ fn task_cwd_display_escapes_controls_while_child_output_and_exit_stay_raw() {
     let original = toml::to_string(&manifest).unwrap();
     fs::write(state.join("tasks.toml"), &original).unwrap();
     let encoded = "work\\nFORGED=cwd\\r\\t\\u{1b}";
-    let info = fixture
-        .command()
-        .env("NO_COLOR", "1")
-        .args(["task", "info", "probe"])
-        .output()
-        .unwrap();
+    let info = fixture.run_no_color(&["task", "info", "probe"]);
     assert_eq!(info.status.code(), Some(0), "{info:?}");
     assert!(info.stderr.is_empty(), "{info:?}");
     let text = String::from_utf8(info.stdout).unwrap();
@@ -2192,12 +2145,7 @@ fn task_cwd_display_escapes_controls_while_child_output_and_exit_stay_raw() {
         let manifest: cli::task::manifest::TaskManifest =
             toml::from_str(std::str::from_utf8(&before).unwrap()).unwrap();
         assert_eq!(manifest.get("probe").unwrap().cwd.as_ref(), Some(&cwd));
-        let run = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["task", "run", "probe"])
-            .output()
-            .unwrap();
+        let run = fixture.run_no_color(&["task", "run", "probe"]);
         assert_eq!(run.status.code(), Some(7), "{run:?}");
         let expected = format!("{}\n", cwd.display()).into_bytes();
         assert_eq!(run.stdout, expected);
@@ -3089,21 +3037,11 @@ fn app_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
         fs::write(blank.join("shine.toml"), "metadata_schema_version = 2\ndest = '~/.config/blank'\n[[files]]\nsource = 'config.txt'\n").unwrap();
         fs::write(blank.join("config.txt"), "blank").unwrap();
         fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
-        let run = |args: &[&str], code| {
-            let result = fixture
-                .command()
-                .env("NO_COLOR", "1")
-                .args(args)
-                .output()
-                .unwrap();
-            assert_eq!(result.status.code(), Some(code), "{args:?}: {result:?}");
-            result
-        };
         let canonical = format!("app/{selected}");
         let check_info = || {
-            run(&["info", "\u{a0}"], 1);
+            fixture.run_expect_code(&["info", "\u{a0}"], 1);
             for target in [selected, canonical.as_str()] {
-                let result = run(&["info", target], 0);
+                let result = fixture.run_expect_code(&["info", target], 0);
                 let text = String::from_utf8(result.stdout).unwrap();
                 assert!(text.contains("selected description"), "{text}");
                 assert!(!text.contains("base description"), "{text}");
@@ -3111,7 +3049,7 @@ fn app_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
         };
         check_info(); // Available fallback, before any receipts exist.
         for category in ["demo", selected] {
-            run(&["app", "install", category, "--yes"], 0);
+            fixture.run_expect_code(&["app", "install", category, "--yes"], 0);
         }
         check_info(); // Installed target and alias lookup.
         let base = fixture.0.join("home/.config/base/config.txt");
@@ -3127,16 +3065,16 @@ fn app_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
             .unwrap()
             .clone();
         fs::write(&source, "v2").unwrap();
-        run(&["install", selected, "--yes"], 0);
+        fixture.run_expect_code(&["install", selected, "--yes"], 0);
         assert_eq!(fs::read(&destination).unwrap(), b"v2");
         assert_eq!(fs::read(&base).unwrap(), b"v1");
         fs::write(&source, "v3").unwrap();
         let before = fs::read(&receipt).unwrap();
-        let denied = run(&["upgrade", &canonical], 1);
+        let denied = fixture.run_expect_code(&["upgrade", &canonical], 1);
         assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
         assert_eq!(fs::read(&receipt).unwrap(), before);
         assert_eq!(fs::read(&destination).unwrap(), b"v2");
-        run(&["upgrade", &canonical, "--yes"], 0);
+        fixture.run_expect_code(&["upgrade", &canonical, "--yes"], 0);
         assert_eq!(fs::read(&destination).unwrap(), b"v3");
         fs::write(&source, "v4").unwrap();
         let before = fs::read(&receipt).unwrap();
@@ -3144,7 +3082,7 @@ fn app_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
             vec!["update", canonical.as_str()],
             vec!["uninstall", canonical.as_str(), "--dry-run"],
         ] {
-            let result = run(&args, 0);
+            let result = fixture.run_expect_code(&args, 0);
             let text = String::from_utf8(result.stdout).unwrap().replace('\\', "/");
             if args[0] == "update" {
                 assert!(text.contains("update available"), "{text}");
@@ -3156,7 +3094,7 @@ fn app_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
             assert_eq!(fs::read(&destination).unwrap(), b"v3");
             assert_eq!(fs::read(&base).unwrap(), b"v1");
         }
-        run(&["uninstall", selected, "--yes"], 0);
+        fixture.run_expect_code(&["uninstall", selected, "--yes"], 0);
         assert!(!destination.exists());
         assert_eq!(fs::read(&base).unwrap(), b"v1");
         let manifest: shine_core::install::AppManifest =
@@ -3184,28 +3122,18 @@ fn shell_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
             fs::write(preset.join(script), "# fixture; never executed\n").unwrap();
         }
         fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
-        let run = |args: &[&str], code| {
-            let result = fixture
-                .command()
-                .env("NO_COLOR", "1")
-                .args(args)
-                .output()
-                .unwrap();
-            assert_eq!(result.status.code(), Some(code), "{args:?}: {result:?}");
-            result
-        };
         let canonical = format!("shell/{selected}");
         for args in [
             vec!["shell", "info", selected],
             vec!["info", canonical.as_str()],
         ] {
-            let result = run(&args, 0);
+            let result = fixture.run_expect_code(&args, 0);
             let text = String::from_utf8(result.stdout).unwrap();
             assert!(text.contains("selected-tool"), "{text}");
             assert!(!text.contains("base-tool"), "{text}");
         }
         for (category, command) in [("demo", "base-tool"), (selected, "selected-tool")] {
-            run(
+            fixture.run_expect_code(
                 &[
                     "trust",
                     "grant",
@@ -3214,7 +3142,7 @@ fn shell_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
                 ],
                 0,
             );
-            run(&["shell", "install", category, "--yes"], 0);
+            fixture.run_expect_code(&["shell", "install", category, "--yes"], 0);
         }
         let receipt = state.join("shell-manifest.toml");
         let manifest: shine_core::runtime::ShellManifest =
@@ -3242,18 +3170,18 @@ fn shell_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
         let base_bytes = fs::read(&base_launcher).unwrap();
         let selected_bytes = fs::read(&selected_launcher).unwrap();
         let before = fs::read(&receipt).unwrap();
-        let preview = run(&["shell", "uninstall", selected, "--dry-run"], 0);
+        let preview = fixture.run_expect_code(&["shell", "uninstall", selected, "--dry-run"], 0);
         let text = String::from_utf8(preview.stdout).unwrap();
         // Shell preview is an aggregate; target isolation is checked on the
         // launchers and receipts below, rather than assuming per-command rows.
         let removals = if cfg!(windows) { 2 } else { 1 };
         assert!(text.contains(&format!("{removals} would remove")), "{text}");
-        let denied = run(&["shell", "uninstall", selected], 1);
+        let denied = fixture.run_expect_code(&["shell", "uninstall", selected], 1);
         assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
         assert_eq!(fs::read(&receipt).unwrap(), before);
         assert_eq!(fs::read(&selected_launcher).unwrap(), selected_bytes);
         assert_eq!(fs::read(&base_launcher).unwrap(), base_bytes);
-        run(&["shell", "uninstall", selected, "--yes"], 0);
+        fixture.run_expect_code(&["shell", "uninstall", selected, "--yes"], 0);
         assert!(!selected_launcher.exists());
         assert_eq!(fs::read(&base_launcher).unwrap(), base_bytes);
         let manifest: shine_core::runtime::ShellManifest =
@@ -3302,13 +3230,7 @@ fn trust_list_and_revoke_escape_display_without_changing_stored_target_identity(
     }
     let before = fs::read(&path).unwrap();
     let run = |args: &[&str], code| {
-        let result = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(args)
-            .output()
-            .unwrap();
-        assert_eq!(result.status.code(), Some(code), "{result:?}");
+        let result = fixture.run_expect_code(args, code);
         if code == 0 {
             assert!(result.stderr.is_empty(), "{result:?}");
         } else {
@@ -3388,13 +3310,7 @@ fn trust_enrollment_escapes_review_and_preserves_consent_and_modes() {
     fs::write(category.join("config.txt"), "preserve").unwrap();
     let path = state.join("trust.toml");
     let run = |args: &[&str], code| {
-        let result = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(args)
-            .output()
-            .unwrap();
-        assert_eq!(result.status.code(), Some(code), "{result:?}");
+        let result = fixture.run_expect_code(args, code);
         let text = String::from_utf8(result.stdout).unwrap();
         assert!(!text.contains('\x1b'), "{text:?}");
         assert!(
@@ -3771,14 +3687,7 @@ fn preset_pull_preserves_selected_path_and_exit_contract() {
         "latest_version": env!("CARGO_PKG_VERSION"),
         "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
     })).unwrap()).unwrap();
-        let pull = || {
-            fixture
-                .command()
-                .env("NO_COLOR", "1")
-                .args(["preset", "pull"])
-                .output()
-                .unwrap()
-        };
+        let pull = || fixture.run_no_color(&["preset", "pull"]);
         fs::write(selected.join("preset.txt"), "user changes\n").unwrap();
 
         let refused = pull();
@@ -3805,12 +3714,7 @@ fn preset_pull_preserves_selected_path_and_exit_contract() {
         assert_eq!(fs::read(selected.join("preset.txt")).unwrap(), b"two\n");
         assert_eq!(fs::read(neighbor.join("preset.txt")).unwrap(), b"one\n");
         assert!(!neighbor.join(".git/FETCH_HEAD").exists());
-        let verbose = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["update", "--pull", "--verbose"])
-            .output()
-            .unwrap();
+        let verbose = fixture.run_no_color(&["update", "--pull", "--verbose"]);
         assert!(verbose.status.success(), "{verbose:?}");
         let text = String::from_utf8(verbose.stdout).unwrap();
         assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
@@ -3854,12 +3758,7 @@ fn external_overlay_completion_matches_catalog_without_loading_trust_or_writing_
         "latest_version": env!("CARGO_PKG_VERSION"),
         "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
     })).unwrap()).unwrap();
-    let catalog = fixture
-        .command()
-        .env("NO_COLOR", "1")
-        .args(["shell", "list"])
-        .output()
-        .unwrap();
+    let catalog = fixture.run_no_color(&["shell", "list"]);
     assert_eq!(catalog.status.code(), Some(0), "{catalog:?}");
     assert!(catalog.stderr.is_empty(), "{catalog:?}");
     let text = String::from_utf8(catalog.stdout).unwrap();
@@ -3923,17 +3822,9 @@ fn app_generator_notes_keep_stderr_and_hook_notes_keep_stdout() {
     )
     .unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    let run = |args: &[&str]| {
-        fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(args)
-            .output()
-            .unwrap()
-    };
     let config = state.join("config.toml");
     fs::write(&config, "schema_version = 2\n[env]\nENABLE = '1'\n").unwrap();
-    let trusted = run(&["trust", "grant", "app/demo", "--yes"]);
+    let trusted = fixture.run_no_color(&["trust", "grant", "app/demo", "--yes"]);
     assert!(trusted.status.success(), "{trusted:?}");
     let trust = fs::read(state.join("trust.toml")).unwrap();
     for (value, args) in [
@@ -3943,7 +3834,7 @@ fn app_generator_notes_keep_stderr_and_hook_notes_keep_stdout() {
     ] {
         let contents = format!("schema_version = 2\n[env]\nENABLE = '{value}'\n");
         fs::write(&config, &contents).unwrap();
-        let output = run(&args);
+        let output = fixture.run_no_color(&args);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(
             String::from_utf8_lossy(&output.stderr),
@@ -3962,7 +3853,7 @@ fn app_generator_notes_keep_stderr_and_hook_notes_keep_stdout() {
     }
     // A no-op refresh still renders the note without changing content or receipts.
     let manifest = fs::read(state.join("app-manifest.toml")).unwrap();
-    let noop = run(&["app", "refresh", "demo", "--yes"]);
+    let noop = fixture.run_no_color(&["app", "refresh", "demo", "--yes"]);
     assert_eq!(noop.status.code(), Some(0), "{noop:?}");
     assert!(String::from_utf8_lossy(&noop.stdout).contains("Already up to date"));
     assert_eq!(
@@ -3995,21 +3886,13 @@ fn shell_install_preview_labels_candidates_without_changing_conflict_policy() {
         "demo-run"
     });
     fs::write(&launcher, "foreign launcher\n").unwrap();
-    let run = |args: &[&str]| {
-        fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(args)
-            .output()
-            .unwrap()
-    };
-    let trusted = run(&["trust", "grant", "shell/demo/demo-run", "--yes"]);
+    let trusted = fixture.run_no_color(&["trust", "grant", "shell/demo/demo-run", "--yes"]);
     assert_eq!(trusted.status.code(), Some(0), "{trusted:?}");
     let trust = fs::read(state.join("trust.toml")).unwrap();
     for flags in [vec![], vec!["--replace-managed"], vec!["--verbose"]] {
         let mut args = vec!["shell", "install", "demo", "--dry-run"];
         args.extend(flags);
-        let output = run(&args);
+        let output = fixture.run_no_color(&args);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
         let text = String::from_utf8_lossy(&output.stdout);
@@ -4030,8 +3913,8 @@ fn shell_install_preview_labels_candidates_without_changing_conflict_policy() {
         ("demo", "demo"),
         ("shell/demo/demo-run", "demo/demo-run"),
     ] {
-        let direct = run(&["shell", "install", scoped, "--dry-run"]);
-        let top = run(&["install", target, "--dry-run"]);
+        let direct = fixture.run_no_color(&["shell", "install", scoped, "--dry-run"]);
+        let top = fixture.run_no_color(&["install", target, "--dry-run"]);
         assert!(
             direct.status.success() && top.status.success(),
             "{direct:?} {top:?}"
@@ -4039,7 +3922,7 @@ fn shell_install_preview_labels_candidates_without_changing_conflict_policy() {
         assert_eq!(top.stdout, direct.stdout, "{target}");
         assert_eq!(top.stderr, direct.stderr, "{target}");
     }
-    let blocked = run(&["shell", "install", "demo", "--yes"]);
+    let blocked = fixture.run_no_color(&["shell", "install", "demo", "--yes"]);
     assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");
     assert!(
         String::from_utf8_lossy(&blocked.stderr).contains("ownership conflict"),
@@ -4591,12 +4474,7 @@ async fn sys_info_encodes_recorded_detail_preserving_failed_status_and_bytes() {
     });
     let original = toml::to_string(&manifest).unwrap();
     fs::write(state.join("sys-manifest.toml"), &original).unwrap();
-    let output = fixture
-        .command()
-        .env("NO_COLOR", "1")
-        .args(["sys", "info", "--", "--help"])
-        .output()
-        .unwrap();
+    let output = fixture.run_no_color(&["sys", "info", "--", "--help"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     let text = String::from_utf8(output.stdout).unwrap();
@@ -4688,12 +4566,7 @@ fn sys_output_hints_preserve_leading_hyphen_ids_through_shell_and_clap() {
         ("--version", "apply"),
         ("plain", "apply"),
     ] {
-        let info = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["sys", "info", "--", id])
-            .output()
-            .unwrap();
+        let info = fixture.run_no_color(&["sys", "info", "--", id]);
         assert_eq!(info.status.code(), Some(0), "{info:?}");
         let text = String::from_utf8(info.stdout).unwrap();
         let hint = text
@@ -4744,12 +4617,7 @@ fn sys_output_hints_preserve_leading_hyphen_ids_through_shell_and_clap() {
             .env("NO_COLOR", "1")
             .output()
             .unwrap();
-        let direct = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["sys", action, "--dry-run", "--", id])
-            .output()
-            .unwrap();
+        let direct = fixture.run_no_color(&["sys", action, "--dry-run", "--", id]);
         assert_eq!(direct.status.code(), Some(0), "{direct:?}");
         assert_eq!(copied.status.code(), direct.status.code(), "{copied:?}");
         assert_eq!(
@@ -4773,14 +4641,6 @@ fn sys_output_hints_preserve_leading_hyphen_ids_through_shell_and_clap() {
 #[test]
 fn sys_output_labels_escape_controls_without_changing_receipts_or_approval() {
     let fixture = sys_output_fixture();
-    let run = |args: &[&str]| {
-        fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(args)
-            .output()
-            .unwrap()
-    };
     let raw = "Managed\n\r\t\u{1b}[2J中文é";
     let displayed = r"Managed\n\r\t\u{1b}[2J中文é";
     for args in [
@@ -4788,7 +4648,7 @@ fn sys_output_labels_escape_controls_without_changing_receipts_or_approval() {
         vec!["sys", "info", "--", "--version"],
         vec!["sys", "apply", "--dry-run", "--", "--version"],
     ] {
-        let output = run(&args);
+        let output = fixture.run_no_color(&args);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains(displayed), "{text}");
@@ -4797,14 +4657,14 @@ fn sys_output_labels_escape_controls_without_changing_receipts_or_approval() {
             "{text:?}"
         );
     }
-    let denied = run(&["sys", "apply", "--", "--version"]);
+    let denied = fixture.run_no_color(&["sys", "apply", "--", "--version"]);
     assert_eq!(denied.status.code(), Some(1), "{denied:?}");
     assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
     let receipt = fixture.0.join("state/sys-manifest.toml");
     assert!(!receipt.exists());
     let destination = fixture.0.join("home/.config/managed.txt");
     assert!(!destination.exists());
-    let applied = run(&["sys", "apply", "--yes", "--", "--version"]);
+    let applied = fixture.run_no_color(&["sys", "apply", "--yes", "--", "--version"]);
     assert_eq!(applied.status.code(), Some(0), "{applied:?}");
     let text = String::from_utf8(applied.stdout).unwrap();
     assert!(text.contains(displayed) && !text.contains(raw), "{text}");
@@ -4820,7 +4680,7 @@ fn sys_output_labels_escape_controls_without_changing_receipts_or_approval() {
         vec!["sys", "info", "--", "--version"],
         vec!["sys", "uninstall", "--dry-run", "--", "--version"],
     ] {
-        let output = run(&args);
+        let output = fixture.run_no_color(&args);
         assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains(displayed) && !text.contains(raw), "{text}");
@@ -4840,12 +4700,7 @@ fn sys_output_labels_escape_controls_without_changing_receipts_or_approval() {
 #[test]
 fn sys_output_detection_preserves_literal_argv_in_the_native_shell() {
     let fixture = sys_output_fixture();
-    let output = fixture
-        .command()
-        .env("NO_COLOR", "1")
-        .args(["sys", "info", "--", "--help"])
-        .output()
-        .unwrap();
+    let output = fixture.run_no_color(&["sys", "info", "--", "--help"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let text = String::from_utf8(output.stdout).unwrap();
     let detection = text
@@ -5896,12 +5751,7 @@ fn app_install_reports_file_failures_without_hiding_partial_success() {
         } else {
             vec!["app", "install", "demo", "--yes"]
         };
-        let output = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(args)
-            .output()
-            .unwrap();
+        let output = fixture.run_no_color(&args);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -6095,12 +5945,7 @@ fn task_info_aligns_values_with_and_without_working_directory() {
             format!("[tasks.build]\ncommand = ['cargo', 'build']\n{cwd_line}"),
         )
         .unwrap();
-        let output = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["task", "info", "build"])
-            .output()
-            .unwrap();
+        let output = fixture.run_no_color(&["task", "info", "build"]);
         assert!(output.status.success(), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         let lines = text.lines().collect::<Vec<_>>();
@@ -6962,20 +6807,15 @@ fn creation_preflight_errors_encode_paths_without_replacing_files_or_configurati
             }
         }
     }
-    let output = fixture
-        .command()
-        .env("NO_COLOR", "1")
-        .args([
-            "env",
-            "secret",
-            "identity",
-            "init",
-            "--touch-id",
-            "--access-control",
-            "bad\nFORGED\r\t\u{1b}",
-        ])
-        .output()
-        .unwrap();
+    let output = fixture.run_no_color(&[
+        "env",
+        "secret",
+        "identity",
+        "init",
+        "--touch-id",
+        "--access-control",
+        "bad\nFORGED\r\t\u{1b}",
+    ]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty());
     let text = String::from_utf8(output.stderr).unwrap();
@@ -7113,12 +6953,7 @@ fn preset_failures_escape_operands_and_preserve_source_configuration() {
             assert!(!missing.exists());
         }
     }
-    let output = fixture
-        .command()
-        .env("NO_COLOR", "1")
-        .args(["preset", "copy", "app/missing\nFORGED\r\t\u{1b}"])
-        .output()
-        .unwrap();
+    let output = fixture.run_no_color(&["preset", "copy", "app/missing\nFORGED\r\t\u{1b}"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
@@ -7310,12 +7145,7 @@ async fn sys_status_reports_per_item_records_without_mutating_them() {
         let bytes = toml::to_string(&manifest).unwrap();
         let path = state.join("sys-manifest.toml");
         fs::write(&path, &bytes).unwrap();
-        let output = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["sys", "status"])
-            .output()
-            .unwrap();
+        let output = fixture.run_no_color(&["sys", "status"]);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
         let stdout = String::from_utf8(output.stdout).unwrap();
@@ -7522,12 +7352,7 @@ fn blocked_plan_and_development_notice_encode_targets_without_executing() {
                 .unwrap();
             assert!(grant.status.success(), "{grant:?}");
         }
-        let output = fixture
-            .command()
-            .env("NO_COLOR", "1")
-            .args(["app", "install", category, "--yes"])
-            .output()
-            .unwrap();
+        let output = fixture.run_no_color(&["app", "install", category, "--yes"]);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         let stdout = String::from_utf8(output.stdout).unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
@@ -8115,12 +7940,7 @@ fn identity_list_encodes_display_fields_preserving_source_and_config() {
         toml::Value::String(identity.to_str().unwrap().into())
     );
     fs::write(state.join("config.toml"), &config).unwrap();
-    let output = fixture
-        .command()
-        .env("NO_COLOR", "1")
-        .args(["env", "secret", "identity", "list"])
-        .output()
-        .unwrap();
+    let output = fixture.run_no_color(&["env", "secret", "identity", "list"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     let text = String::from_utf8(output.stdout).unwrap();
@@ -8150,12 +7970,7 @@ fn proxy_list_encodes_stored_fields_without_revalidating_or_mutating_rules() {
     fs::create_dir(&state).unwrap();
     let original = "schema_version = 2\n[[env_proxy]]\ncommand = \"probe\\nFORGED=command\\r\\t\\u001b\\\\literal中文\"\nwith = [\"TOKEN\\nFORGED=with\\u001b\", \"ALIAS=OTHER\"]\nenabled = false\n[[env_proxy]]\ncommand = \"normal\"\nwith = [\"TOKEN\"]\nenabled = true\n";
     fs::write(state.join("config.toml"), original).unwrap();
-    let output = fixture
-        .command()
-        .env("NO_COLOR", "1")
-        .args(["env", "proxy", "list"])
-        .output()
-        .unwrap();
+    let output = fixture.run_no_color(&["env", "proxy", "list"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     assert_eq!(

@@ -1,5 +1,24 @@
 //! Shell transactions regressions.
 use super::*;
+use FilesystemAccessV1::{Remove, Write};
+
+#[track_caller]
+fn assert_file_permissions(
+    runtime: &CoreRuntime<InMemoryHost>,
+    plan: &PlanV1,
+    expected: &[(FilesystemAccessV1, &std::path::Path)],
+) {
+    for &(access, path) in expected {
+        let permission = PermissionV1::Filesystem {
+            access,
+            path: review_path(runtime.context(), path),
+        };
+        assert!(
+            plan.permissions.required.contains(&permission),
+            "missing {permission:?}"
+        );
+    }
+}
 
 #[tokio::test]
 async fn filesystem_review_tracks_typed_shell_transactions_without_widening_permissions() {
@@ -201,21 +220,16 @@ async fn transformed_shell_install_transactions_rendered_output_before_receipt()
         .shine_dir
         .join("rendered/shell/demo/demo.sh");
     let rollback = managed_file_rollback_path(&rendered);
-    for (access, path) in [
-        (FilesystemAccessV1::Write, &rendered),
-        (FilesystemAccessV1::Remove, &rendered),
-        (FilesystemAccessV1::Write, &rollback),
-        (FilesystemAccessV1::Remove, &rollback),
-    ] {
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access,
-                    path: review_path(runtime.context(), path),
-                })
-        );
-    }
+    assert_file_permissions(
+        &runtime,
+        &plan,
+        &[
+            (Write, &rendered),
+            (Remove, &rendered),
+            (Write, &rollback),
+            (Remove, &rollback),
+        ],
+    );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
         .install_shells_approved(request, &approval)
@@ -274,20 +288,11 @@ async fn transformed_shell_uninstall_transactions_rendered_output() {
         .host()
         .put_file(&unrelated, b"unrelated rendered bytes".to_vec());
     let rollback = managed_file_rollback_path(&rendered);
-    for (access, path) in [
-        (FilesystemAccessV1::Remove, &rendered),
-        (FilesystemAccessV1::Write, &rollback),
-        (FilesystemAccessV1::Remove, &rollback),
-    ] {
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access,
-                    path: review_path(runtime.context(), path),
-                })
-        );
-    }
+    assert_file_permissions(
+        &runtime,
+        &plan,
+        &[(Remove, &rendered), (Write, &rollback), (Remove, &rollback)],
+    );
 
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
@@ -439,15 +444,8 @@ async fn approved_shell_launcher_creation_journals_before_mutation_and_commits_a
 
 #[tokio::test]
 async fn managed_shell_launcher_update_moves_old_resource_before_receipt_commit() {
-    let original = runtime(shell_launcher_snapshot());
+    let original = installed_shell_runtime().await;
     let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install.clone(), &approval)
-        .await
-        .unwrap();
     let runtime = CoreRuntime::new(
         original.host().clone(),
         original.context().clone(),
@@ -455,26 +453,14 @@ async fn managed_shell_launcher_update_moves_old_resource_before_receipt_commit(
     );
     let plan = runtime.plan_shells(install.clone()).await.unwrap();
     assert!(plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_managed_launcher_update_transaction".to_string())
-    }));
+    assert_plan_diagnostic(&plan, "shell_managed_launcher_update_transaction");
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
     let rollback = managed_file_rollback_path(&launcher);
-    for (access, path) in [
-        (FilesystemAccessV1::Remove, &launcher),
-        (FilesystemAccessV1::Write, &rollback),
-        (FilesystemAccessV1::Remove, &rollback),
-    ] {
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access,
-                    path: review_path(runtime.context(), path),
-                })
-        );
-    }
+    assert_file_permissions(
+        &runtime,
+        &plan,
+        &[(Remove, &launcher), (Write, &rollback), (Remove, &rollback)],
+    );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
         .install_shells_approved(install, &approval)
@@ -506,26 +492,14 @@ async fn approved_shell_launcher_removal_moves_before_receipt_commit_and_cleans_
     let request = shell_uninstall_request();
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     assert!(plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_managed_launcher_remove_transaction".to_string())
-    }));
+    assert_plan_diagnostic(&plan, "shell_managed_launcher_remove_transaction");
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
     let rollback = managed_file_rollback_path(&launcher);
-    for (access, path) in [
-        (FilesystemAccessV1::Remove, &launcher),
-        (FilesystemAccessV1::Write, &rollback),
-        (FilesystemAccessV1::Remove, &rollback),
-    ] {
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access,
-                    path: review_path(runtime.context(), path),
-                })
-        );
-    }
+    assert_file_permissions(
+        &runtime,
+        &plan,
+        &[(Remove, &launcher), (Write, &rollback), (Remove, &rollback)],
+    );
     let operation_offset = runtime.host().operations().len();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
@@ -613,15 +587,7 @@ async fn approved_shell_uninstall_preserves_a_modified_receipt_owned_launcher() 
 
 #[tokio::test]
 async fn approved_shell_upgrade_uses_managed_launcher_update_transaction() {
-    let original = runtime(shell_launcher_snapshot());
-    let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install, &approval)
-        .await
-        .unwrap();
+    let original = installed_shell_runtime().await;
     let runtime = CoreRuntime::new(
         original.host().clone(),
         original.context().clone(),
@@ -636,10 +602,7 @@ async fn approved_shell_upgrade_uses_managed_launcher_update_transaction() {
     };
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     assert!(plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_managed_launcher_update_transaction".to_string())
-    }));
+    assert_plan_diagnostic(&plan, "shell_managed_launcher_update_transaction");
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
         .upgrade_shells_approved(request, &approval)
