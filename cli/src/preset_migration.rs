@@ -1,7 +1,7 @@
 //! Reviewed CLI adapter for Preset source migration.
 
 use crate::commands::PresetReportFormat;
-use crate::config::discover_runtime_paths_read_only;
+use crate::config::discover_migration_paths;
 use crate::{core_runtime, persist};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;

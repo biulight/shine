@@ -1,4 +1,5 @@
-use serde::Deserialize;
+use anyhow::{Context, Result};
+use serde::{Deserialize, de::DeserializeOwned};
 use std::path::{Path, PathBuf};
 
 use super::{GLOBAL_CONFIG_FILE, PROJECT_CONFIG_FILE, tilde_expand};
@@ -40,6 +41,13 @@ pub(super) struct MinimalConfig {
     pub(super) schema_version: u32,
 }
 
+// Project configuration can override directories. Git and runtime schema settings are global.
+#[derive(Default, Deserialize)]
+struct ProjectPresetPaths {
+    presets_dir: Option<PathBuf>,
+    presets_overlay_dir: Option<PathBuf>,
+}
+
 pub(super) fn read_minimal_config(content: &str) -> anyhow::Result<MinimalConfig> {
     toml::from_str(content).map_err(super::config_parse_error)
 }
@@ -78,7 +86,7 @@ pub(crate) struct ReadOnlyRuntimePaths {
     pub(crate) presets_dir: PathBuf,
     pub(crate) presets_overlay_dir: Option<PathBuf>,
     pub(crate) is_external_presets: bool,
-    pub(crate) managed_overlay: bool,
+    pub(crate) managed_overlay_dir: Option<PathBuf>,
 }
 
 /// Resolve the active runtime paths without initializing `Config` or writing
@@ -88,51 +96,100 @@ pub(crate) fn discover_runtime_paths_read_only() -> Option<ReadOnlyRuntimePaths>
     let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir().ok()?;
     let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
     let global_path = preliminary_shine_dir.join(GLOBAL_CONFIG_FILE);
-    let global_dir = global_path.parent().unwrap_or_else(|| Path::new("."));
     let global = read_minimal_config_file(&global_path);
+    let project = find_project_config(&std::env::current_dir().ok()?).map(|project| {
+        let config = read_minimal_config_file(&project.path).unwrap_or_default();
+        (project.root, config)
+    });
+    Some(resolve_read_only_paths(
+        &default_shine_dir,
+        &default_presets_dir,
+        &preliminary_shine_dir,
+        global,
+        project,
+    ))
+}
+
+/// Migration may write to the selected overlay. Only an absent layer can be skipped.
+pub(crate) async fn discover_migration_paths() -> Result<ReadOnlyRuntimePaths> {
+    let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
+    let global_dir = preliminary_shine_dir_from_env(&default_shine_dir);
+    let global = capture_minimal_config(&global_dir.join(GLOBAL_CONFIG_FILE)).await?;
+    let current = std::env::current_dir().context("resolving current directory")?;
+    let mut project = None;
+    for dir in current.ancestors() {
+        if let Some(config) = capture_minimal_config(&dir.join(PROJECT_CONFIG_FILE)).await? {
+            project = Some((dir.to_owned(), config));
+            break;
+        }
+    }
+    Ok(resolve_read_only_paths(
+        &default_shine_dir,
+        &default_presets_dir,
+        &global_dir,
+        global,
+        project,
+    ))
+}
+
+async fn capture_minimal_config<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    super::ConfigInput::capture(path)
+        .await?
+        .contents
+        .as_deref()
+        .map(|contents| toml::from_str(contents).map_err(super::config_parse_error))
+        .transpose()
+        .with_context(|| {
+            format!(
+                "parsing {}",
+                crate::output::escape_controls(&path.display().to_string())
+            )
+        })
+}
+
+fn resolve_read_only_paths(
+    default_shine_dir: &Path,
+    default_presets_dir: &Path,
+    global_dir: &Path,
+    global: Option<MinimalConfig>,
+    project: Option<(PathBuf, ProjectPresetPaths)>,
+) -> ReadOnlyRuntimePaths {
     let global_presets = global
         .as_ref()
         .and_then(|config| config.presets_dir.as_deref())
         .map(|path| resolve_config_presets_path(path, global_dir));
     let (global_shine_dir, global_presets_dir, global_is_external) = resolve_runtime_config_dirs(
-        &default_shine_dir,
-        &default_presets_dir,
+        default_shine_dir,
+        default_presets_dir,
         global_presets.as_deref(),
         false,
     );
-    let global_overlay = global.as_ref().and_then(|config| {
-        config
-            .presets_overlay_dir
-            .as_deref()
-            .map(|path| resolve_config_presets_path(path, global_dir))
-            .or_else(|| {
-                config
-                    .presets_overlay_git
-                    .as_ref()
-                    .map(|_| global_shine_dir.join("overlay"))
-                    .filter(|path| path.exists())
-            })
-    });
-    let global_managed_overlay = global.as_ref().is_some_and(|config| {
-        config.presets_overlay_dir.is_none() && config.presets_overlay_git.is_some()
-    }) && global_overlay.is_some();
+    let managed_overlay_dir = global
+        .as_ref()
+        .filter(|config| {
+            config.presets_overlay_dir.is_none() && config.presets_overlay_git.is_some()
+        })
+        .map(|_| global_shine_dir.join("overlay"));
+    let global_overlay = global
+        .as_ref()
+        .and_then(|config| config.presets_overlay_dir.as_deref())
+        .map(|path| resolve_config_presets_path(path, global_dir))
+        .or_else(|| managed_overlay_dir.clone().filter(|path| path.exists()));
 
-    let current_dir = std::env::current_dir().ok()?;
-    let Some(project) = find_project_config(&current_dir) else {
-        return Some(ReadOnlyRuntimePaths {
+    let Some((project_root, project_config)) = project else {
+        return ReadOnlyRuntimePaths {
             shine_dir: global_shine_dir,
             presets_dir: global_presets_dir,
             presets_overlay_dir: global_overlay,
             is_external_presets: global_is_external,
-            managed_overlay: global_managed_overlay,
-        });
+            managed_overlay_dir,
+        };
     };
 
-    let project_config = read_minimal_config_file(&project.path);
     let project_presets = project_config
-        .as_ref()
-        .and_then(|config| config.presets_dir.as_deref())
-        .map(|path| resolve_config_presets_path(path, &project.root));
+        .presets_dir
+        .as_deref()
+        .map(|path| resolve_config_presets_path(path, &project_root));
     let effective_presets = project_presets
         .clone()
         .or_else(|| global_is_external.then_some(global_presets_dir.clone()));
@@ -144,32 +201,29 @@ pub(crate) fn discover_runtime_paths_read_only() -> Option<ReadOnlyRuntimePaths>
         effective_presets
     };
     let (shine_dir, presets_dir, is_external_presets) = resolve_runtime_config_dirs(
-        &default_shine_dir,
-        &default_presets_dir,
+        default_shine_dir,
+        default_presets_dir,
         runtime_presets.as_deref(),
         true,
     );
     let presets_overlay_dir = project_config
-        .as_ref()
-        .and_then(|config| config.presets_overlay_dir.as_deref())
-        .map(|path| resolve_config_presets_path(path, &project.root))
+        .presets_overlay_dir
+        .as_deref()
+        .map(|path| resolve_config_presets_path(path, &project_root))
         .or(global_overlay);
-    let project_has_manual_overlay = project_config
-        .as_ref()
-        .is_some_and(|config| config.presets_overlay_dir.is_some());
 
-    Some(ReadOnlyRuntimePaths {
+    ReadOnlyRuntimePaths {
         shine_dir,
         presets_dir,
         presets_overlay_dir,
         is_external_presets,
-        managed_overlay: global_managed_overlay && !project_has_manual_overlay,
-    })
+        managed_overlay_dir,
+    }
 }
 
-fn read_minimal_config_file(path: &Path) -> Option<MinimalConfig> {
+fn read_minimal_config_file<T: DeserializeOwned>(path: &Path) -> Option<T> {
     let content = std::fs::read_to_string(path).ok()?;
-    read_minimal_config(&content).ok()
+    toml::from_str(&content).ok()
 }
 
 /// Resolve the runtime (shine_dir, presets_dir) pair.
@@ -297,7 +351,7 @@ mod tests {
 
         drop(_guard);
 
-        assert!(runtime.managed_overlay);
+        assert_eq!(runtime.managed_overlay_dir, Some(root.join("overlay")));
         assert_eq!(runtime.presets_overlay_dir, Some(root.join("overlay")));
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -466,7 +520,7 @@ mod tests {
     async fn read_minimal_config_file_presets_returns_none_when_file_missing() {
         let missing =
             std::env::temp_dir().join(format!("shine-no-config-{}.toml", uuid::Uuid::new_v4()));
-        let result = read_minimal_config_file(&missing);
+        let result = read_minimal_config_file::<MinimalConfig>(&missing);
         assert!(result.is_none());
     }
 
@@ -476,7 +530,9 @@ mod tests {
         let path = dir.join("config.toml");
         fs::write(&path, "schema_version = 0\n").await.unwrap();
 
-        let result = read_minimal_config_file(&path).unwrap().presets_dir;
+        let result = read_minimal_config_file::<MinimalConfig>(&path)
+            .unwrap()
+            .presets_dir;
         assert!(result.is_none());
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -490,7 +546,9 @@ mod tests {
             .await
             .unwrap();
 
-        let result = read_minimal_config_file(&path).unwrap().presets_dir;
+        let result = read_minimal_config_file::<MinimalConfig>(&path)
+            .unwrap()
+            .presets_dir;
         assert_eq!(result, Some(PathBuf::from("/my/presets")));
 
         fs::remove_dir_all(&dir).await.unwrap();

@@ -365,7 +365,9 @@ bugs. Check this list before changing the modules named in each entry.
   Text target rows escape controls at rendering; JSON targets and archive bytes retain their identity.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, captured executable intent, and each
-  file's embedded, external, or overlay origin. It must not include physical source roots: relocating unchanged source is not a
+  file's embedded, external, or overlay origin. Runtime, authoring and export walks reserve every ASCII case spelling of the `.git`
+  component, including worktree pointer files. This keeps bundles portable across filesystems. Other dotfiles remain eligible preset resources.
+  It must not include physical source roots: relocating unchanged source is not a
   semantic change, while changing an effective layer is. State observations use the same framed
   SHA-256 contract. Labels use canonical targets and logical resources; request flags, relevant
   manifests/receipts, live fingerprints, platform/mode, and outcome-affecting input identities are
@@ -1012,12 +1014,13 @@ bugs. Check this list before changing the modules named in each entry.
 - **Runtime migration syntax errors do not retain source values.** The recipient inspection,
   rewrite and final schema-state patch in `state migrate` share a file-only TOML parse diagnostic.
   Drop the original parser error, including its source excerpt, duplicate-key text and Debug chain.
-  Project/workspace validation still precedes cleanup and writes in both preview and apply modes.
+  Preview and apply run the same in-memory recipient conversion for every target before cleanup or
+  writes. A GPG key conflict, invalid recipient, or unsupported workspace version stops both modes.
   Migration action descriptions and current-schema recipient notices encode controls only at
   print sites, keeping the original paths in their apply closures.
   Workspace `env` and `env.encryption` must be table-like when present: scalar, array and
   array-of-tables inputs return ordinary redacted errors, never panics. Use optional lookups for
-  absent settings; do not create encryption tables or expand inline-table recipient conversion.
+  absent settings. Migrate recipients in regular and inline tables alike, preserving the table form.
 
 - **Self-install persists the path it actually writes.** Resolve `--dest` relative to the invocation
   cwd before installation and save the absolute path. Config-relative interpretation on reload must

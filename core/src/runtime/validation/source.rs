@@ -1,6 +1,6 @@
 //! Observation-only discovery and immutable source capture.
 
-use super::super::path_text::preset_path as logical_path;
+use super::super::path_text::{is_git_metadata_entry, preset_path as logical_path};
 use super::{CategoryPath, PresetDiagnostic, PresetSourceScope, error};
 use crate::runtime::{FileKind, FileSystemObservationHost, PresetSnapshot, PresetSourceKind};
 use std::path::{Path, PathBuf};
@@ -106,6 +106,9 @@ async fn discover_categories(
             )
         })?;
         for entry in entries {
+            if is_git_metadata_entry(&entry) {
+                continue;
+            }
             let entry_metadata = host.metadata(&entry).await.map_err(|error_value| {
                 error(
                     "read_failed",
@@ -196,6 +199,9 @@ async fn snapshot_tree(
                 &directory,
             )
         })? {
+            if is_git_metadata_entry(&entry) {
+                continue;
+            }
             let kind = host.metadata(&entry).await.map_err(|error_value| {
                 error(
                     "read_failed",

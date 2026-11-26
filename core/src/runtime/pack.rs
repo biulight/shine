@@ -1,6 +1,6 @@
 //! Deterministic, policy-gated Preset bundle construction.
 
-use super::path_text::preset_path as logical_path;
+use super::path_text::{is_git_metadata_entry, preset_path as logical_path};
 use super::validation::{load_preset_source_scope, validate_preset_source_scope};
 use super::{FileKind, FileSystemObservationHost, SysInstall, SysManifest};
 use crate::digest::sha256_hex as sha256;
@@ -185,8 +185,9 @@ async fn scan_tree(
             }
             let metadata = host.metadata(&entry).await.map_err(|_| "read_failed")?;
             match metadata.kind {
-                FileKind::Directory => pending.push(entry),
                 FileKind::Symlink => return Err("symlink_forbidden"),
+                _ if is_git_metadata_entry(&entry) => continue,
+                FileKind::Directory => pending.push(entry),
                 FileKind::File => {
                     let mode = if metadata.unix_mode.unwrap_or(0) & 0o111 != 0 {
                         0o755
@@ -549,8 +550,10 @@ mod tests {
     async fn bundle_is_independent_of_checkout_root() {
         let left =
             pack_preset_path(&source("/one"), Path::new("/one"), Path::new("app/demo")).await;
-        let right =
-            pack_preset_path(&source("/two"), Path::new("/two"), Path::new("app/demo")).await;
+        let checkout = source("/two");
+        checkout.put_file("/two/app/demo/.Git/hooks/pre-commit", b"#!/bin/sh".to_vec());
+        checkout.put_file("/two/app/demo/sub/.git", b"gitdir: elsewhere".to_vec());
+        let right = pack_preset_path(&checkout, Path::new("/two"), Path::new("app/demo")).await;
         assert!(left.report.valid);
         assert_eq!(left.bytes, right.bytes);
         assert_eq!(left.report.bundle_sha256, right.report.bundle_sha256);

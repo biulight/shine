@@ -14,7 +14,8 @@ mod save;
 
 use discovery::resolve_config_presets_path;
 pub(crate) use discovery::{
-    ReadOnlyRuntimePaths, discover_runtime_paths_read_only, find_project_config,
+    ReadOnlyRuntimePaths, discover_migration_paths, discover_runtime_paths_read_only,
+    find_project_config,
 };
 use env_layer::deserialize_env_values;
 

@@ -2,6 +2,16 @@
 
 use std::path::Path;
 
+/// Reserve Git administration entries in portable preset paths on every filesystem.
+pub fn is_git_metadata_entry(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        // Snapshot keys also treat backslashes in native entry names as separators.
+        name.as_encoded_bytes()
+            .split(|&byte| byte == b'\\')
+            .any(|part| part.eq_ignore_ascii_case(b".git"))
+    })
+}
+
 /// Join native components for preset snapshot keys; keep the historical component spelling.
 pub(super) fn preset_path(path: &Path) -> String {
     path.components()

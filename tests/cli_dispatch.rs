@@ -395,6 +395,73 @@ fn display_path_fixture() -> Fixture {
 }
 
 #[test]
+fn preset_migration_rejects_invalid_source_config_before_preview_or_apply() {
+    let f = Fixture::new();
+    let app = f.0.join("overlay/app/demo");
+    fs::create_dir_all(&app).unwrap();
+    fs::write(
+        app.join("shine.toml"),
+        "dest='~/.demo'\n[[files]]\nsource='config'\n",
+    )
+    .unwrap();
+    fs::write(app.join("config"), "demo").unwrap();
+    let state = f.0.join("state");
+    fs::create_dir(&state).unwrap();
+    let global = state.join("config.toml");
+    fs::write(&global, "presets_overlay_dir='../overlay'\n").unwrap();
+    let child = f.0.join("project/child");
+    fs::create_dir_all(&child).unwrap();
+    let project = f.0.join("project/shine.config.toml");
+
+    fs::write(
+        &project,
+        "presets_dir='../overlay'\npresets_overlay_git=false\nschema_version='unused'\n",
+    )
+    .unwrap();
+    let preview = f
+        .command()
+        .current_dir(&child)
+        .args(["preset", "migrate", "--dry-run", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(preview.status.success(), "{preview:?}");
+
+    for path in [&project, &global] {
+        fs::write(path, "presets_dir = [ 'PRIVATE_CONFIG_MARKER'\n").unwrap();
+        let before = upgrade_tree_state(&f.0);
+        for mode in ["--dry-run", "--yes"] {
+            let output = f
+                .command()
+                .current_dir(&child)
+                .args(["preset", "migrate", mode, "--format", "json"])
+                .output()
+                .unwrap();
+            assert!(!output.status.success(), "{output:?}");
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                error.contains(path.file_name().unwrap().to_str().unwrap()),
+                "{error}"
+            );
+            assert!(
+                error.contains("contents omitted") && !error.contains("PRIVATE_CONFIG_MARKER"),
+                "{error}"
+            );
+            assert_eq!(upgrade_tree_state(&f.0), before);
+        }
+        fs::remove_file(path).unwrap();
+    }
+    fs::create_dir(&project).unwrap();
+    let output = f
+        .command()
+        .current_dir(&child)
+        .args(["preset", "migrate", "--yes"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("regular file"));
+}
+
+#[test]
 fn structured_env_migration_is_explicit_backup_first_and_idempotent() {
     let f = Fixture::new();
     let root = f.0.join("presets");
@@ -614,6 +681,56 @@ fn migration_diff_colors_follow_stdout_and_leave_json_and_sources_unchanged() {
         );
         assert!(!fixture.0.join("state").exists());
     }
+}
+
+#[test]
+fn project_migration_keeps_the_global_mirror_read_only() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let app = state.join("overlay/app/demo");
+    fs::create_dir_all(&app).unwrap();
+    fs::write(
+        state.join("config.toml"),
+        "presets_overlay_git='https://example.invalid/presets.git'\n",
+    )
+    .unwrap();
+    fs::write(
+        app.join("shine.toml"),
+        "dest='~/.demo'\n[[files]]\nsource='config'\n",
+    )
+    .unwrap();
+    fs::write(app.join("config"), "demo").unwrap();
+    fs::write(
+        fixture.0.join("shine.config.toml"),
+        "presets_dir='state/overlay'\npresets_overlay_dir='team'\n",
+    )
+    .unwrap();
+    let before = upgrade_tree_state(&fixture.0);
+    for target in [None, Some(&app)] {
+        let mut cmd = fixture.command();
+        cmd.env("SHINE_CONFIG_DIR", "state")
+            .args(["preset", "migrate"]);
+        if let Some(path) = target {
+            cmd.arg(path);
+        }
+        let preview = cmd
+            .args(["--dry-run", "--format", "json"])
+            .output()
+            .unwrap();
+        assert_eq!(preview.status.code(), Some(1), "{preview:?}");
+        let report: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+        assert_eq!(report["summary"]["changes"], 0);
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(
+                    |d| d["code"] == "managed_overlay_read_only" && d["source_layer"] == "external"
+                )
+        );
+    }
+    assert_eq!(upgrade_tree_state(&fixture.0), before);
 }
 
 #[test]
@@ -1370,6 +1487,57 @@ fn task_command_displays_round_trip_through_native_powershell_without_changing_e
     assert_eq!(copied.stdout, direct.stdout, "{display}");
     assert!(copied.stderr.is_empty(), "{copied:?}");
     assert_eq!(fs::read(state.join("tasks.toml")).unwrap(), before);
+}
+
+#[test]
+fn state_migration_rejects_invalid_recipients_before_any_file_changes() {
+    for schema in [0, 2] {
+        for (project, workspace, expected) in [
+            (
+                "gpg_key_id='project'",
+                "recipient='old',gpg_recipients=['new']",
+                "resolve the conflict",
+            ),
+            ("gpg_key_id='project'", "recipient=7", "must be a string"),
+            (
+                "gpg_key_id='project'\ngpg_recipients=['new']",
+                "recipient='old'",
+                "resolve the conflict",
+            ),
+            ("gpg_key_id=[]", "recipient='old'", "must be a string"),
+        ] {
+            let fixture = Fixture::new();
+            let state = fixture.0.join("state");
+            fs::create_dir_all(&state).unwrap();
+            fs::write(
+                state.join("config.toml"),
+                format!("schema_version={schema}\ngpg_key_id='global'\n"),
+            )
+            .unwrap();
+            fs::write(state.join("update-check.json"), "cached").unwrap();
+            fs::write(fixture.0.join("shine.config.toml"), project).unwrap();
+            fs::write(
+                fixture.0.join("shine.workspace.toml"),
+                format!("version=2\n[env]\nencryption={{{workspace}}}\n"),
+            )
+            .unwrap();
+            let before = upgrade_tree_state(&fixture.0);
+            for preview in [true, false] {
+                let mut command = fixture.command();
+                command.args(["state", "migrate"]);
+                if preview {
+                    command.arg("--dry-run");
+                }
+                let output = command.output().unwrap();
+                assert!(!output.status.success(), "{output:?}");
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains(expected),
+                    "{output:?}"
+                );
+                assert_eq!(upgrade_tree_state(&fixture.0), before);
+            }
+        }
+    }
 }
 
 #[test]
@@ -6520,6 +6688,11 @@ fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
     fs::create_dir_all(&overlay).unwrap();
     fs::write(overlay.join("overlay-only.txt"), "overlay").unwrap();
     fs::write(state.join("presets/external-only.txt"), "external").unwrap();
+    fs::create_dir_all(overlay.join(".Git")).unwrap();
+    fs::write(overlay.join(".Git/HEAD"), "overlay ref").unwrap();
+    fs::create_dir_all(overlay.join("nested")).unwrap();
+    fs::write(overlay.join("nested/.git"), "gitdir: elsewhere").unwrap();
+    fs::write(overlay.join(".gitignore"), "artifacts/").unwrap();
     for with_overlay in [false, true] {
         let mut config = "schema_version = 2\n".to_string();
         if with_overlay {
@@ -6537,9 +6710,11 @@ fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
                 "export"
             })
             .join(if with_overlay { "merged" } else { "builtin" });
+        fs::create_dir_all(out.join(".Git")).unwrap();
+        fs::write(out.join(".Git/HEAD"), "destination ref").unwrap();
         let output = fixture
             .command()
-            .args(["preset", "export"])
+            .args(["preset", "export", "--force"])
             .arg(&out)
             .output()
             .unwrap();
@@ -6563,6 +6738,9 @@ fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
             with_overlay,
             "{output:?}"
         );
+        assert_eq!(fs::read(out.join(".Git/HEAD")).unwrap(), b"destination ref");
+        assert!(!out.join("nested/.git").exists());
+        assert_eq!(out.join(".gitignore").exists(), with_overlay);
         assert_eq!(out.join("overlay-only.txt").exists(), with_overlay);
         assert!(out.join("shell/proxy/shine.toml").is_file());
         assert!(!out.join("external-only.txt").exists());

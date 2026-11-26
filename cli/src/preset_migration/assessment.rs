@@ -29,20 +29,22 @@ pub(super) fn mark_managed_overlay_read_only(plan: &mut PresetMigrationPlan, roo
         .edits
         .iter()
         .filter(|edit| edit.physical_path.starts_with(root))
-        .map(|edit| edit.logical_path.clone())
-        .collect::<BTreeSet<_>>();
+        .map(|edit| (edit.logical_path.clone(), edit.source_layer.clone()))
+        .collect::<BTreeMap<_, _>>();
     if blocked.is_empty() {
         return;
     }
     plan.edits
-        .retain(|edit| !blocked.contains(&edit.logical_path));
-    for target in blocked {
+        .retain(|edit| !blocked.contains_key(&edit.logical_path));
+    for (target, source_layer) in blocked {
         plan.report.diagnostics.push(PresetMigrationDiagnosticV1 {
             severity: PresetMigrationSeverityV1::Blocker,
             code: "managed_overlay_read_only".to_string(),
             target,
-            source_layer: Some("overlay".to_string()),
-            message: "the active Git-managed overlay is force-mirrored; migrate its upstream checkout instead".to_string(),
+            source_layer: Some(source_layer),
+            message:
+                "the Git-managed overlay is force-mirrored; migrate its upstream checkout instead"
+                    .to_string(),
         });
     }
     sync_report_with_edits(plan);

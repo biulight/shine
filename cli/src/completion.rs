@@ -1,6 +1,7 @@
 use crate::commands::CompletionShell;
 use clap::CommandFactory;
 use clap_complete::engine::{ArgValueCandidates, CompletionCandidate};
+use shine_core::runtime::is_git_metadata_entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -288,6 +289,9 @@ fn collect_fs_shell_command_names(root: &Path) -> BTreeMap<String, BTreeSet<Stri
         return result;
     };
     for entry in entries.flatten() {
+        if is_git_metadata_entry(&entry.path()) {
+            continue;
+        }
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
@@ -400,6 +404,7 @@ fn collect_fs_app_capabilities(root: &Path, capability: AppCapability) -> BTreeS
     };
     entries
         .flatten()
+        .filter(|entry| !is_git_metadata_entry(&entry.path()))
         .filter_map(|entry| {
             let name = entry.file_name().to_str()?.to_string();
             let content = std::fs::read_to_string(entry.path().join("shine.toml")).ok()?;
@@ -554,6 +559,9 @@ fn collect_fs_sys_item_names(root: &Path, names: &mut BTreeSet<String>) {
         return;
     };
     for entry in entries.flatten() {
+        if is_git_metadata_entry(&entry.path()) {
+            continue;
+        }
         let manifest = entry.path().join("shine.toml");
         if let Ok(bytes) = std::fs::read(manifest) {
             collect_toml_sys_item_names(&bytes, names);
@@ -614,7 +622,8 @@ fn fs_category_names(root: &Path) -> Option<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for entry in std::fs::read_dir(root).ok()? {
         let entry = entry.ok()?;
-        if entry.file_type().ok()?.is_dir()
+        if !is_git_metadata_entry(&entry.path())
+            && entry.file_type().ok()?.is_dir()
             && let Some(name) = entry.file_name().to_str()
         {
             names.insert(name.to_string());
@@ -733,6 +742,7 @@ mod tests {
     fn config_dir_candidates_read_external_presets_without_creating_config() {
         let _guard = env_lock();
         let dir = temp_dir("config-dir");
+        std::fs::create_dir_all(dir.join("presets/shell/.GiT")).unwrap();
         std::fs::create_dir_all(dir.join("presets/shell/custom-shell")).unwrap();
         std::fs::create_dir_all(dir.join("presets/app/custom-app")).unwrap();
         std::fs::create_dir_all(dir.join("presets/sys/custom-os")).unwrap();
@@ -761,6 +771,7 @@ mod tests {
             std::env::remove_var("SHINE_PRESETS");
         }
 
+        assert!(!category_names("shell").contains(".GiT"));
         assert!(category_names("shell").contains("custom-shell"));
         assert!(category_names("app").contains("custom-app"));
         assert!(sys_item_names().contains("custom-sys"));

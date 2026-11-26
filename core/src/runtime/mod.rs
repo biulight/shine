@@ -87,6 +87,7 @@ pub use pack::{
     PRESET_BUNDLE_SCHEMA_VERSION, PresetPackArtifactV1, PresetPackArtifactV2, PresetPackArtifactV3,
     PresetPackReportV1, PresetPackReportV2, PresetPackReportV3, pack_preset_path,
 };
+pub use path_text::is_git_metadata_entry;
 pub use planner::sys_profile_block_paths;
 pub use planner::{
     AppApprovedUpgradeOptions, AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest,

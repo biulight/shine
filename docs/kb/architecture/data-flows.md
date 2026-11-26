@@ -417,11 +417,13 @@ item succeeded. Validation rejection produces no execution events or effects. Se
 ## Preset source compatibility and migration
 
 `shine preset migrate` is routed before mutable config initialization. Default scope uses read-only
-discovery for the active external source and overlay; an explicit repository, category, or manifest
-path bypasses active-source selection. Core plans only `shine.toml` changes from one effective
-snapshot and returns a content-free report plus process-local candidate bytes. The CLI facade
-retains approval and execution order; `preset_migration/discovery.rs` returns named immutable
-inputs, `assessment.rs` validates candidates, `render.rs` formats reports/diffs, and `apply.rs`
+discovery for the active external source and overlay. It skips absent configuration files.
+Unreadable files and invalid source settings stop migration before planning. An explicit repository,
+category, or manifest path still requires discovery to identify the global managed checkout.
+Migration compares resolved source paths even when a project selects a different overlay. Core
+plans only `shine.toml` changes from one effective snapshot and returns a content-free report plus
+process-local candidate bytes. The CLI facade retains approval and execution order;
+`preset_migration/discovery.rs` returns named immutable inputs, `assessment.rs` validates candidates, `render.rs` formats reports/diffs, and `apply.rs`
 owns source checks, backup and edits. Source checks run before backup and again before applying
 any edit; each file is also checked immediately before its replacement/removal (ADR 0124).
 

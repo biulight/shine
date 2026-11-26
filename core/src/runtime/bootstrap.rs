@@ -4,7 +4,7 @@
 //! External directory discovery and snapshot construction stay reusable and
 //! testable by observing the selected host through `FileSystemHost`.
 
-use super::path_text::preset_path as logical_path;
+use super::path_text::{is_git_metadata_entry, preset_path as logical_path};
 use super::preset::PresetSnapshotBuilder;
 use super::{FileKind, FileSystemHost, PresetSnapshot, PresetSourceKind};
 use anyhow::{Context, Result};
@@ -107,6 +107,9 @@ async fn capture_preset_tree(
             .with_context(|| format!("reading preset directory {}", directory.display()))?;
         entries.sort();
         for path in entries {
+            if is_git_metadata_entry(&path) {
+                continue;
+            }
             let metadata = host
                 .metadata(&path)
                 .await
@@ -175,6 +178,35 @@ mod tests {
             Some(Path::new("/virtual/overlay/app/demo/shine.toml"))
         );
     }
+    #[tokio::test]
+    async fn git_metadata_changes_do_not_change_external_or_overlay_snapshots() {
+        let host = InMemoryHost::new();
+        host.put_file("/base/.gitignore", b"ignored".to_vec());
+        host.put_file("/overlay/app/demo/.github/config", b"config".to_vec());
+        let request = PresetSnapshotRequest {
+            source: PresetSnapshotSource::External("/base".into()),
+            overlay_root: Some("/overlay".into()),
+        };
+        let before = capture_preset_snapshot(&host, request.clone())
+            .await
+            .unwrap();
+        for path in ["/base/.git/objects/pack/data", "/overlay/app/demo/.GiT"] {
+            host.put_file(path, b"git metadata".to_vec());
+        }
+        let after = capture_preset_snapshot(&host, request).await.unwrap();
+        assert_eq!(after.get(".gitignore"), Some(b"ignored".as_slice()));
+        assert_eq!(
+            after.get("app/demo/.github/config"),
+            Some(b"config".as_slice())
+        );
+        assert_eq!(after.digest_v1().unwrap(), before.digest_v1().unwrap());
+        assert_eq!(after, before);
+        assert!(!host.operations().iter().any(|op| matches!(op,
+            crate::runtime::HostOperation::Read(path)
+                if path.components().any(|part| part.as_os_str().eq_ignore_ascii_case(".git"))
+        )));
+    }
+
     #[tokio::test]
     async fn linked_roots_capture_canonical_sources_but_skip_nested_links() {
         let host = InMemoryHost::new();

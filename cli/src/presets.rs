@@ -1,5 +1,6 @@
 use crate::output::escape_controls;
 use anyhow::{Context, Result, bail};
+use shine_core::runtime::is_git_metadata_entry;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -66,7 +67,9 @@ pub fn embedded_asset_paths(prefix: &str) -> Vec<String> {
     let mut paths = BTreeSet::new();
     for asset_path in PresetAssets::iter() {
         let relative: &str = asset_path.as_ref();
-        if filter.is_empty() || relative.starts_with(filter.as_str()) {
+        if (filter.is_empty() || relative.starts_with(filter.as_str()))
+            && !contains_git_metadata(relative)
+        {
             paths.insert(relative.to_string());
         }
     }
@@ -83,7 +86,7 @@ pub fn read_embedded_asset_bytes(path: &str) -> Option<Vec<u8>> {
 
 fn collect_overlay_paths(root: &Path, prefix: &str, out: &mut BTreeSet<String>) {
     let prefix_path = root.join(prefix);
-    if !prefix_path.is_dir() {
+    if contains_git_metadata(prefix) || !prefix_path.is_dir() {
         return;
     }
 
@@ -94,6 +97,9 @@ fn collect_overlay_paths(root: &Path, prefix: &str, out: &mut BTreeSet<String>) 
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            if is_git_metadata_entry(&path) {
+                continue;
+            }
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
@@ -121,8 +127,14 @@ fn collect_overlay_paths(root: &Path, prefix: &str, out: &mut BTreeSet<String>) 
     }
 }
 
+fn contains_git_metadata(path: &str) -> bool {
+    Path::new(path)
+        .components()
+        .any(|part| is_git_metadata_entry(Path::new(part.as_os_str())))
+}
+
 fn is_safe_asset_path(path: &str) -> bool {
-    !path.contains("..") && !Path::new(path).is_absolute()
+    !path.contains("..") && !Path::new(path).is_absolute() && !contains_git_metadata(path)
 }
 
 impl PresetAssetReader<'_> {

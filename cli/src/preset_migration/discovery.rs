@@ -10,25 +10,29 @@ pub(super) struct MigrationInputs {
 }
 
 pub(super) async fn migration_inputs(path: Option<&Path>) -> Result<MigrationInputs> {
-    let runtime = discover_runtime_paths_read_only().context("resolving active Preset paths")?;
+    let mut runtime = discover_migration_paths()
+        .await
+        .context("resolving active Preset paths")?;
+    let managed = match runtime.managed_overlay_dir {
+        Some(dir) => Some(canonical_source_root(dir).await?),
+        None => None,
+    };
     if let Some(path) = path {
-        let canonical = tokio::fs::canonicalize(path)
-            .await
-            .with_context(|| format!("resolving Preset path {}", path.display()))?;
+        let canonical = tokio::fs::canonicalize(path).await.with_context(|| {
+            format!(
+                "resolving Preset path {}",
+                crate::output::escape_controls(&path.display().to_string())
+            )
+        })?;
         let (root, selected) = explicit_scope(&canonical)?;
         let snapshot = capture_preset_snapshot(
             &RealHost,
             PresetSnapshotRequest {
-                source: PresetSnapshotSource::External(root.clone()),
+                source: PresetSnapshotSource::External(root),
                 overlay_root: None,
             },
         )
         .await?;
-        let managed = runtime
-            .managed_overlay
-            .then_some(runtime.presets_overlay_dir)
-            .flatten()
-            .filter(|overlay| canonical.starts_with(overlay));
         let scope = selected
             .as_ref()
             .and_then(|targets| targets.iter().next())
@@ -43,8 +47,18 @@ pub(super) async fn migration_inputs(path: Option<&Path>) -> Result<MigrationInp
         });
     }
 
+    // Compare edit origins and the globally owned checkout in the same path namespace,
+    // including when a project selects another overlay or refers to the mirror as its base.
+    if managed.is_some() {
+        if runtime.is_external_presets {
+            runtime.presets_dir = canonical_source_root(runtime.presets_dir).await?;
+        }
+        if let Some(dir) = runtime.presets_overlay_dir {
+            runtime.presets_overlay_dir = Some(canonical_source_root(dir).await?);
+        }
+    }
     let source = if runtime.is_external_presets {
-        PresetSnapshotSource::External(runtime.presets_dir.clone())
+        PresetSnapshotSource::External(runtime.presets_dir)
     } else {
         PresetSnapshotSource::Embedded(core_runtime::embedded_preset_files())
     };
@@ -52,14 +66,10 @@ pub(super) async fn migration_inputs(path: Option<&Path>) -> Result<MigrationInp
         &RealHost,
         PresetSnapshotRequest {
             source,
-            overlay_root: runtime.presets_overlay_dir.clone(),
+            overlay_root: runtime.presets_overlay_dir,
         },
     )
     .await?;
-    let managed = runtime
-        .managed_overlay
-        .then_some(runtime.presets_overlay_dir)
-        .flatten();
     Ok(MigrationInputs {
         snapshot,
         scope: "active".to_string(),
@@ -67,6 +77,20 @@ pub(super) async fn migration_inputs(path: Option<&Path>) -> Result<MigrationInp
         shine_dir: runtime.shine_dir,
         managed_overlay: managed,
     })
+}
+
+async fn canonical_source_root(path: PathBuf) -> Result<PathBuf> {
+    match tokio::fs::canonicalize(&path).await {
+        Ok(root) => Ok(root),
+        // A configured checkout may not have been created yet.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "resolving Preset source {}",
+                crate::output::escape_controls(&path.display().to_string())
+            )
+        }),
+    }
 }
 
 pub(super) fn explicit_scope(path: &Path) -> Result<(PathBuf, Option<BTreeSet<String>>)> {
