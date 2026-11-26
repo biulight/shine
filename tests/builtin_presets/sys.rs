@@ -314,13 +314,7 @@ async fn docker_bootstrap_skips_complete_packages_but_not_conflicts_or_partial_i
         runtime
             .host()
             .put_file("/var/lib/dpkg/status", status.into_bytes());
-        let request = SysBootstrapPlanRequest {
-            os_id: "ubuntu".into(),
-            item_ids: vec!["docker".into()],
-            sys_shell: "zsh".into(),
-            force_profile: false,
-            input_versions: Default::default(),
-        };
+        let request = item_request("ubuntu", "docker", "zsh");
         let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
         assert!(plan.is_ready(), "{plan:#?}");
         if !engine_present {
@@ -621,6 +615,65 @@ async fn built_in_sys_bootstrap_plan_is_ready_for_each_platform() {
     }
 }
 
+fn item_request(os_id: &str, item: &str, shell: &str) -> SysBootstrapPlanRequest {
+    SysBootstrapPlanRequest {
+        os_id: os_id.into(),
+        item_ids: vec![item.into()],
+        sys_shell: shell.into(),
+        force_profile: false,
+        input_versions: Default::default(),
+    }
+}
+
+fn bootstrap_context(
+    base: &shine_core::runtime::RuntimeContext,
+    shell: shine_core::runtime::ShellType,
+    path: &str,
+) -> shine_core::runtime::RuntimeContext {
+    let mut context = base.clone();
+    context.shell = shell;
+    context.shell_config_paths =
+        vec![cli::shells::get_shell_config_path(&shell, &context.home_dir).unwrap()];
+    context.shine_dir = context.home_dir.join(".shine");
+    context.path_env = Some(path.into());
+    context
+}
+
+#[cfg(unix)]
+fn alias_detection_command(
+    files: &mut std::collections::BTreeMap<String, Vec<u8>>,
+    tool: &str,
+) -> String {
+    let alias = format!("{tool}-fixture-{}", uuid::Uuid::new_v4());
+    let manifest = files.get_mut("sys/ubuntu/shine.toml").unwrap();
+    let text = std::str::from_utf8(manifest).unwrap();
+    let detection = format!(
+        r#"detect = {{ kind = "command", command = "{tool}", version_args = ["--version"] }}"#
+    );
+    assert_eq!(text.matches(&detection).count(), 1);
+    let aliased = detection.replace(&format!(r#""{tool}""#), &format!(r#""{alias}""#));
+    *manifest = text.replace(&detection, &aliased).into_bytes();
+    alias
+}
+
+#[cfg(unix)]
+async fn run_reviewed_bootstrap(
+    runtime: &shine_core::runtime::CoreRuntime<shine_core::runtime::RealHost>,
+    request: &SysBootstrapPlanRequest,
+) -> shine_core::runtime::SysBootstrapBatchReport {
+    let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+    let approval = shine_core::plan::PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime
+        .run_sys_bootstrap_approved(
+            request.clone(),
+            &approval,
+            &mut NoBootstrapInteraction,
+            &mut shine_core::runtime::NullObserver,
+        )
+        .await
+        .unwrap()
+}
+
 struct NoBootstrapInteraction;
 
 impl shine_core::runtime::RuntimeInteraction for NoBootstrapInteraction {
@@ -666,12 +719,7 @@ async fn installed_rust_bootstrap_delivers_cargo_path_on_each_platform() {
         ),
     ] {
         let embedded = super::support::runtime(platform);
-        let mut context = embedded.context().clone();
-        context.shell = shell_type;
-        context.shell_config_paths =
-            vec![cli::shells::get_shell_config_path(&shell_type, &context.home_dir).unwrap()];
-        context.path_env = Some(String::new());
-        context.shine_dir = context.home_dir.join(".shine");
+        let context = bootstrap_context(embedded.context(), shell_type, "");
         let host = InMemoryHost::new();
         let rustup = context
             .home_dir
@@ -696,13 +744,7 @@ async fn installed_rust_bootstrap_delivers_cargo_path_on_each_platform() {
         });
         receipt.save(&host, &context.shine_dir).await.unwrap();
         let runtime = CoreRuntime::new(host, context, embedded.presets().clone());
-        let request = SysBootstrapPlanRequest {
-            os_id: os_id.into(),
-            item_ids: vec!["rust".into()],
-            sys_shell: shell.into(),
-            force_profile: false,
-            input_versions: Default::default(),
-        };
+        let request = item_request(os_id, "rust", shell);
         let mut previous = None;
         for _ in 0..2 {
             let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
@@ -830,39 +872,20 @@ fn check_rust_profile_commands(shell: &str, profile: &str) {
 #[cfg(unix)]
 #[tokio::test]
 async fn atuin_first_install_is_detected_and_enables_shell_integration() {
-    use shine_core::plan::PlanApprovalV1;
     use shine_core::runtime::{
         CoreRuntime, RealHost, ShellType, SysItemStatus, SysRunManifest,
         capture_embedded_preset_snapshot,
     };
     for (shell, kind) in [("bash", ShellType::Bash), ("zsh", ShellType::Zsh)] {
         let embedded = super::support::runtime(RuntimePlatform::Linux);
-        let mut context = embedded.context().clone();
-        context.shell = kind;
-        context.shine_dir = context.home_dir.join(".shine");
-        context.shell_config_paths =
-            vec![cli::shells::get_shell_config_path(&kind, &context.home_dir).unwrap()];
-        context.path_env = Some("/usr/bin:/bin".into());
+        let context = bootstrap_context(embedded.context(), kind, "/usr/bin:/bin");
         let home = context.home_dir.clone();
         // Replace the network installer. Detection, approval, profile composition,
         // receipts and the embedded Atuin integrations all use production code.
         let mut files = embedded.presets().files().clone();
         // A unique detection alias prevents a developer's globally installed Atuin
         // from satisfying this fresh-install fixture through provider fallback roots.
-        let alias = format!("atuin-fixture-{}", uuid::Uuid::new_v4());
-        let manifest = String::from_utf8(files["sys/ubuntu/shine.toml"].clone()).unwrap();
-        let detection =
-            r#"detect = { kind = "command", command = "atuin", version_args = ["--version"] }"#;
-        assert_eq!(manifest.matches(detection).count(), 1);
-        files.insert(
-            "sys/ubuntu/shine.toml".into(),
-            manifest
-                .replace(
-                    detection,
-                    &detection.replace("\"atuin\"", &format!("\"{alias}\"")),
-                )
-                .into_bytes(),
-        );
+        let alias = alias_detection_command(&mut files, "atuin");
         files.insert(
             "sys/ubuntu/install/atuin.sh".into(),
             br#"set -eu
@@ -897,26 +920,10 @@ EOF
             context,
             capture_embedded_preset_snapshot(files.into_iter().collect()),
         );
-        let request = SysBootstrapPlanRequest {
-            os_id: "ubuntu".into(),
-            item_ids: vec!["atuin".into()],
-            sys_shell: shell.into(),
-            force_profile: false,
-            input_versions: Default::default(),
-        };
+        let request = item_request("ubuntu", "atuin", shell);
         assert!(!home.join(".atuin/bin/atuin").exists());
         for expected in [SysItemStatus::Installed, SysItemStatus::AlreadyInstalled] {
-            let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
-            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-            let report = runtime
-                .run_sys_bootstrap_approved(
-                    request.clone(),
-                    &approval,
-                    &mut NoBootstrapInteraction,
-                    &mut shine_core::runtime::NullObserver,
-                )
-                .await
-                .unwrap();
+            let report = run_reviewed_bootstrap(&runtime, &request).await;
             assert_eq!(report.outcomes[0].status, expected, "{:?}", report.outcomes);
             assert!(
                 report
@@ -1027,7 +1034,6 @@ exec /bin/bash "$1"
 #[cfg(unix)]
 #[tokio::test]
 async fn pnpm_first_install_is_detected_before_shell_activation() {
-    use shine_core::plan::PlanApprovalV1;
     use shine_core::runtime::{
         CoreRuntime, RealHost, ShellType, SysItemStatus, SysRunManifest,
         capture_embedded_preset_snapshot,
@@ -1038,31 +1044,13 @@ async fn pnpm_first_install_is_detected_before_shell_activation() {
         ("bash", ShellType::Bash, false),
     ] {
         let embedded = super::support::runtime(RuntimePlatform::Linux);
-        let mut context = embedded.context().clone();
-        context.shell = kind;
-        context.shine_dir = context.home_dir.join(".shine");
-        context.shell_config_paths =
-            vec![cli::shells::get_shell_config_path(&kind, &context.home_dir).unwrap()];
-        context.path_env = Some("/usr/bin:/bin".into());
+        let context = bootstrap_context(embedded.context(), kind, "/usr/bin:/bin");
         let home = context.home_dir.clone();
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(&context.shell_config_paths[0], "# existing startup\n").unwrap();
         let mut files = embedded.presets().files().clone();
         // Prevent an ambient pnpm in a provider root from hiding first-install failures.
-        let alias = format!("pnpm-fixture-{}", uuid::Uuid::new_v4());
-        let manifest = String::from_utf8(files["sys/ubuntu/shine.toml"].clone()).unwrap();
-        let detection =
-            r#"detect = { kind = "command", command = "pnpm", version_args = ["--version"] }"#;
-        assert_eq!(manifest.matches(detection).count(), 1);
-        files.insert(
-            "sys/ubuntu/shine.toml".into(),
-            manifest
-                .replace(
-                    detection,
-                    &detection.replace("\"pnpm\"", &format!("\"{alias}\"")),
-                )
-                .into_bytes(),
-        );
+        let alias = alias_detection_command(&mut files, "pnpm");
         let script = String::from_utf8(files["sys/ubuntu/install/pnpm.sh"].clone()).unwrap();
         files.insert(
             "sys/ubuntu/install/pnpm.sh".into(),
@@ -1095,30 +1083,14 @@ ln -s pnpm "$PNPM_HOME/bin/{alias}"
             context,
             capture_embedded_preset_snapshot(files.into_iter().collect()),
         );
-        let request = SysBootstrapPlanRequest {
-            os_id: "ubuntu".into(),
-            item_ids: vec!["pnpm".into()],
-            sys_shell: shell.into(),
-            force_profile: false,
-            input_versions: Default::default(),
-        };
+        let request = item_request("ubuntu", "pnpm", shell);
         let expected = if creates_binary {
             vec![SysItemStatus::Installed, SysItemStatus::AlreadyInstalled]
         } else {
             vec![SysItemStatus::Failed]
         };
         for status in expected {
-            let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
-            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-            let report = runtime
-                .run_sys_bootstrap_approved(
-                    request.clone(),
-                    &approval,
-                    &mut NoBootstrapInteraction,
-                    &mut shine_core::runtime::NullObserver,
-                )
-                .await
-                .unwrap();
+            let report = run_reviewed_bootstrap(&runtime, &request).await;
             assert_eq!(report.outcomes[0].status, status, "{:?}", report.outcomes);
         }
         let receipt = SysRunManifest::load(&RealHost, &runtime.context().shine_dir)

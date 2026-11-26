@@ -586,94 +586,25 @@ mod tests {
     }
 
     #[test]
-    fn plain_host_with_no_options_or_command() {
-        let ParsedSshArgs {
-            options,
-            host,
-            remote_command: command,
-        } = split_ssh_args(&["dev".to_string()]).unwrap();
-        assert!(options.is_empty());
-        assert_eq!(host, "dev");
-        assert!(command.is_empty());
-    }
-
-    #[test]
-    fn host_followed_by_a_remote_command() {
-        let args = vec!["dev".to_string(), "ls".to_string(), "-la".to_string()];
-        let ParsedSshArgs {
-            options,
-            host,
-            remote_command: command,
-        } = split_ssh_args(&args).unwrap();
-        assert!(options.is_empty());
-        assert_eq!(host, "dev");
-        assert_eq!(command, vec!["ls", "-la"]);
-    }
-
-    #[test]
-    fn value_option_with_separate_token() {
-        let args = vec!["-p".to_string(), "2222".to_string(), "dev".to_string()];
-        let ParsedSshArgs {
-            options,
-            host,
-            remote_command: command,
-        } = split_ssh_args(&args).unwrap();
-        assert_eq!(options, vec!["-p", "2222"]);
-        assert_eq!(host, "dev");
-        assert!(command.is_empty());
-    }
-
-    #[test]
-    fn value_option_with_attached_value() {
-        let args = vec!["-p2222".to_string(), "dev".to_string()];
-        let ParsedSshArgs {
-            options,
-            host,
-            remote_command: _command,
-        } = split_ssh_args(&args).unwrap();
-        assert_eq!(options, vec!["-p2222"]);
-        assert_eq!(host, "dev");
-    }
-
-    #[test]
-    fn repeated_o_option() {
-        let args = vec![
-            "-o".to_string(),
-            "ProxyJump=bastion".to_string(),
-            "dev".to_string(),
-        ];
-        let ParsedSshArgs {
-            options,
-            host,
-            remote_command: _command,
-        } = split_ssh_args(&args).unwrap();
-        assert_eq!(options, vec!["-o", "ProxyJump=bastion"]);
-        assert_eq!(host, "dev");
-    }
-
-    #[test]
-    fn bundled_boolean_flags_consume_no_value() {
-        let args = vec!["-vvv".to_string(), "dev".to_string()];
-        let ParsedSshArgs {
-            options,
-            host,
-            remote_command: _command,
-        } = split_ssh_args(&args).unwrap();
-        assert_eq!(options, vec!["-vvv"]);
-        assert_eq!(host, "dev");
-    }
-
-    #[test]
-    fn explicit_double_dash_separator() {
-        let args = vec!["--".to_string(), "dev".to_string(), "ls".to_string()];
-        let ParsedSshArgs {
-            options,
-            host,
-            remote_command: command,
-        } = split_ssh_args(&args).unwrap();
-        assert!(options.is_empty());
-        assert_eq!(host, "dev");
-        assert_eq!(command, vec!["ls"]);
+    fn splits_options_host_and_remote_command() {
+        let check = |args: &[&str], options: &[&str], command: &[&str]| {
+            let argv: Vec<_> = args.iter().map(|arg| (*arg).to_owned()).collect();
+            let parsed = split_ssh_args(&argv).unwrap();
+            assert_eq!(parsed.options, options, "{args:?}");
+            assert_eq!(parsed.host, "dev", "{args:?}");
+            assert_eq!(parsed.remote_command, command, "{args:?}");
+        };
+        check(&["dev"], &[], &[]);
+        check(&["dev", "ls", "-la"], &[], &["ls", "-la"]);
+        check(&["-p", "2222", "dev"], &["-p", "2222"], &[]);
+        check(&["-p2222", "dev"], &["-p2222"], &[]);
+        check(
+            &["-o", "ProxyJump=bastion", "dev"],
+            &["-o", "ProxyJump=bastion"],
+            &[],
+        );
+        check(&["-vvv", "dev"], &["-vvv"], &[]);
+        check(&["--", "dev", "ls"], &[], &["ls"]);
     }
 
     #[test]
@@ -684,6 +615,17 @@ mod tests {
     #[test]
     fn dangling_value_option_is_an_error() {
         assert!(split_ssh_args(&["-p".to_string()]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[track_caller]
+    fn wrapped_stdout(wrapped: &str) -> String {
+        let output = std::process::Command::new("sh")
+            .args(["-c", wrapped])
+            .output()
+            .expect("failed to run sh");
+        assert!(output.status.success(), "stderr: {:?}", output.stderr);
+        String::from_utf8(output.stdout).unwrap()
     }
 
     #[cfg(unix)]
@@ -700,16 +642,8 @@ mod tests {
             &BTreeMap::new(),
             &["echo".to_string(), "it's a test".to_string()],
         );
-        let output = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&wrapped)
-            .output()
-            .expect("failed to run sh");
-        assert!(output.status.success(), "stderr: {:?}", output.stderr);
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim_end(),
-            "it's a test"
-        );
+        let stdout = wrapped_stdout(&wrapped);
+        assert_eq!(stdout.trim_end(), "it's a test");
     }
 
     #[test]
@@ -847,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn wrapped_command_defaults_to_login_shell() {
+    fn wrapped_command_defaults_to_login_shell_without_theme() {
         let wrapped = build_wrapped_remote_command(
             "sid",
             "tok",
@@ -858,18 +792,6 @@ mod tests {
         );
         assert!(wrapped.contains(r#"exec "$SHELL" -l"#));
         assert!(wrapped.contains("trap \"rm -f $SHINE_SSH_REMOTE_SOCK\" EXIT"));
-    }
-
-    #[test]
-    fn wrapped_command_omits_theme_var_when_none() {
-        let wrapped = build_wrapped_remote_command(
-            "sid",
-            "tok",
-            "/tmp/.shine-ssh-sid.sock",
-            None,
-            &BTreeMap::new(),
-            &[],
-        );
         assert!(!wrapped.contains("SHINE_TERMINAL_THEME"));
     }
 
@@ -905,13 +827,8 @@ mod tests {
             &BTreeMap::new(),
             &["printenv".to_string(), "SHINE_TERMINAL_THEME".to_string()],
         );
-        let output = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&wrapped)
-            .output()
-            .expect("failed to run sh");
-        assert!(output.status.success(), "stderr: {:?}", output.stderr);
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "dark");
+        let stdout = wrapped_stdout(&wrapped);
+        assert_eq!(stdout.trim_end(), "dark");
     }
 
     #[cfg(unix)]
@@ -929,16 +846,8 @@ mod tests {
             &forwarded,
             &["printenv".to_string(), "REMOTE_VALUE".to_string()],
         );
-        let output = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&wrapped)
-            .output()
-            .expect("failed to run sh");
-        assert!(output.status.success(), "stderr: {:?}", output.stderr);
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "space ' quote $dollar\nand newline\n"
-        );
+        let stdout = wrapped_stdout(&wrapped);
+        assert_eq!(stdout, "space ' quote $dollar\nand newline\n");
     }
 
     #[test]

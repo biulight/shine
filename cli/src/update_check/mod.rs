@@ -503,20 +503,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_cached_version_uses_fresh_cache() {
-        let dir = make_temp_dir().await;
-        let cache_path = dir.join(UPDATE_CACHE_FILE);
-        store_cache(&cache_path, &Version::parse("0.2.3").unwrap(), 1_000)
-            .await
-            .unwrap();
-
-        let cached =
-            load_cached_version_if_fresh(&cache_path, 1_000 + UPDATE_CACHE_TTL.as_secs() - 1)
-                .await
-                .unwrap();
-        assert_eq!(cached, Some(Version::parse("0.2.3").unwrap()));
-
-        fs::remove_dir_all(dir).await.unwrap();
+    async fn cached_version_expires_at_ttl_boundary() {
+        let latest = Version::new(0, 2, 3);
+        let expires = 1_000 + UPDATE_CACHE_TTL.as_secs();
+        for (now, expected) in [(expires - 1, Some(&latest)), (expires, None)] {
+            let dir = make_temp_dir().await;
+            let path = dir.join(UPDATE_CACHE_FILE);
+            store_cache(&path, &latest, 1_000).await.unwrap();
+            let cached = load_cached_version_if_fresh(&path, now).await.unwrap();
+            assert_eq!(cached.as_ref(), expected, "cache read at {now}");
+            fs::remove_dir_all(dir).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -533,23 +530,7 @@ mod tests {
         let cached = load_cached_version_if_fresh(&cache_path, 1_001)
             .await
             .unwrap();
-        assert_eq!(cached, Some(Version::parse("0.2.3").unwrap()));
-
-        fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn load_cached_version_ignores_stale_cache() {
-        let dir = make_temp_dir().await;
-        let cache_path = dir.join(UPDATE_CACHE_FILE);
-        store_cache(&cache_path, &Version::parse("0.2.3").unwrap(), 1_000)
-            .await
-            .unwrap();
-
-        let cached = load_cached_version_if_fresh(&cache_path, 1_000 + UPDATE_CACHE_TTL.as_secs())
-            .await
-            .unwrap();
-        assert_eq!(cached, None);
+        assert_eq!(cached, Some(Version::new(0, 2, 3)));
 
         fs::remove_dir_all(dir).await.unwrap();
     }
@@ -573,14 +554,14 @@ mod tests {
         let dir = make_temp_dir().await;
         let cache_path = dir.join("nested").join(UPDATE_CACHE_FILE);
 
-        store_cache(&cache_path, &Version::parse("0.2.3").unwrap(), 1_000)
+        store_cache(&cache_path, &Version::new(0, 2, 3), 1_000)
             .await
             .unwrap();
 
         let cached = load_cached_version_if_fresh(&cache_path, 1_000 + 1)
             .await
             .unwrap();
-        assert_eq!(cached, Some(Version::parse("0.2.3").unwrap()));
+        assert_eq!(cached, Some(Version::new(0, 2, 3)));
 
         fs::remove_dir_all(dir).await.unwrap();
     }
@@ -605,33 +586,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rate_limit_cooldown_allows_changed_auth_mode() {
-        let dir = make_temp_dir().await;
-        let cache_path = dir.join(UPDATE_CACHE_FILE);
-        store_rate_limit_cache(&cache_path, 2_000, AuthMode::Anonymous)
-            .await
-            .unwrap();
-
-        guard_rate_limit_cooldown(&cache_path, 1_000, AuthMode::Token)
-            .await
-            .unwrap();
-
-        fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn rate_limit_cooldown_allows_expired_reset() {
-        let dir = make_temp_dir().await;
-        let cache_path = dir.join(UPDATE_CACHE_FILE);
-        store_rate_limit_cache(&cache_path, 2_000, AuthMode::Token)
-            .await
-            .unwrap();
-
-        guard_rate_limit_cooldown(&cache_path, 2_001, AuthMode::Token)
-            .await
-            .unwrap();
-
-        fs::remove_dir_all(dir).await.unwrap();
+    async fn rate_limit_cooldown_allows_changed_auth_mode_or_expired_reset() {
+        for (cached_mode, now) in [(AuthMode::Anonymous, 1_000), (AuthMode::Token, 2_001)] {
+            let dir = make_temp_dir().await;
+            let path = dir.join(UPDATE_CACHE_FILE);
+            store_rate_limit_cache(&path, 2_000, cached_mode)
+                .await
+                .unwrap();
+            guard_rate_limit_cooldown(&path, now, AuthMode::Token)
+                .await
+                .unwrap();
+            fs::remove_dir_all(dir).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -641,7 +607,7 @@ mod tests {
         store_rate_limit_cache(&cache_path, 2_000, AuthMode::Anonymous)
             .await
             .unwrap();
-        store_cache(&cache_path, &Version::parse("0.2.3").unwrap(), 1_000)
+        store_cache(&cache_path, &Version::new(0, 2, 3), 1_000)
             .await
             .unwrap();
 
@@ -661,7 +627,7 @@ mod tests {
         let config = Config::new_for_test(&dir);
         let cache_path = dir.join(UPDATE_CACHE_FILE);
 
-        store_cache(&cache_path, &Version::parse("0.2.3").unwrap(), 1_000)
+        store_cache(&cache_path, &Version::new(0, 2, 3), 1_000)
             .await
             .unwrap();
         assert!(

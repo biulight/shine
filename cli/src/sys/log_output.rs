@@ -398,6 +398,31 @@ impl StyledLog {
 mod tests {
     use super::*;
 
+    const LINE: &str = "sys_bootstrap_installer";
+    const PARTIAL: &str = "sys_bootstrap_installer_partial";
+    const PROGRESS: &str = "sys_bootstrap_installer_progress";
+    const TICK: &str = "sys_bootstrap_installer_tick";
+
+    #[derive(Default)]
+    struct OutputCapture {
+        output: InstallerOutput,
+        bytes: Vec<u8>,
+    }
+
+    impl OutputCapture {
+        fn emit(&mut self, surface: &Surface, event: Update<'_>) {
+            self.output.update(&mut self.bytes, event, surface).unwrap();
+        }
+
+        fn finish(&mut self, surface: &Surface) {
+            self.output.finish_on(&mut self.bytes, surface).unwrap();
+        }
+
+        fn text(&self) -> &str {
+            std::str::from_utf8(&self.bytes).unwrap()
+        }
+    }
+
     fn event<'a>(stream: &'a str, text: &'a str, code: &'a str) -> Update<'a> {
         Update {
             item: "yazi",
@@ -418,41 +443,17 @@ mod tests {
         // Cargo writes a padded progress row + CR, then erase-line and a status.
         // Timer flushes may split the erase or SGR sequence into empty fragments.
         for fragments in [vec!["\x1b[K"], vec!["\x1b[", "K", "\x1b[1m", "\x1b[92m"]] {
-            let mut output = InstallerOutput::default();
-            let mut bytes = Vec::new();
-            output
-                .update(
-                    &mut bytes,
-                    event(
-                        "stderr",
-                        "Building 139/686: futures-sink    ",
-                        "sys_bootstrap_installer_progress",
-                    ),
-                    &surface,
-                )
-                .unwrap();
+            let mut capture = OutputCapture::default();
+            capture.emit(
+                &surface,
+                event("stderr", "Building 139/686: futures-sink    ", PROGRESS),
+            );
             for fragment in fragments {
-                output
-                    .update(
-                        &mut bytes,
-                        event("stderr", fragment, "sys_bootstrap_installer_partial"),
-                        &surface,
-                    )
-                    .unwrap();
+                capture.emit(&surface, event("stderr", fragment, PARTIAL));
             }
-            bytes.clear();
-            output
-                .update(
-                    &mut bytes,
-                    event(
-                        "stderr",
-                        "Compiling powerfmt v0.2.0",
-                        "sys_bootstrap_installer",
-                    ),
-                    &surface,
-                )
-                .unwrap();
-            let text = String::from_utf8(bytes).unwrap();
+            capture.bytes.clear();
+            capture.emit(&surface, event("stderr", "Compiling powerfmt v0.2.0", LINE));
+            let text = capture.text();
             assert!(!text.contains("Building"), "{text:?}");
             assert!(text.contains("Compiling powerfmt v0.2.0"));
         }
@@ -468,19 +469,12 @@ mod tests {
                 color: false,
                 columns,
             };
-            let mut output = InstallerOutput::default();
-            let mut bytes = Vec::new();
+            let mut capture = OutputCapture::default();
             for text in ["Selecting package", "Unpacking package"] {
-                output
-                    .update(
-                        &mut bytes,
-                        event("stdout", text, "sys_bootstrap_installer"),
-                        &surface,
-                    )
-                    .unwrap();
+                capture.emit(&surface, event("stdout", text, LINE));
             }
             assert_eq!(
-                bytes,
+                capture.bytes,
                 b"    [yazi] Selecting package\r\n    [yazi] Unpacking package\r\n"
             );
             #[cfg(unix)]
@@ -520,10 +514,10 @@ mod tests {
                     unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &mode) },
                     0
                 );
-                slave.write_all(&bytes).unwrap();
-                let mut received = vec![0; bytes.len()];
+                slave.write_all(&capture.bytes).unwrap();
+                let mut received = vec![0; capture.bytes.len()];
                 master.read_exact(&mut received).unwrap();
-                assert_eq!(received, bytes);
+                assert_eq!(received, capture.bytes);
             }
         }
     }
@@ -536,34 +530,15 @@ mod tests {
             color: false,
             columns: 40,
         };
-        let mut output = InstallerOutput::default();
-        let mut bytes = Vec::new();
-        output
-            .update(
-                &mut bytes,
-                event("stdout", "10%", "sys_bootstrap_installer_progress"),
-                &surface,
-            )
-            .unwrap();
-        output
-            .update(
-                &mut bytes,
-                event("stdout", "20%", "sys_bootstrap_installer_progress"),
-                &surface,
-            )
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&bytes), "\r\x1b[2K    [yazi] 10%");
+        let mut capture = OutputCapture::default();
+        capture.emit(&surface, event("stdout", "10%", PROGRESS));
+        capture.emit(&surface, event("stdout", "20%", PROGRESS));
+        assert_eq!(capture.text(), "\r\x1b[2K    [yazi] 10%");
         // The periodic tick renders the newest coalesced value, even with no more child output.
-        output.last_draw = None;
-        output
-            .update(
-                &mut bytes,
-                event("stdout", "", "sys_bootstrap_installer_tick"),
-                &surface,
-            )
-            .unwrap();
-        output.finish_on(&mut bytes, &surface).unwrap();
-        let text = String::from_utf8(bytes).unwrap();
+        capture.output.last_draw = None;
+        capture.emit(&surface, event("stdout", "", TICK));
+        capture.finish(&surface);
+        let text = capture.text();
         assert!(text.contains("\r\x1b[2K    [yazi] 20%"));
         assert!(text.ends_with("    [yazi] 20%\r\n"));
         assert_eq!(text.matches('\n').count(), 1);
@@ -577,35 +552,12 @@ mod tests {
             color: true,
             columns: 80,
         };
-        let mut output = InstallerOutput::default();
-        let mut bytes = Vec::new();
-        output
-            .update(
-                &mut bytes,
-                event("stdout", "10%", "sys_bootstrap_installer_progress"),
-                &surface,
-            )
-            .unwrap();
-        output
-            .update(
-                &mut bytes,
-                event("stdout", "\x1b[0m", "sys_bootstrap_installer_partial"),
-                &surface,
-            )
-            .unwrap();
-        output
-            .update(
-                &mut bytes,
-                event("stdout", "", "sys_bootstrap_installer"),
-                &surface,
-            )
-            .unwrap();
-        assert!(
-            String::from_utf8(bytes)
-                .unwrap()
-                .ends_with("10%\x1b[0m\r\n")
-        );
-        assert!(output.active.is_none());
+        let mut capture = OutputCapture::default();
+        capture.emit(&surface, event("stdout", "10%", PROGRESS));
+        capture.emit(&surface, event("stdout", "\x1b[0m", PARTIAL));
+        capture.emit(&surface, event("stdout", "", LINE));
+        assert!(capture.text().ends_with("10%\x1b[0m\r\n"));
+        assert!(capture.output.active.is_none());
     }
 
     #[test]
@@ -616,39 +568,16 @@ mod tests {
             color: true,
             columns: 60,
         };
-        let mut output = InstallerOutput::default();
-        let mut bytes = Vec::new();
-        output
-            .update(
-                &mut bytes,
-                event(
-                    "stdout",
-                    "\x1b[31mDownloading",
-                    "sys_bootstrap_installer_progress",
-                ),
-                &surface,
-            )
-            .unwrap();
-        output
-            .update(
-                &mut bytes,
-                event("stderr", "warning", "sys_bootstrap_installer"),
-                &surface,
-            )
-            .unwrap();
-        output
-            .update(
-                &mut bytes,
-                event("stdout", "done\x1b[0m", "sys_bootstrap_installer"),
-                &surface,
-            )
-            .unwrap();
-        let text = String::from_utf8(bytes).unwrap();
+        let mut capture = OutputCapture::default();
+        capture.emit(&surface, event("stdout", "\x1b[31mDownloading", PROGRESS));
+        capture.emit(&surface, event("stderr", "warning", LINE));
+        capture.emit(&surface, event("stdout", "done\x1b[0m", LINE));
+        let text = capture.text();
         assert!(
             text.contains("    [yazi] warning\x1b[0m\r\n\r\x1b[2K    [yazi] \x1b[31mDownloading")
         );
         assert!(text.ends_with("    [yazi] \x1b[31mdone\x1b[0m\x1b[0m\r\n"));
-        assert!(output.active.is_none());
+        assert!(capture.output.active.is_none());
     }
 
     #[test]
@@ -659,44 +588,24 @@ mod tests {
             color: false,
             columns: 10,
         };
-        let mut output = InstallerOutput::default();
-        let mut bytes = Vec::new();
+        let mut capture = OutputCapture::default();
         for value in ["\x1b[31m10%", "20%\x1b[0m"] {
-            output
-                .update(
-                    &mut bytes,
-                    event("stdout", value, "sys_bootstrap_installer_progress"),
-                    &surface,
-                )
-                .unwrap();
+            capture.emit(&surface, event("stdout", value, PROGRESS));
         }
-        output.finish_on(&mut bytes, &surface).unwrap();
-        assert_eq!(
-            String::from_utf8(bytes).unwrap(),
-            "    [yazi] 10%\n    [yazi] 20%\n"
-        );
+        capture.finish(&surface);
+        assert_eq!(capture.text(), "    [yazi] 10%\n    [yazi] 20%\n");
         let surface = Surface {
             terminal: true,
             dynamic: true,
             color: false,
             columns: 80,
         };
-        let mut bytes = Vec::new();
+        capture.bytes.clear();
         for _ in 0..20 {
-            output
-                .update(
-                    &mut bytes,
-                    event(
-                        "stdout",
-                        &"x".repeat(8192),
-                        "sys_bootstrap_installer_partial",
-                    ),
-                    &surface,
-                )
-                .unwrap();
-            assert!(output.streams[0].pending.len() <= MAX_ROW_BYTES);
+            capture.emit(&surface, event("stdout", &"x".repeat(8192), PARTIAL));
+            assert!(capture.output.streams[0].pending.len() <= MAX_ROW_BYTES);
         }
-        output.finish_on(&mut bytes, &surface).unwrap();
+        capture.finish(&surface);
     }
 
     #[test]
@@ -707,48 +616,24 @@ mod tests {
             color: true,
             columns: 22,
         };
-        let mut output = InstallerOutput::default();
-        let mut bytes = Vec::new();
-        output
-            .update(
-                &mut bytes,
-                event(
-                    "stdout",
-                    "\x1b[32m中文中文中文中文中文",
-                    "sys_bootstrap_installer_progress",
-                ),
-                &surface,
-            )
-            .unwrap();
-        let row = String::from_utf8(bytes.clone()).unwrap();
+        let mut capture = OutputCapture::default();
+        capture.emit(
+            &surface,
+            event("stdout", "\x1b[32m中文中文中文中文中文", PROGRESS),
+        );
+        let row = capture.text();
         assert!(console::measure_text_width(&row.replace("\r\x1b[2K", "")) < surface.columns);
         surface.columns = 16;
-        output.last_draw = None;
-        output.dirty = true;
-        bytes.clear();
-        output
-            .update(
-                &mut bytes,
-                event("stdout", "", "sys_bootstrap_installer_tick"),
-                &surface,
-            )
-            .unwrap();
+        capture.output.last_draw = None;
+        capture.output.dirty = true;
+        capture.bytes.clear();
+        capture.emit(&surface, event("stdout", "", TICK));
         assert!(
-            console::measure_text_width(
-                &String::from_utf8(bytes.clone())
-                    .unwrap()
-                    .replace("\r\x1b[2K", "")
-            ) < surface.columns
+            console::measure_text_width(&capture.text().replace("\r\x1b[2K", "")) < surface.columns
         );
-        output
-            .update(
-                &mut bytes,
-                event("stdout", "", "sys_bootstrap_installer"),
-                &surface,
-            )
-            .unwrap();
-        assert!(String::from_utf8(bytes).unwrap().ends_with('\n'));
-        assert!(output.active.is_none());
+        capture.emit(&surface, event("stdout", "", LINE));
+        assert!(capture.text().ends_with('\n'));
+        assert!(capture.output.active.is_none());
     }
 
     #[test]
@@ -809,31 +694,24 @@ mod tests {
                     color,
                     columns: 80,
                 };
-                let mut output = InstallerOutput::default();
-                let mut bytes = Vec::new();
+                let mut capture = OutputCapture::default();
                 for (text, code) in [
-                    ("\x1b[32m\t", "sys_bootstrap_installer_partial"),
-                    (
-                        "execx($(starship init xonsh))\x1b[0m",
-                        "sys_bootstrap_installer",
-                    ),
+                    ("\x1b[32m\t", PARTIAL),
+                    ("execx($(starship init xonsh))\x1b[0m", LINE),
                 ] {
-                    output
-                        .update(
-                            &mut bytes,
-                            Update {
-                                item: "starship",
-                                stream: "stdout",
-                                text,
-                                code,
-                            },
-                            &surface,
-                        )
-                        .unwrap();
+                    capture.emit(
+                        &surface,
+                        Update {
+                            item: "starship",
+                            stream: "stdout",
+                            text,
+                            code,
+                        },
+                    );
                 }
-                output.finish_on(&mut bytes, &surface).unwrap();
-                let rendered = String::from_utf8(bytes).unwrap();
-                let plain = console::strip_ansi_codes(&rendered);
+                capture.finish(&surface);
+                let rendered = capture.text();
+                let plain = console::strip_ansi_codes(rendered);
                 assert!(!plain.contains("\\t"));
                 assert!(!plain.contains('\t'));
                 assert!(plain.contains("    [starship]     "));
@@ -859,31 +737,27 @@ mod tests {
 
     #[test]
     fn stream_and_item_styles_are_independent_and_tags_stay_aligned() {
-        let mut output = InstallerOutput::default();
-        output.streams[0].log.render("\x1b[31m", true);
-        assert!(output.streams[1].log.style.ansi().is_empty());
-        output.item = "rust".into();
-        let mut bytes = Vec::new();
-        output
-            .update(
-                &mut bytes,
-                Update {
-                    item: "yazi",
-                    stream: "stderr",
-                    text: "Compiling 中文",
-                    code: "sys_bootstrap_installer",
-                },
-                &Surface {
-                    terminal: false,
-                    dynamic: false,
-                    color: false,
-                    columns: 80,
-                },
-            )
-            .unwrap();
-        let row = String::from_utf8(bytes).unwrap();
-        assert!(output.streams[0].log.style.ansi().is_empty());
-        let plain = console::strip_ansi_codes(&row);
+        let mut capture = OutputCapture::default();
+        capture.output.streams[0].log.render("\x1b[31m", true);
+        assert!(capture.output.streams[1].log.style.ansi().is_empty());
+        capture.output.item = "rust".into();
+        capture.emit(
+            &Surface {
+                terminal: false,
+                dynamic: false,
+                color: false,
+                columns: 80,
+            },
+            Update {
+                item: "yazi",
+                stream: "stderr",
+                text: "Compiling 中文",
+                code: LINE,
+            },
+        );
+        let row = capture.text();
+        assert!(capture.output.streams[0].log.style.ansi().is_empty());
+        let plain = console::strip_ansi_codes(row);
         assert_eq!(plain, "    [yazi] Compiling 中文\n");
         assert_eq!(
             console::measure_text_width(plain.split_once('[').unwrap().0),

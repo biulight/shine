@@ -1735,6 +1735,49 @@ mod tests {
         RuntimeContext, RuntimePlatform,
     };
 
+    fn shell_context(root: &str, platform: RuntimePlatform) -> RuntimeContext {
+        let home = std::env::temp_dir().join(root);
+        let shine = home.join(".shine");
+        RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            shine.join("bin"),
+            platform,
+        )
+    }
+
+    fn targeted_plan(
+        operation: LifecycleOperation,
+        target: &str,
+    ) -> super::super::ShellPlanRequest {
+        super::super::ShellPlanRequest {
+            operation,
+            target: Some(target.into()),
+            force: false,
+            purge: false,
+            input_versions: Default::default(),
+        }
+    }
+
+    async fn uninstall_legacy(
+        runtime: &CoreRuntime<InMemoryHost>,
+        plan: &crate::plan::PlanV1,
+    ) -> ShellUninstallReport {
+        let approval = PlanApprovalV1::for_reviewed_plan(plan).unwrap();
+        runtime
+            .uninstall_shells_with_approval(
+                ShellUninstallRequest {
+                    target: Some("legacy".into()),
+                    dry_run: false,
+                    purge: false,
+                },
+                Some(&approval),
+            )
+            .await
+            .unwrap()
+    }
+
     #[test]
     fn shell_target_preserves_whitespace_identity() {
         for category in [" demo", "demo ", "demo\u{a0}"] {
@@ -1804,16 +1847,7 @@ content_hash = 1
     #[tokio::test]
     async fn native_cmd_legacy_receipt_upgrades_and_uninstalls_through_approval() {
         let host = InMemoryHost::new();
-        let home = std::env::temp_dir().join("shine-native-cmd-O'Connor");
-        let shine = home.join(".shine");
-        let bin = shine.join("bin");
-        let mut context = RuntimeContext::isolated(
-            home,
-            shine.clone(),
-            shine.join("presets"),
-            bin.clone(),
-            RuntimePlatform::Windows,
-        );
+        let mut context = shell_context("shine-native-cmd-O'Connor", RuntimePlatform::Windows);
         context.shell = ShellType::PowerShell;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
@@ -1831,7 +1865,9 @@ content_hash = 1
             })
             .await
             .unwrap();
-        let mut manifest = ShellManifest::load(&host, &shine).await.unwrap();
+        let mut manifest = ShellManifest::load(&host, &runtime.context().shine_dir)
+            .await
+            .unwrap();
         let entry = manifest.entries.first_mut().unwrap();
         assert_eq!(
             entry.launcher_format.as_deref(),
@@ -1839,8 +1875,8 @@ content_hash = 1
         );
         entry.launcher_format = None;
         let legacy_spec = shell_link_spec_from_manifest_entry(entry).unwrap();
-        let legacy_resources = prepare_launcher_resources(&bin, &legacy_spec);
-        let cmd = bin.join("run.cmd");
+        let legacy_resources = prepare_launcher_resources(&runtime.context().bin_dir, &legacy_spec);
+        let cmd = runtime.context().bin_dir.join("run.cmd");
         for resource in legacy_resources {
             if let super::super::launcher::PreparedLauncherResource::File {
                 destination,
@@ -1851,16 +1887,13 @@ content_hash = 1
                 host.put_file(destination, bytes);
             }
         }
-        manifest.save(&host, &shine).await.unwrap();
+        manifest
+            .save(&host, &runtime.context().shine_dir)
+            .await
+            .unwrap();
         let before = host.read(&cmd).await.unwrap();
         assert!(String::from_utf8_lossy(&before).contains("O''Connor"));
-        let request = super::super::ShellPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: Some("demo/run".into()),
-            force: false,
-            purge: false,
-            input_versions: Default::default(),
-        };
+        let request = targeted_plan(LifecycleOperation::Upgrade, "demo/run");
         let plan = runtime.plan_shells(request.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         runtime
@@ -1870,20 +1903,16 @@ content_hash = 1
         let after = host.read(&cmd).await.unwrap();
         assert_ne!(before, after);
         assert!(!String::from_utf8_lossy(&after).contains("O''Connor"));
-        let manifest = ShellManifest::load(&host, &shine).await.unwrap();
+        let manifest = ShellManifest::load(&host, &runtime.context().shine_dir)
+            .await
+            .unwrap();
         assert_eq!(
             manifest.entries[0].launcher_format.as_deref(),
             Some(NATIVE_CMD_LAUNCHER_FORMAT)
         );
         // The newly written native-cmd-v2 receipt must converge on the next review.
         let current = runtime
-            .plan_shells(super::super::ShellPlanRequest {
-                operation: LifecycleOperation::Upgrade,
-                target: Some("demo/run".into()),
-                force: false,
-                purge: false,
-                input_versions: Default::default(),
-            })
+            .plan_shells(targeted_plan(LifecycleOperation::Upgrade, "demo/run"))
             .await
             .unwrap();
         assert!(
@@ -1898,13 +1927,7 @@ content_hash = 1
             runtime.inspect_shells().await.unwrap()[0].status,
             crate::runtime::InspectionFileStatus::UpToDate
         );
-        let request = super::super::ShellPlanRequest {
-            operation: LifecycleOperation::Uninstall,
-            target: Some("demo/run".into()),
-            force: false,
-            purge: false,
-            input_versions: Default::default(),
-        };
+        let request = targeted_plan(LifecycleOperation::Uninstall, "demo/run");
         let approval =
             PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(request.clone()).await.unwrap())
                 .unwrap();
@@ -1939,50 +1962,30 @@ commands = ["git"]
             .permissions
             .as_ref()
             .or(parsed.permission_defaults.as_ref())
+            .unwrap()
+            .permission_set()
             .unwrap();
         let overridden = files[1]
             .permissions
             .as_ref()
             .or(parsed.permission_defaults.as_ref())
+            .unwrap()
+            .permission_set()
             .unwrap();
 
-        assert!(
-            inherited
-                .permission_set()
-                .unwrap()
-                .contains(&PermissionV1::OpaqueCode {
-                    scope: OpaqueCodeScopeV1::Unrestricted,
-                })
-        );
-        assert!(
-            !overridden
-                .permission_set()
-                .unwrap()
-                .contains(&PermissionV1::OpaqueCode {
-                    scope: OpaqueCodeScopeV1::Unrestricted,
-                })
-        );
-        assert!(
-            overridden
-                .permission_set()
-                .unwrap()
-                .contains(&PermissionV1::Command {
-                    program: "git".to_string(),
-                })
-        );
+        let unrestricted = PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        };
+        assert!(inherited.contains(&unrestricted));
+        assert!(!overridden.contains(&unrestricted));
+        assert!(overridden.contains(&PermissionV1::Command {
+            program: "git".into()
+        }));
     }
 
     #[tokio::test]
     async fn shell_permission_defaults_apply_to_compatible_auto_discovery() {
-        let home = std::env::temp_dir().join("shine-shell-permission-defaults");
-        let shine = home.join(".shine");
-        let mut context = RuntimeContext::isolated(
-            home,
-            shine.clone(),
-            shine.join("presets"),
-            shine.join("bin"),
-            RuntimePlatform::Linux,
-        );
+        let mut context = shell_context("shine-shell-permission-defaults", RuntimePlatform::Linux);
         context.shell = ShellType::Bash;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
             .file(
@@ -2017,16 +2020,7 @@ commands = ["git"]
     #[tokio::test]
     async fn in_memory_shell_lifecycle_covers_cache_launcher_profile_and_receipt() {
         let host = InMemoryHost::new();
-        let home_dir = std::env::temp_dir().join("shine-core-shell-lifecycle");
-        let shine_dir = home_dir.join(".shine");
-        let bin_dir = shine_dir.join("bin");
-        let mut context = RuntimeContext::isolated(
-            home_dir,
-            shine_dir.clone(),
-            shine_dir.join("presets"),
-            bin_dir.clone(),
-            RuntimePlatform::Linux,
-        );
+        let mut context = shell_context("shine-core-shell-lifecycle", RuntimePlatform::Linux);
         context.shell = ShellType::Bash;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
@@ -2037,7 +2031,8 @@ commands = ["git"]
             .file("shell/tools/tool.sh", b"#!/bin/sh\necho tool\n".to_vec())
             .build();
         let runtime = CoreRuntime::new(host.clone(), context, snapshot);
-        let launcher_path = command_path_for_name(&bin_dir, std::ffi::OsStr::new("tool"));
+        let launcher_path =
+            command_path_for_name(&runtime.context().bin_dir, std::ffi::OsStr::new("tool"));
 
         let installed = runtime
             .install_shells(ShellLifecycleRequest {
@@ -2051,7 +2046,7 @@ commands = ["git"]
         assert_eq!(installed.links.created.len(), 1);
         assert!(host.metadata(&launcher_path).await.is_ok());
         assert!(
-            host.read(&shine_dir.join("shell-manifest.toml"))
+            host.read(&runtime.context().shine_dir.join("shell-manifest.toml"))
                 .await
                 .unwrap()
                 .starts_with(b"schema_version = 2")
@@ -2080,17 +2075,7 @@ commands = ["git"]
     #[tokio::test]
     async fn approved_uninstall_removes_receiptless_legacy_launcher_and_reconciles_profile() {
         let host = InMemoryHost::new();
-        let home_dir = std::env::temp_dir().join("shine-core-legacy-shell-uninstall");
-        let shine_dir = home_dir.join(".shine");
-        let presets_dir = shine_dir.join("presets");
-        let bin_dir = shine_dir.join("bin");
-        let context = RuntimeContext::isolated(
-            home_dir,
-            shine_dir.clone(),
-            presets_dir.clone(),
-            bin_dir.clone(),
-            RuntimePlatform::Linux,
-        );
+        let context = shell_context("shine-core-legacy-shell-uninstall", RuntimePlatform::Linux);
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "shell/legacy/shine.toml",
@@ -2100,21 +2085,18 @@ commands = ["git"]
             .file("shell/legacy/tool.sh", b"#!/bin/sh\n".to_vec())
             .build();
         let runtime = CoreRuntime::new(host.clone(), context, snapshot);
-        let legacy_source = presets_dir.join("shell/legacy/tool.sh");
-        let launcher = command_path_for_name(&bin_dir, std::ffi::OsStr::new("tool"));
+        let legacy_source = runtime.context().presets_dir.join("shell/legacy/tool.sh");
+        let launcher =
+            command_path_for_name(&runtime.context().bin_dir, std::ffi::OsStr::new("tool"));
         host.symlink(&legacy_source, &launcher).await.unwrap();
-        let managed_profile =
-            super::super::managed_shell_profile_path(&shine_dir, runtime.context().shell);
+        let managed_profile = super::super::managed_shell_profile_path(
+            &runtime.context().shine_dir,
+            runtime.context().shell,
+        );
         host.put_file(&managed_profile, b"legacy profile\n".to_vec());
 
         let plan = runtime
-            .plan_shells(super::super::ShellPlanRequest {
-                operation: LifecycleOperation::Uninstall,
-                target: Some("legacy".to_string()),
-                force: false,
-                purge: false,
-                input_versions: super::super::PlanningInputVersions::default(),
-            })
+            .plan_shells(targeted_plan(LifecycleOperation::Uninstall, "legacy"))
             .await
             .unwrap();
         assert!(plan.is_ready());
@@ -2127,31 +2109,25 @@ commands = ["git"]
         }));
         assert!(plan.steps.iter().any(|step| step.target == "shell/profile"));
 
-        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-        runtime
-            .uninstall_shells_with_approval(
-                ShellUninstallRequest {
-                    target: Some("legacy".to_string()),
-                    dry_run: false,
-                    purge: false,
-                },
-                Some(&approval),
-            )
-            .await
-            .unwrap();
+        uninstall_legacy(&runtime, &plan).await;
 
         assert!(host.metadata(&launcher).await.is_err());
         assert!(
-            host.metadata(&shine_dir.join(super::super::SHELL_OPERATION_JOURNAL_FILE))
-                .await
-                .is_err()
+            host.metadata(
+                &runtime
+                    .context()
+                    .shine_dir
+                    .join(super::super::SHELL_OPERATION_JOURNAL_FILE)
+            )
+            .await
+            .is_err()
         );
         assert_ne!(
             host.read(&managed_profile).await.unwrap(),
             b"legacy profile\n"
         );
         assert!(
-            host.read(&shine_dir.join(SHELL_MANIFEST_FILE))
+            host.read(&runtime.context().shine_dir.join(SHELL_MANIFEST_FILE))
                 .await
                 .unwrap()
                 .starts_with(b"schema_version = 2")
@@ -2162,15 +2138,8 @@ commands = ["git"]
     #[tokio::test]
     async fn approved_uninstall_removes_receiptless_legacy_windows_launcher_pair() {
         let host = InMemoryHost::new();
-        let home_dir = std::env::temp_dir().join("shine-core-legacy-windows-shell-uninstall");
-        let shine_dir = home_dir.join(".shine");
-        let presets_dir = shine_dir.join("presets");
-        let bin_dir = shine_dir.join("bin");
-        let context = RuntimeContext::isolated(
-            home_dir,
-            shine_dir.clone(),
-            presets_dir.clone(),
-            bin_dir.clone(),
+        let context = shell_context(
+            "shine-core-legacy-windows-shell-uninstall",
             RuntimePlatform::Windows,
         );
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
@@ -2182,8 +2151,9 @@ commands = ["git"]
             .file("shell/legacy/tool.ps1", b"Write-Output 'legacy'\n".to_vec())
             .build();
         let runtime = CoreRuntime::new(host.clone(), context, snapshot);
-        let legacy_source = presets_dir.join("shell/legacy/tool.ps1");
-        let launcher = command_path_for_name(&bin_dir, std::ffi::OsStr::new("tool"));
+        let legacy_source = runtime.context().presets_dir.join("shell/legacy/tool.ps1");
+        let launcher =
+            command_path_for_name(&runtime.context().bin_dir, std::ffi::OsStr::new("tool"));
         let marker = format!(
             "# shine-managed\r\n# shine-target: {}\r\n",
             legacy_source.display()
@@ -2192,13 +2162,7 @@ commands = ["git"]
         host.put_file(launcher.with_extension("cmd"), marker.as_bytes().to_vec());
 
         let plan = runtime
-            .plan_shells(super::super::ShellPlanRequest {
-                operation: LifecycleOperation::Uninstall,
-                target: Some("legacy".to_string()),
-                force: false,
-                purge: false,
-                input_versions: super::super::PlanningInputVersions::default(),
-            })
+            .plan_shells(targeted_plan(LifecycleOperation::Uninstall, "legacy"))
             .await
             .unwrap();
         assert!(plan.is_ready());
@@ -2209,18 +2173,7 @@ commands = ["git"]
                     .contains(&"shell_legacy_launcher_remove_transaction".to_string())
         }));
 
-        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-        let report = runtime
-            .uninstall_shells_with_approval(
-                ShellUninstallRequest {
-                    target: Some("legacy".to_string()),
-                    dry_run: false,
-                    purge: false,
-                },
-                Some(&approval),
-            )
-            .await
-            .unwrap();
+        let report = uninstall_legacy(&runtime, &plan).await;
 
         assert_eq!(report.links.removed.len(), 2);
         assert!(host.metadata(&launcher).await.is_err());
@@ -2230,9 +2183,14 @@ commands = ["git"]
                 .is_err()
         );
         assert!(
-            host.metadata(&shine_dir.join(super::super::SHELL_OPERATION_JOURNAL_FILE))
-                .await
-                .is_err()
+            host.metadata(
+                &runtime
+                    .context()
+                    .shine_dir
+                    .join(super::super::SHELL_OPERATION_JOURNAL_FILE)
+            )
+            .await
+            .is_err()
         );
     }
 

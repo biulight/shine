@@ -250,6 +250,31 @@ impl Drop for TempFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::process::Stdio;
+
+    #[cfg(unix)]
+    fn shell_child(script: &str, stdin: Stdio) -> tokio::process::Child {
+        tokio::process::Command::new("sh")
+            .args(["-c", script])
+            .stdin(stdin)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[track_caller]
+    fn assert_child_reaped(pid: u32) {
+        // Signal zero probes existence, including children still waiting to be reaped.
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -258,13 +283,7 @@ mod tests {
             "head -c 97 /dev/zero; exec sleep 30",
             "head -c 65537 /dev/zero >&2; exec sleep 30",
         ] {
-            let child = tokio::process::Command::new("sh")
-                .args(["-c", script])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .unwrap();
+            let child = shell_child(script, Stdio::inherit());
             let pid = child.id().unwrap();
             let error = tokio::time::timeout(
                 std::time::Duration::from_secs(3),
@@ -274,25 +293,14 @@ mod tests {
             .expect("key output overflow must not wait for backend exit")
             .unwrap_err();
             assert_eq!(error.to_string(), "hybrid unwrap output exceeds limit");
-            assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
-            assert_eq!(
-                std::io::Error::last_os_error().raw_os_error(),
-                Some(libc::ESRCH)
-            );
+            assert_child_reaped(pid);
         }
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn binary_encryption_drains_output_while_writing_large_input() {
-        let child = tokio::process::Command::new("sh")
-            .args(["-c", "dd if=/dev/zero bs=16384 count=64 >&2; cat"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+        let child = shell_child("dd if=/dev/zero bs=16384 count=64 >&2; cat", Stdio::piped());
         let input: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -307,14 +315,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn binary_encryption_output_limit_kills_and_reaps_child() {
-        let child = tokio::process::Command::new("sh")
-            .args(["-c", "printf 12345; exec sleep 30"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+        let child = shell_child("printf 12345; exec sleep 30", Stdio::piped());
         let pid = child.id().unwrap();
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(3),
@@ -326,24 +327,13 @@ mod tests {
             result.unwrap_err().to_string(),
             "secret output exceeds size limit"
         );
-        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
+        assert_child_reaped(pid);
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn binary_encryption_input_failure_kills_and_reaps_child() {
-        let child = tokio::process::Command::new("sh")
-            .args(["-c", "exec 0<&-; exec sleep 30"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+        let child = shell_child("exec 0<&-; exec sleep 30", Stdio::piped());
         let pid = child.id().unwrap();
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(3),
@@ -352,24 +342,13 @@ mod tests {
         .await
         .expect("stdin failure must not wait for backend exit");
         assert!(result.is_err());
-        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
+        assert_child_reaped(pid);
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn encryption_drains_both_pipes_while_writing_large_input() {
-        let child = tokio::process::Command::new("sh")
-            .args(["-c", "dd if=/dev/zero bs=16384 count=64 >&2; cat"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+        let child = shell_child("dd if=/dev/zero bs=16384 count=64 >&2; cat", Stdio::piped());
         let input = vec![b'x'; 1024 * 1024];
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -386,14 +365,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn encryption_input_failure_kills_and_reaps_child() {
-        let child = tokio::process::Command::new("sh")
-            .args(["-c", "exec 0<&-; exec sleep 30"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+        let child = shell_child("exec 0<&-; exec sleep 30", Stdio::piped());
         let pid = child.id().unwrap();
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -402,12 +374,7 @@ mod tests {
         .await
         .unwrap();
         assert!(result.is_err());
-        // Signal zero only probes existence; successful cleanup must reap the child.
-        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
+        assert_child_reaped(pid);
     }
 
     #[tokio::test]

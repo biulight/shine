@@ -1,5 +1,10 @@
 use super::*;
 
+fn isolated_config() -> Config {
+    let root = std::env::temp_dir().join(format!("shine-workspace-{}", uuid::Uuid::new_v4()));
+    Config::new_for_test(&root)
+}
+
 #[test]
 fn snapshot_v2_protocol_vector() {
     let sources = vec![
@@ -412,9 +417,7 @@ fn rendered_source_includes_an_empty_secret_template() {
 
 #[tokio::test]
 async fn dotenv_init_creates_vite_ordered_workspace_without_touching_sources() {
-    let directory =
-        std::env::temp_dir().join(format!("shine-dotenv-init-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&directory).await.unwrap();
+    let directory = crate::test_support::make_temp_dir("shine-dotenv-init").await;
     tokio::fs::write(
         directory.join(".env"),
         "VITE_API=https://api.example.test\nTOKEN=unsealed\n",
@@ -614,14 +617,11 @@ fn source_rejects_duplicate_plain_and_secret_keys() {
 
 #[test]
 fn seal_encryption_gpg_recipients_priority_is_cli_workspace_config() {
-    let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
-    let mut config = Config::new_for_test(&dir);
+    let mut config = isolated_config();
     config.gpg_recipients = vec!["global-one".to_string(), "global-two".to_string()];
     let workspace_encryption = Encryption {
-        legacy_recipient: None,
         gpg_recipients: vec!["workspace-one".to_string(), "workspace-two".to_string()],
-        backend: None,
-        age_recipients: Vec::new(),
+        ..Default::default()
     };
 
     let cli = resolve_seal_encryption(
@@ -647,8 +647,7 @@ fn seal_encryption_gpg_recipients_priority_is_cli_workspace_config() {
 
 #[test]
 fn seal_encryption_returns_none_when_nothing_configured() {
-    let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
-    let config = Config::new_for_test(&dir);
+    let config = isolated_config();
 
     assert!(
         resolve_seal_encryption(None, &[], None, &config)
@@ -659,15 +658,12 @@ fn seal_encryption_returns_none_when_nothing_configured() {
 
 #[test]
 fn seal_encryption_age_recipients_prefer_workspace_over_config() {
-    let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
-    let mut config = Config::new_for_test(&dir);
+    let mut config = isolated_config();
     config.secret_backend = Some("age".to_string());
     config.age_recipients = vec!["age1config".to_string()];
     let workspace_encryption = Encryption {
-        legacy_recipient: None,
-        gpg_recipients: Vec::new(),
-        backend: None,
         age_recipients: vec!["age1workspace".to_string()],
+        ..Default::default()
     };
 
     let resolved =
@@ -676,32 +672,20 @@ fn seal_encryption_age_recipients_prefer_workspace_over_config() {
         matches!(resolved, Some(EncryptRecipients::Age(values)) if values == ["age1workspace"])
     );
 
-    let fallback = resolve_seal_encryption(
-        None,
-        &[],
-        Some(&Encryption {
-            legacy_recipient: None,
-            gpg_recipients: Vec::new(),
-            backend: None,
-            age_recipients: Vec::new(),
-        }),
-        &config,
-    )
-    .unwrap();
+    let fallback =
+        resolve_seal_encryption(None, &[], Some(&Encryption::default()), &config).unwrap();
     assert!(matches!(fallback, Some(EncryptRecipients::Age(values)) if values == ["age1config"]));
 }
 
 #[test]
 fn seal_encryption_backend_priority_is_cli_workspace_config() {
-    let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
-    let mut config = Config::new_for_test(&dir);
+    let mut config = isolated_config();
     config.secret_backend = Some("age".to_string());
     config.gpg_recipients = vec!["global".to_string()];
     let workspace_encryption = Encryption {
-        legacy_recipient: None,
         gpg_recipients: vec!["workspace".to_string()],
         backend: Some("gpg".to_string()),
-        age_recipients: Vec::new(),
+        ..Default::default()
     };
 
     let resolved =
@@ -717,8 +701,7 @@ fn seal_encryption_backend_priority_is_cli_workspace_config() {
 
 #[tokio::test]
 async fn plain_sources_merge_in_declared_order() {
-    let directory = std::env::temp_dir().join(format!("shine-workspace-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&directory).await.unwrap();
+    let directory = crate::test_support::make_temp_dir("shine-workspace").await;
     let base = directory.join("base.toml");
     let local = directory.join("local.toml");
     tokio::fs::write(&base, "version = 1\n[plain]\nA = \"base\"\nB = \"base\"\n")
@@ -863,9 +846,7 @@ fn broker_preserves_source_precedence_and_releases_only_winning_secrets() {
 
 #[tokio::test]
 async fn workspace_export_plain_is_standalone_and_respects_secret_shadowing() {
-    let directory =
-        std::env::temp_dir().join(format!("shine-workspace-export-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&directory).await.unwrap();
+    let directory = crate::test_support::make_temp_dir("shine-workspace-export").await;
     let workspace_path = directory.join(WORKSPACE_FILE);
     tokio::fs::write(
         &workspace_path,
@@ -888,38 +869,7 @@ async fn workspace_export_plain_is_standalone_and_respects_secret_shadowing() {
     let output = directory.join(".env.production.local");
     let config = Config::new_for_test(&directory);
 
-    handle_export(
-        &config,
-        EnvWorkspaceExportFormat::Dotenv,
-        Some(&workspace_path),
-        "production",
-        &output,
-        false,
-        false,
-        true,
-    )
-    .await
-    .unwrap();
-    assert!(!output.exists());
-
-    handle_export(
-        &config,
-        EnvWorkspaceExportFormat::Dotenv,
-        Some(&workspace_path),
-        "production",
-        &output,
-        false,
-        false,
-        false,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        tokio::fs::read_to_string(&output).await.unwrap(),
-        "PUBLIC=\"production\"\n"
-    );
-    assert!(
+    let export = |dry_run| {
         handle_export(
             &config,
             EnvWorkspaceExportFormat::Dotenv,
@@ -928,21 +878,31 @@ async fn workspace_export_plain_is_standalone_and_respects_secret_shadowing() {
             &output,
             false,
             false,
-            false,
+            dry_run,
         )
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("--force")
+    };
+    export(true).await.unwrap();
+    assert!(!output.exists());
+
+    export(false).await.unwrap();
+
+    assert_eq!(
+        tokio::fs::read_to_string(&output).await.unwrap(),
+        "PUBLIC=\"production\"\n"
+    );
+    assert!(
+        export(false)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("--force")
     );
     tokio::fs::remove_dir_all(directory).await.unwrap();
 }
 
 #[tokio::test]
 async fn workspace_export_requires_explicit_secret_inclusion() {
-    let directory =
-        std::env::temp_dir().join(format!("shine-workspace-export-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&directory).await.unwrap();
+    let directory = crate::test_support::make_temp_dir("shine-workspace-export").await;
     let source = directory.join("source.toml");
     tokio::fs::write(
         &source,
@@ -966,8 +926,7 @@ async fn workspace_export_requires_explicit_secret_inclusion() {
 
 #[tokio::test]
 async fn plain_only_source_can_be_sealed_without_recipient() {
-    let directory = std::env::temp_dir().join(format!("shine-seal-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&directory).await.unwrap();
+    let directory = crate::test_support::make_temp_dir("shine-seal").await;
     let path = directory.join("env.toml");
     tokio::fs::write(&path, "version = 1\n[plain]\nNAME = \"shine\"\n")
         .await
@@ -1010,8 +969,7 @@ async fn run_command_injects_workspace_values() {
 
 #[tokio::test]
 async fn explicit_values_support_aliases_and_multiple_keys() {
-    let directory = std::env::temp_dir().join(format!("shine-with-{}", uuid::Uuid::new_v4()));
-    let mut config = Config::new_for_test(&directory);
+    let mut config = isolated_config();
     config.env.insert("TOKEN_A".into(), "alpha".into());
     config.env.insert("TOKEN_B".into(), "beta".into());
 
@@ -1026,8 +984,7 @@ async fn explicit_values_support_aliases_and_multiple_keys() {
 
 #[tokio::test]
 async fn explicit_values_reject_duplicate_targets_before_resolution() {
-    let directory = std::env::temp_dir().join(format!("shine-with-{}", uuid::Uuid::new_v4()));
-    let config = Config::new_for_test(&directory);
+    let config = isolated_config();
 
     let error = resolve_explicit_values(&config, &["TOKEN_A=TOKEN".into(), "TOKEN_B=TOKEN".into()])
         .await
@@ -1039,8 +996,7 @@ async fn explicit_values_reject_duplicate_targets_before_resolution() {
 #[cfg(unix)]
 #[tokio::test]
 async fn no_workspace_injects_explicit_without_discovery() {
-    let directory = std::env::temp_dir().join(format!("shine-nows-{}", uuid::Uuid::new_v4()));
-    let mut config = Config::new_for_test(&directory);
+    let mut config = isolated_config();
     config.env.insert("SHINE_NOWS_TOKEN".into(), "alpha".into());
 
     // no_workspace = true must skip discovery entirely and inject only --with.
@@ -1065,8 +1021,7 @@ async fn no_workspace_injects_explicit_without_discovery() {
 #[cfg(unix)]
 #[tokio::test]
 async fn no_workspace_allows_empty_with() {
-    let directory = std::env::temp_dir().join(format!("shine-nows-empty-{}", uuid::Uuid::new_v4()));
-    let config = Config::new_for_test(&directory);
+    let config = isolated_config();
 
     handle_run(
         &config,
@@ -1088,8 +1043,7 @@ async fn no_workspace_allows_empty_with() {
 
 #[tokio::test]
 async fn explicit_values_reject_invalid_or_missing_keys() {
-    let directory = std::env::temp_dir().join(format!("shine-with-{}", uuid::Uuid::new_v4()));
-    let config = Config::new_for_test(&directory);
+    let config = isolated_config();
 
     let invalid = resolve_explicit_values(&config, &["BAD-KEY".into()])
         .await

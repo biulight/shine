@@ -269,41 +269,46 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
         )
         .await
         .unwrap();
-        fs::write(app_dir.join("first.txt"), b"fallback-first\n")
+        let stems: &[&str] = if two_files {
+            &["first", "second"]
+        } else {
+            &["first"]
+        };
+        for stem in stems {
+            fs::write(
+                app_dir.join(format!("{stem}.txt")),
+                format!("fallback-{stem}\n"),
+            )
             .await
             .unwrap();
-        fs::write(app_dir.join("first.payload"), b"first-v1\n")
+            fs::write(
+                app_dir.join(format!("{stem}.payload")),
+                format!("{stem}-v1\n"),
+            )
             .await
             .unwrap();
-        write_generator(&app_dir.join("first.sh"), "first").await;
-        if two_files {
-            fs::write(app_dir.join("second.txt"), b"fallback-second\n")
-                .await
-                .unwrap();
-            fs::write(app_dir.join("second.payload"), b"second-v1\n")
-                .await
-                .unwrap();
-            write_generator(&app_dir.join("second.sh"), "second").await;
+            write_generator(&app_dir, stem).await;
         }
         crate::trust::grant_current_for_test(&config, "app/sample").await;
         config
     }
 
-    async fn write_generator(path: &Path, stem: &str) {
+    async fn installed_fixture(root: &Path, two_files: bool) -> Config {
+        let config = write_fixture(root, two_files).await;
+        handle_install_approved(&config, Some("sample"), false, false, true)
+            .await
+            .unwrap();
+        config
+    }
+
+    async fn write_generator(app_dir: &Path, stem: &str) {
+        let path = app_dir.join(format!("{stem}.sh"));
         fs::write(
-            path,
+            &path,
             format!(
                 "#!/bin/sh\nprintf x >> '{counter}'\ncat '{payload}'\n",
-                counter = path
-                    .parent()
-                    .unwrap()
-                    .join(format!("{stem}.runs"))
-                    .display(),
-                payload = path
-                    .parent()
-                    .unwrap()
-                    .join(format!("{stem}.payload"))
-                    .display()
+                counter = app_dir.join(format!("{stem}.runs")).display(),
+                payload = app_dir.join(format!("{stem}.payload")).display()
             ),
         )
         .await
@@ -340,10 +345,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
     #[tokio::test]
     async fn manual_generator_skips_status_and_upgrade_but_refreshes_explicitly() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
-        let config = write_fixture(&root, false).await;
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
+        let config = installed_fixture(&root, false).await;
 
         let app_dir = config.presets_dir().join("app/sample");
         let dest = root.join("dest/first.txt");
@@ -466,10 +468,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
     #[tokio::test]
     async fn generator_evaluation_uses_current_trust_with_the_captured_preset() {
         let root = crate::test_support::make_temp_dir("shine-generator-trust-refresh").await;
-        let config = write_fixture(&root, false).await;
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
+        let config = installed_fixture(&root, false).await;
         crate::trust::grant_current_for_test(&config, "app/sample").await;
         let mut service = crate::core_runtime::frontend_from_config(&config)
             .await
@@ -547,10 +546,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
     #[tokio::test]
     async fn refresh_selector_and_force_preserve_other_generated_files() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
-        let config = write_fixture(&root, true).await;
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
+        let config = installed_fixture(&root, true).await;
         let app_dir = config.presets_dir().join("app/sample");
         let first_dest = root.join("dest/first.txt");
         let second_dest = root.join("dest/second.txt");
@@ -588,10 +584,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
     #[tokio::test]
     async fn refresh_keeps_last_good_file_and_continues_after_generator_failure() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
-        let config = write_fixture(&root, true).await;
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
+        let config = installed_fixture(&root, true).await;
         let app_dir = config.presets_dir().join("app/sample");
         let first_dest = root.join("dest/first.txt");
         let second_dest = root.join("dest/second.txt");
@@ -701,23 +694,27 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
         let installed = format!("{node}\n");
         assert_eq!(fs::read_to_string(&output).await.unwrap(), installed);
 
+        let assert_failed_refresh_preserves = async |config: &Config| {
+            assert!(
+                handle_refresh_approved(
+                    config,
+                    "surge",
+                    Some("sub/wget-cloud-proxies.conf"),
+                    false,
+                    true
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(fs::read_to_string(&output).await.unwrap(), installed);
+        };
+
         config.env.insert(
             "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL".into(),
             "http://example.invalid/subscription".into(),
         );
         // Invalid before any network access. The still valid cache must not take over.
-        assert!(
-            handle_refresh_approved(
-                &config,
-                "surge",
-                Some("sub/wget-cloud-proxies.conf"),
-                false,
-                true,
-            )
-            .await
-            .is_err()
-        );
-        assert_eq!(fs::read_to_string(&output).await.unwrap(), installed);
+        assert_failed_refresh_preserves(&config).await;
         config.env.remove("W_GET_CLOUD_SURGE_SUBSCRIPTION_URL");
 
         fs::write(
@@ -726,45 +723,20 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
         )
         .await
         .unwrap();
-        assert!(
-            handle_refresh_approved(
-                &config,
-                "surge",
-                Some("sub/wget-cloud-proxies.conf"),
-                false,
-                true,
-            )
-            .await
-            .is_err()
-        );
-        assert_eq!(fs::read_to_string(&output).await.unwrap(), installed);
+        assert_failed_refresh_preserves(&config).await;
 
         fs::write(&profile, format!("[Proxy]\n#!include {reference}\n"))
             .await
             .unwrap();
         fs::remove_file(cache).await.unwrap();
-        assert!(
-            handle_refresh_approved(
-                &config,
-                "surge",
-                Some("sub/wget-cloud-proxies.conf"),
-                false,
-                true,
-            )
-            .await
-            .is_err()
-        );
-        assert_eq!(fs::read_to_string(&output).await.unwrap(), installed);
+        assert_failed_refresh_preserves(&config).await;
         fs::remove_dir_all(root).await.unwrap();
     }
 
     #[tokio::test]
     async fn refresh_requires_the_generator_condition_env() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
-        let mut config = write_fixture(&root, false).await;
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
+        let mut config = installed_fixture(&root, false).await;
         config.env.remove("SOURCE_URL");
         let dest = root.join("dest/first.txt");
 

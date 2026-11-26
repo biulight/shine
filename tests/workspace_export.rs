@@ -58,17 +58,40 @@ impl Fixture {
         Self(root)
     }
 
-    fn command(&self) -> Command {
-        let mut paths = vec![BACKEND_DIR.0.clone()];
-        paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
+    fn shine_command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
         command
             .current_dir(&self.0)
             .env("SHINE_CONFIG_DIR", self.0.join("state"))
-            .env_remove("SHINE_PRESETS")
-            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env_remove("SHINE_PRESETS");
+        command
+    }
+
+    fn import_dotenv(&self, dry_run: bool) -> Output {
+        let mut command = self.shine_command();
+        command.args(["env", "workspace", "init", "--from-dotenv", "--mode", "dev"]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        command.output().unwrap()
+    }
+
+    #[track_caller]
+    fn assert_import_rejected(&self, value: &str, dry_run: bool) -> Output {
+        let output = self.import_dotenv(dry_run);
+        assert!(
+            !output.status.success(),
+            "{value:?}, dry_run={dry_run}: {output:?}"
+        );
+        assert!(!self.0.join("shine.workspace.toml").exists());
+        assert!(!self.0.join(".env.shine.toml").exists());
+        output
+    }
+
+    fn export_to(&self, destination: &std::path::Path) -> Command {
+        let mut command = self.shine_command();
+        command
+            .stdin(Stdio::null())
             .args([
                 "env",
                 "workspace",
@@ -79,8 +102,18 @@ impl Fixture {
                 "dev",
                 "--output",
             ])
-            .arg(self.0.join("output.env"))
-            .stdin(Stdio::null())
+            .arg(destination);
+        command
+    }
+
+    fn command(&self) -> Command {
+        let mut paths = vec![BACKEND_DIR.0.clone()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let mut command = self.export_to(&self.0.join("output.env"));
+        command
+            .env("PATH", std::env::join_paths(paths).unwrap())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         command
@@ -240,13 +273,7 @@ fn dotenv_import_preserves_backtick_quoted_values() {
     fs::remove_file(fixture.0.join("shine.workspace.toml")).unwrap();
     let dotenv = "TOKEN=`hello#world`\nQUOTES=`it's \"quoted\"` # comment\nPATH_VALUE=`C:\\new\\tools`\nEMPTY=``\nSPACES=`  keep  `\n";
     fs::write(fixture.0.join(".env"), dotenv).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_shine"))
-        .current_dir(&fixture.0)
-        .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
-        .env_remove("SHINE_PRESETS")
-        .args(["env", "workspace", "init", "--from-dotenv", "--mode", "dev"])
-        .output()
-        .unwrap();
+    let output = fixture.import_dotenv(false);
     assert!(output.status.success(), "{output:?}");
     let source: toml::Value =
         toml::from_str(&fs::read_to_string(fixture.0.join(".env.shine.toml")).unwrap()).unwrap();
@@ -278,19 +305,7 @@ fn dotenv_import_rejects_invalid_backtick_values_before_publication() {
         )
         .unwrap();
         for dry_run in [false, true] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
-            command
-                .current_dir(&fixture.0)
-                .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
-                .env_remove("SHINE_PRESETS")
-                .args(["env", "workspace", "init", "--from-dotenv", "--mode", "dev"]);
-            if dry_run {
-                command.arg("--dry-run");
-            }
-            let output = command.output().unwrap();
-            assert!(!output.status.success(), "{value}: {output:?}");
-            assert!(!fixture.0.join("shine.workspace.toml").exists());
-            assert!(!fixture.0.join(".env.shine.toml").exists());
+            fixture.assert_import_rejected(value, dry_run);
         }
     }
 }
@@ -306,20 +321,8 @@ fn dotenv_import_rejects_bare_variable_references_without_publishing_files() {
         )
         .unwrap();
         for dry_run in [false, true] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
-            command
-                .current_dir(&fixture.0)
-                .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
-                .env_remove("SHINE_PRESETS")
-                .args(["env", "workspace", "init", "--from-dotenv", "--mode", "dev"]);
-            if dry_run {
-                command.arg("--dry-run");
-            }
-            let output = command.output().unwrap();
-            assert!(!output.status.success(), "{output:?}");
+            let output = fixture.assert_import_rejected(value, dry_run);
             assert!(String::from_utf8_lossy(&output.stderr).contains("dotenv interpolation"));
-            assert!(!fixture.0.join("shine.workspace.toml").exists());
-            assert!(!fixture.0.join(".env.shine.toml").exists());
         }
     }
 }
@@ -421,28 +424,14 @@ fn dotenv_export_quotes_display_paths_without_changing_publication() {
         let destination = fixture.0.join(name);
         let quoted = format!("{:?}", destination.to_string_lossy());
         let command = || {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+            let mut command = fixture.export_to(&destination);
             command
-                .current_dir(&fixture.0)
-                .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
                 .env("SHINE_PRESETS", fixture.0.join("state/presets"))
                 .env("HOME", &home)
                 .env("USERPROFILE", &home)
                 .env("APPDATA", home.join("AppData/Roaming"))
                 .env("LOCALAPPDATA", home.join("AppData/Local"))
-                .env("NO_COLOR", "1")
-                .stdin(Stdio::null())
-                .args([
-                    "env",
-                    "workspace",
-                    "export",
-                    "--format",
-                    "dotenv",
-                    "--mode",
-                    "dev",
-                    "--output",
-                ])
-                .arg(&destination);
+                .env("NO_COLOR", "1");
             command
         };
         let preview = command()

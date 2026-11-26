@@ -77,6 +77,35 @@ async fn composed_profiles_migrate_without_legacy_source_templates() {
     }
 }
 
+const ACTIVE: &str = "/profile/linux-sys.pre.sh";
+const BASE: &str = "/profile/linux-sys.pre.base.sh";
+const NEW: &str = "/profile/linux-sys.pre.new.sh";
+const MERGE: &str = "/profile/linux-sys.pre.merge.sh";
+
+fn divergent_profile() -> InMemoryHost {
+    let host = InMemoryHost::new();
+    host.put_file("/templates/profile.pre.sh", b"new\n".to_vec());
+    host.put_file(ACTIVE, b"user\n".to_vec());
+    host.put_file(BASE, b"old\n".to_vec());
+    host
+}
+
+async fn assert_file_contents(host: &InMemoryHost, expected: &[(&str, &[u8])]) {
+    for &(path, bytes) in expected {
+        assert_eq!(host.read(Path::new(path)).await.unwrap(), bytes, "{path}");
+    }
+}
+
+fn written_paths(host: &InMemoryHost) -> Vec<PathBuf> {
+    host.operations()
+        .into_iter()
+        .filter_map(|op| match op {
+            HostOperation::Write(path) => Some(path),
+            _ => None,
+        })
+        .collect()
+}
+
 async fn reconcile(host: &InMemoryHost) -> Result<SysProfileFileUpdate> {
     install_sys_profile_phase_with_template(
         host,
@@ -96,10 +125,7 @@ async fn reconcile(host: &InMemoryHost) -> Result<SysProfileFileUpdate> {
 #[tokio::test]
 async fn profile_git_failure_falls_back_and_conflicts_preserve_active_and_base() {
     for missing_git in [false, true] {
-        let host = InMemoryHost::new();
-        host.put_file("/templates/profile.pre.sh", b"new\n".to_vec());
-        host.put_file("/profile/linux-sys.pre.sh", b"user\n".to_vec());
-        host.put_file("/profile/linux-sys.pre.base.sh", b"old\n".to_vec());
+        let host = divergent_profile();
         if missing_git {
             host.queue_process_output(Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -114,28 +140,12 @@ async fn profile_git_failure_falls_back_and_conflicts_preserve_active_and_base()
         }
         let report = reconcile(&host).await.unwrap();
         assert!(report.updated && report.needs_action);
-        assert_eq!(
-            host.read(Path::new("/profile/linux-sys.pre.sh"))
-                .await
-                .unwrap(),
-            b"user\n"
-        );
-        assert_eq!(
-            host.read(Path::new("/profile/linux-sys.pre.base.sh"))
-                .await
-                .unwrap(),
-            b"old\n"
-        );
-        assert_eq!(
-            host.read(Path::new("/profile/linux-sys.pre.new.sh"))
-                .await
-                .unwrap(),
-            b"new\n"
-        );
-        let conflict = host
-            .read(Path::new("/profile/linux-sys.pre.merge.sh"))
-            .await
-            .unwrap();
+        assert_file_contents(
+            &host,
+            &[(ACTIVE, b"user\n"), (BASE, b"old\n"), (NEW, b"new\n")],
+        )
+        .await;
+        let conflict = host.read(Path::new(MERGE)).await.unwrap();
         assert!(String::from_utf8(conflict).unwrap().contains("<<<<<<<"));
         assert_eq!(
             host.operations()
@@ -145,19 +155,13 @@ async fn profile_git_failure_falls_back_and_conflicts_preserve_active_and_base()
             1
         );
         assert_eq!(
-            host.operations()
-                .into_iter()
-                .filter_map(|op| match op {
-                    HostOperation::Write(path) => Some(path),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
+            written_paths(&host),
             [
                 // Empty preparation precedes permission setup and content publication.
-                PathBuf::from("/profile/linux-sys.pre.new.sh"),
-                PathBuf::from("/profile/linux-sys.pre.new.sh"),
-                PathBuf::from("/profile/linux-sys.pre.merge.sh"),
-                PathBuf::from("/profile/linux-sys.pre.merge.sh")
+                PathBuf::from(NEW),
+                PathBuf::from(NEW),
+                PathBuf::from(MERGE),
+                PathBuf::from(MERGE)
             ]
         );
     }
@@ -167,29 +171,20 @@ async fn profile_git_failure_falls_back_and_conflicts_preserve_active_and_base()
 async fn fresh_profile_base_write_failure_stops_before_artifact_cleanup() {
     let host = InMemoryHost::new();
     host.put_file("/templates/profile.pre.sh", b"new\n".to_vec());
-    host.put_file("/profile/linux-sys.pre.new.sh", b"pending\n".to_vec());
-    host.put_file("/profile/linux-sys.pre.merge.sh", b"conflict\n".to_vec());
-    host.fail_write_after("/profile/linux-sys.pre.base.sh", 0);
+    host.put_file(NEW, b"pending\n".to_vec());
+    host.put_file(MERGE, b"conflict\n".to_vec());
+    host.fail_write_after(BASE, 0);
     let error = reconcile(&host).await.unwrap_err();
     assert_eq!(error.to_string(), "writing sys profile merge base");
-    assert_eq!(
-        host.read(Path::new("/profile/linux-sys.pre.sh"))
-            .await
-            .unwrap(),
-        b"new\n"
-    );
-    assert_eq!(
-        host.read(Path::new("/profile/linux-sys.pre.new.sh"))
-            .await
-            .unwrap(),
-        b"pending\n"
-    );
-    assert_eq!(
-        host.read(Path::new("/profile/linux-sys.pre.merge.sh"))
-            .await
-            .unwrap(),
-        b"conflict\n"
-    );
+    assert_file_contents(
+        &host,
+        &[
+            (ACTIVE, b"new\n"),
+            (NEW, b"pending\n"),
+            (MERGE, b"conflict\n"),
+        ],
+    )
+    .await;
     assert!(
         !host
             .operations()
@@ -202,22 +197,11 @@ async fn fresh_profile_base_write_failure_stops_before_artifact_cleanup() {
 async fn crlf_profile_reconciliation_uses_normalized_merge_without_git() {
     let host = InMemoryHost::new();
     host.put_file("/templates/profile.pre.sh", b"old\nkeep\nnew\n".to_vec());
-    host.put_file(
-        "/profile/linux-sys.pre.sh",
-        b"user\r\nkeep\r\nend\r\n".to_vec(),
-    );
-    host.put_file(
-        "/profile/linux-sys.pre.base.sh",
-        b"old\r\nkeep\r\nend\r\n".to_vec(),
-    );
+    host.put_file(ACTIVE, b"user\r\nkeep\r\nend\r\n".to_vec());
+    host.put_file(BASE, b"old\r\nkeep\r\nend\r\n".to_vec());
     let report = reconcile(&host).await.unwrap();
     assert!(report.updated && !report.needs_action);
-    assert_eq!(
-        host.read(Path::new("/profile/linux-sys.pre.sh"))
-            .await
-            .unwrap(),
-        b"user\nkeep\nnew\n"
-    );
+    assert_file_contents(&host, &[(ACTIVE, b"user\nkeep\nnew\n")]).await;
     assert!(
         !host
             .operations()
@@ -229,10 +213,7 @@ async fn crlf_profile_reconciliation_uses_normalized_merge_without_git() {
 #[tokio::test]
 async fn profile_git_results_keep_clean_conflict_and_spawn_error_write_boundaries() {
     for code in [Some(0), Some(1), None] {
-        let host = InMemoryHost::new();
-        host.put_file("/templates/profile.pre.sh", b"new\n".to_vec());
-        host.put_file("/profile/linux-sys.pre.sh", b"user\n".to_vec());
-        host.put_file("/profile/linux-sys.pre.base.sh", b"old\n".to_vec());
+        let host = divergent_profile();
         host.queue_process_output(match code {
             Some(code) => Ok(ProcessOutput {
                 exit_code: Some(code),
@@ -244,59 +225,24 @@ async fn profile_git_results_keep_clean_conflict_and_spawn_error_write_boundarie
             }
         });
         let result = reconcile(&host).await;
-        let writes = host
-            .operations()
-            .into_iter()
-            .filter_map(|op| match op {
-                HostOperation::Write(path) => Some(path),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let writes = written_paths(&host);
         if let Some(code) = code {
             let report = result.unwrap();
             assert!(report.updated);
             assert_eq!(report.needs_action, code == 1);
             if code == 0 {
-                assert_eq!(
-                    host.read(Path::new("/profile/linux-sys.pre.sh"))
-                        .await
-                        .unwrap(),
-                    b"git result\n"
-                );
-                assert_eq!(
-                    host.read(Path::new("/profile/linux-sys.pre.base.sh"))
-                        .await
-                        .unwrap(),
-                    b"new\n"
-                );
-                assert_eq!(
-                    writes,
-                    [
-                        PathBuf::from("/profile/linux-sys.pre.sh"),
-                        PathBuf::from("/profile/linux-sys.pre.base.sh")
-                    ]
-                );
+                assert_file_contents(&host, &[(ACTIVE, b"git result\n"), (BASE, b"new\n")]).await;
+                assert_eq!(writes, [PathBuf::from(ACTIVE), PathBuf::from(BASE)]);
             } else {
-                assert_eq!(
-                    host.read(Path::new("/profile/linux-sys.pre.merge.sh"))
-                        .await
-                        .unwrap(),
-                    b"git result\n"
-                );
-                assert_eq!(
-                    host.read(Path::new("/profile/linux-sys.pre.new.sh"))
-                        .await
-                        .unwrap(),
-                    b"new\n"
-                );
+                assert_file_contents(&host, &[(MERGE, b"git result\n"), (NEW, b"new\n")]).await;
                 assert_eq!(
                     writes,
                     [
                         // Empty preparation precedes permission setup and content publication.
-                        PathBuf::from("/profile/linux-sys.pre.new.sh"),
-                        PathBuf::from("/profile/linux-sys.pre.new.sh"),
-                        PathBuf::from("/profile/linux-sys.pre.merge.sh"),
-                        PathBuf::from("/profile/linux-sys.pre.merge.sh")
+                        PathBuf::from(NEW),
+                        PathBuf::from(NEW),
+                        PathBuf::from(MERGE),
+                        PathBuf::from(MERGE)
                     ]
                 );
             }
@@ -305,18 +251,7 @@ async fn profile_git_results_keep_clean_conflict_and_spawn_error_write_boundarie
             assert!(writes.is_empty());
         }
         if code != Some(0) {
-            assert_eq!(
-                host.read(Path::new("/profile/linux-sys.pre.sh"))
-                    .await
-                    .unwrap(),
-                b"user\n"
-            );
-            assert_eq!(
-                host.read(Path::new("/profile/linux-sys.pre.base.sh"))
-                    .await
-                    .unwrap(),
-                b"old\n"
-            );
+            assert_file_contents(&host, &[(ACTIVE, b"user\n"), (BASE, b"old\n")]).await;
         }
         assert_eq!(
             host.operations()

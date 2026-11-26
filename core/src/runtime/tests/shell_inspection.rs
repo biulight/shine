@@ -132,12 +132,40 @@ async fn inspect_read_only(runtime: &CoreRuntime<InMemoryHost>) -> Vec<ShellFile
     rows
 }
 
+#[track_caller]
+fn command_row<'a>(rows: &'a [ShellFileInspection], name: &str) -> &'a ShellFileInspection {
+    rows.iter()
+        .find(|row| row.file.command_name == name)
+        .unwrap_or_else(|| panic!("missing shell command {name}"))
+}
+
+fn seed_installed_snapshot(host: &InMemoryHost, root: &Path, snapshot: &PresetSnapshot) {
+    for (logical, bytes) in snapshot.files() {
+        host.put_file(
+            root.join(logical.strip_prefix("shell/demo/").unwrap()),
+            bytes.clone(),
+        );
+    }
+}
+
+async fn load_manifest(runtime: &CoreRuntime<InMemoryHost>) -> ShellManifest {
+    ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap()
+}
+
+async fn snapshot_diff_error(reader: &CoreRuntime<ObservationHost>, category: &str) -> String {
+    reader
+        .inspect_shell_snapshot_changes(category)
+        .await
+        .unwrap_err()
+        .to_string()
+}
+
 #[tokio::test]
 async fn shell_inspection_keeps_change_order_and_receipt_only_rows_without_effects() {
     let runtime = installed_runtime(false).await;
-    let mut manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let mut manifest = load_manifest(&runtime).await;
     let source = manifest.entries[0].source_path.clone();
     let old_source = source.with_file_name("old.ts");
     let mut missing = manifest.entries[0].clone();
@@ -259,9 +287,7 @@ async fn shell_inspection_conflict_precedes_live_trust_and_trust_precedes_missin
     let mut context = original.context().clone();
     context.is_external_presets = true;
     context.external_shell_mode = ExternalShellMode::Live;
-    let mut manifest = ShellManifest::load(original.host(), &context.shine_dir)
-        .await
-        .unwrap();
+    let mut manifest = load_manifest(&original).await;
     manifest.entries[0].mode = ExternalShellMode::Live;
     manifest
         .save(original.host(), &context.shine_dir)
@@ -278,10 +304,7 @@ async fn shell_inspection_conflict_precedes_live_trust_and_trust_precedes_missin
         .host()
         .put_file(&launcher, b"foreign launcher".to_vec());
     let rows = inspect_read_only(&runtime).await;
-    let row = rows
-        .iter()
-        .find(|row| row.file.command_name == "run")
-        .unwrap();
+    let row = command_row(&rows, "run");
     assert_eq!(
         (row.status, row.status_text),
         (
@@ -306,10 +329,7 @@ async fn shell_inspection_conflict_precedes_live_trust_and_trust_precedes_missin
 
     runtime.host().put_file(&launcher, original_launcher);
     let rows = inspect_read_only(&runtime).await;
-    let row = rows
-        .iter()
-        .find(|row| row.file.command_name == "run")
-        .unwrap();
+    let row = command_row(&rows, "run");
     assert_eq!(
         (row.status, row.status_text),
         (
@@ -319,10 +339,7 @@ async fn shell_inspection_conflict_precedes_live_trust_and_trust_precedes_missin
     );
     runtime.host().remove_file(&launcher).await.unwrap();
     let rows = inspect_read_only(&runtime).await;
-    let row = rows
-        .iter()
-        .find(|row| row.file.command_name == "run")
-        .unwrap();
+    let row = command_row(&rows, "run");
     assert_eq!(row.status_text, "development trust required");
     assert!(
         row.changes
@@ -333,9 +350,7 @@ async fn shell_inspection_conflict_precedes_live_trust_and_trust_precedes_missin
 #[tokio::test]
 async fn shell_inspection_missing_rendered_status_yields_to_launcher_repairs() {
     let runtime = installed_runtime(true).await;
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = load_manifest(&runtime).await;
     let entry = &manifest.entries[0];
     runtime
         .host()
@@ -343,10 +358,7 @@ async fn shell_inspection_missing_rendered_status_yields_to_launcher_repairs() {
         .await
         .unwrap();
     let rows = inspect_read_only(&runtime).await;
-    let row = rows
-        .iter()
-        .find(|row| row.file.command_name == "run")
-        .unwrap();
+    let row = command_row(&rows, "run");
     assert_eq!(
         (row.status, row.status_text),
         (InspectionFileStatus::Missing, "rendered script missing")
@@ -360,10 +372,7 @@ async fn shell_inspection_missing_rendered_status_yields_to_launcher_repairs() {
     let launcher = command_path_for_name(&runtime.context().bin_dir, "run".as_ref());
     runtime.host().remove_file(&launcher).await.unwrap();
     let rows = inspect_read_only(&runtime).await;
-    let row = rows
-        .iter()
-        .find(|row| row.file.command_name == "run")
-        .unwrap();
+    let row = command_row(&rows, "run");
     assert_eq!(
         (row.status, row.status_text),
         (InspectionFileStatus::UpdateAvail, "update available")
@@ -377,9 +386,7 @@ async fn shell_inspection_missing_rendered_status_yields_to_launcher_repairs() {
 #[tokio::test]
 async fn shell_inspection_preserves_read_error_context_and_order() {
     let runtime = installed_runtime(true).await;
-    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap();
+    let manifest = load_manifest(&runtime).await;
     let entry = &manifest.entries[0];
     for (path, after, expected) in [
         (&entry.rendered_path, 0, "reading installed Shell content"),
@@ -404,12 +411,7 @@ async fn shell_snapshot_diff_is_observation_only_and_rejects_links_and_read_fail
     context.is_external_presets = true;
     let snapshot = snapshot(PresetSourceKind::External, false);
     let root = context.shine_dir.join("installed/shell/demo");
-    for (logical, bytes) in snapshot.files() {
-        original.host().put_file(
-            root.join(logical.strip_prefix("shell/demo/").unwrap()),
-            bytes.clone(),
-        );
-    }
+    seed_installed_snapshot(original.host(), &root, &snapshot);
     // Same bytes, different executable intent; Windows ignores Unix executable flags.
     original.host().put_file_with_mode(
         root.join("run.ts"),
@@ -439,11 +441,7 @@ async fn shell_snapshot_diff_is_observation_only_and_rejects_links_and_read_fail
     denied.fail_read = Some((root.join("shine.toml"), 0));
     let reader = CoreRuntime::new(denied, context.clone(), snapshot.clone());
     assert_eq!(
-        reader
-            .inspect_shell_snapshot_changes("demo")
-            .await
-            .unwrap_err()
-            .to_string(),
+        snapshot_diff_error(&reader, "demo").await,
         "reading Shell snapshot diff file"
     );
     original
@@ -458,11 +456,8 @@ async fn shell_snapshot_diff_is_observation_only_and_rejects_links_and_read_fail
         snapshot,
     );
     assert!(
-        reader
-            .inspect_shell_snapshot_changes("demo")
+        snapshot_diff_error(&reader, "demo")
             .await
-            .unwrap_err()
-            .to_string()
             .contains("symbolic link")
     );
     assert!(
@@ -507,12 +502,7 @@ async fn shell_snapshot_diff_keeps_category_scope_and_missing_root_and_mode_boun
             .all(|file| file.current_content.is_none() && file.desired_content.is_some())
     );
     assert!(reader.host().reads.lock().unwrap().is_empty());
-    for (logical, bytes) in snapshot.files() {
-        host.put_file(
-            installed.join(logical.strip_prefix("shell/demo/").unwrap()),
-            bytes.clone(),
-        );
-    }
+    seed_installed_snapshot(&host, &installed, &snapshot);
     host.put_file(
         context.shine_dir.join("installed/shell/other/private.txt"),
         b"UNRELATED_PRIVATE".to_vec(),
@@ -568,11 +558,7 @@ async fn shell_snapshot_diff_keeps_category_scope_and_missing_root_and_mode_boun
         malformed,
     );
     assert_eq!(
-        reader
-            .inspect_shell_snapshot_changes("..")
-            .await
-            .unwrap_err()
-            .to_string(),
+        snapshot_diff_error(&reader, "..").await,
         "invalid Shell snapshot category"
     );
     assert!(reader.host().reads.lock().unwrap().is_empty());
@@ -581,11 +567,7 @@ async fn shell_snapshot_diff_keeps_category_scope_and_missing_root_and_mode_boun
     denied.fail_directory = Some(installed.clone());
     let reader = CoreRuntime::new(denied, context.clone(), snapshot.clone());
     assert_eq!(
-        reader
-            .inspect_shell_snapshot_changes("demo")
-            .await
-            .unwrap_err()
-            .to_string(),
+        snapshot_diff_error(&reader, "demo").await,
         "reading Shell snapshot diff tree"
     );
     let host = InMemoryHost::new();
@@ -594,11 +576,8 @@ async fn shell_snapshot_diff_keeps_category_scope_and_missing_root_and_mode_boun
         .unwrap();
     let reader = CoreRuntime::new(ObservationHost::new(host), context, snapshot);
     assert!(
-        reader
-            .inspect_shell_snapshot_changes("demo")
+        snapshot_diff_error(&reader, "demo")
             .await
-            .unwrap_err()
-            .to_string()
             .contains("not a directory")
     );
     assert!(reader.host().reads.lock().unwrap().is_empty());
@@ -611,15 +590,8 @@ async fn shell_inspection_snapshot_observation_failure_stays_a_pending_update() 
     context.is_external_presets = true;
     let snapshot = snapshot(PresetSourceKind::External, false);
     let root = context.shine_dir.join("installed/shell/demo");
-    for (logical, bytes) in snapshot.files() {
-        original.host().put_file(
-            root.join(logical.strip_prefix("shell/demo/").unwrap()),
-            bytes.clone(),
-        );
-    }
-    let mut manifest = ShellManifest::load(original.host(), &context.shine_dir)
-        .await
-        .unwrap();
+    seed_installed_snapshot(original.host(), &root, &snapshot);
+    let mut manifest = load_manifest(&original).await;
     manifest.entries[0].source_path = root.join("run.ts");
     manifest
         .save(original.host(), &context.shine_dir)
@@ -654,10 +626,7 @@ async fn shell_inspection_snapshot_observation_failure_stays_a_pending_update() 
         "observing planned Shell snapshot tree"
     );
     let rows = runtime.inspect_shells().await.unwrap();
-    let run = rows
-        .iter()
-        .find(|row| row.file.command_name == "run")
-        .unwrap();
+    let run = command_row(&rows, "run");
     assert_eq!(
         (run.status, run.status_text),
         (InspectionFileStatus::UpdateAvail, "update available")
@@ -671,11 +640,5 @@ async fn shell_inspection_snapshot_observation_failure_stays_a_pending_update() 
             to: "active preset layout".into(),
         }]
     );
-    assert!(
-        rows.iter()
-            .find(|row| row.file.command_name == "available")
-            .unwrap()
-            .changes
-            .is_empty()
-    );
+    assert!(command_row(&rows, "available").changes.is_empty());
 }

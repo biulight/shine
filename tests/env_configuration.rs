@@ -58,6 +58,14 @@ impl Fixture {
         assert!(out.status.success(), "{args:?}: {out:?}");
         String::from_utf8(out.stdout).unwrap()
     }
+    #[track_caller]
+    fn quiet_stdout(&self, project: bool, args: &[&str]) -> String {
+        let output = self.run(project, args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    }
+
     fn fail(&self, project: bool, args: &[&str], message: &str) {
         let out = self.run(project, args);
         assert!(!out.status.success(), "{args:?}: {out:?}");
@@ -66,6 +74,17 @@ impl Fixture {
             "{out:?}"
         );
     }
+    fn write_shell_token(&self, shell: &str, value: &str) -> Vec<u8> {
+        self.write(
+            "state/config.toml",
+            &format!(
+                "schema_version = 2\nshell_type = '{shell}'\n[env]\nTOKEN = {}\n",
+                toml::Value::String(value.into())
+            ),
+        );
+        fs::read(self.0.join("state/config.toml")).unwrap()
+    }
+
     fn layers(&self) {
         self.write("state/config.toml", "# global comment\npresets_overlay_dir = '../overlay'\n[env]\nHTTP_PROXY_PORT = { value = 'global-config', description = 'global description' }\n");
         self.write(
@@ -99,6 +118,17 @@ fn output_path_fixture() -> Fixture {
     fs::rename(&fixture.0, &root).unwrap();
     fixture.0 = root;
     fixture
+}
+
+#[track_caller]
+fn assert_display_path(text: &str) {
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    if cfg!(unix) {
+        assert!(
+            text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+            "{text:?}"
+        );
+    }
 }
 
 #[test]
@@ -375,11 +405,7 @@ fn explain_encodes_local_fields_without_decrypting_or_changing_sources() {
             if reveal {
                 args.push("--reveal");
             }
-            let output = f.run(true, &args);
-            assert_eq!(output.status.code(), Some(0), "{output:?}");
-            assert!(output.stderr.is_empty(), "{output:?}");
-            let text = String::from_utf8(output.stdout).unwrap();
-            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            let text = f.quiet_stdout(true, &args);
             assert!(!text.contains("PRIVATE_EXPLAIN_CANARY"), "{text:?}");
             assert_eq!(text.contains("    value:"), reveal, "{text:?}");
             if selected == key {
@@ -390,12 +416,7 @@ fn explain_encodes_local_fields_without_decrypting_or_changing_sources() {
                 assert!(!text.contains("run `shine env explain missing"), "{text:?}");
                 assert!(text.contains("original key"), "{text:?}");
             }
-            if cfg!(unix) {
-                assert!(
-                    text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
-                    "{text:?}"
-                );
-            }
+            assert_display_path(&text);
         }
     }
     assert_eq!(f.read("state/config.toml"), config);
@@ -411,17 +432,8 @@ fn env_write_receipts_encode_paths_preserving_explicit_target_and_inheritance() 
         vec!["set", "HTTP_PROXY_PORT", "new-global", "--global"],
         vec!["delete", "HTTP_PROXY_PORT", "--global"],
     ] {
-        let output = f.run(true, &args);
-        assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert!(output.stderr.is_empty(), "{output:?}");
-        let text = String::from_utf8(output.stdout).unwrap();
-        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
-        if cfg!(unix) {
-            assert!(
-                text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
-                "{text:?}"
-            );
-        }
+        let text = f.quiet_stdout(true, &args);
+        assert_display_path(&text);
         assert!(text.contains("selected layer remains shadowed"), "{text:?}");
         assert!(text.contains("Current value unchanged."), "{text:?}");
         assert_eq!(f.read("project/shine.env.toml"), project);
@@ -655,14 +667,7 @@ fn shell_export_rejects_nul_without_altering_raw_values_or_configuration() {
             "private-suffix\0",
         ] {
             let f = Fixture::new();
-            f.write(
-                "state/config.toml",
-                &format!(
-                    "schema_version = 2\nshell_type = '{shell}'\n[env]\nTOKEN = {}\n",
-                    toml::Value::String(value.into())
-                ),
-            );
-            let before = fs::read(f.0.join("state/config.toml")).unwrap();
+            let before = f.write_shell_token(shell, value);
             for alias in ["TOKEN", "API_TOKEN"] {
                 let result = f.run(false, &["secret", "export", "TOKEN", "--as", alias]);
                 assert_eq!(result.status.code(), Some(1), "{shell}: {result:?}");
@@ -690,18 +695,8 @@ fn shell_export_valid_literals_round_trip_through_native_shell() {
     let shell = "powershell";
     for value in ["", "plain", "a ' quote \" $HOME `tick` \\path\nnext\t中文"] {
         let f = Fixture::new();
-        f.write(
-            "state/config.toml",
-            &format!(
-                "schema_version = 2\nshell_type = '{shell}'\n[env]\nTOKEN = {}\n",
-                toml::Value::String(value.into())
-            ),
-        );
-        let before = fs::read(f.0.join("state/config.toml")).unwrap();
-        let result = f.run(false, &["secret", "export", "TOKEN", "--as", "API_TOKEN"]);
-        assert_eq!(result.status.code(), Some(0), "{result:?}");
-        assert!(result.stderr.is_empty(), "{result:?}");
-        let code = String::from_utf8(result.stdout).unwrap();
+        let before = f.write_shell_token(shell, value);
+        let code = f.quiet_stdout(false, &["secret", "export", "TOKEN", "--as", "API_TOKEN"]);
         #[cfg(unix)]
         let mut consumer = {
             let mut command = Command::new("/bin/sh");
@@ -1406,18 +1401,9 @@ fn proxy_toggle_reports_write_scope_and_effective_project_override() {
             "schema_version = 2\n[[env_proxy]]\ncommand = 'demo'\nwith = ['DEMO']\nenabled = {project_enabled}\n"
         );
         f.write("project/shine.config.toml", &project);
-        let output = f.run(true, &["proxy", action, "demo"]);
-        assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert!(output.stderr.is_empty(), "{output:?}");
-        let text = String::from_utf8(output.stdout).unwrap();
+        let text = f.quiet_stdout(true, &["proxy", action, "demo"]);
         assert!(text.contains("in global config"), "{text}");
-        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
-        if cfg!(unix) {
-            assert!(
-                text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
-                "{text:?}"
-            );
-        }
+        assert_display_path(&text);
         let effective = if project_enabled {
             "enabled"
         } else {
@@ -1475,13 +1461,7 @@ API_TOKEN = { value = "hidden\nvalue", description = "marker-secret" }
     );
     let before = f.read("state/config.toml");
     let output = f.ok(false, &["list"]);
-    assert!(!output.contains(['\r', '\t', '\u{1b}']), "{output:?}");
-    if cfg!(unix) {
-        assert!(
-            output.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
-            "{output:?}"
-        );
-    }
+    assert_display_path(&output);
     let rows: Vec<_> = output
         .lines()
         .filter(|line| line.contains("marker-"))
