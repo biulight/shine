@@ -356,164 +356,87 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    // --- resolve_runtime_config_dirs unit tests ---
+    fn resolve_with_overrides(
+        config_dir: Option<&str>,
+        presets_env: Option<&str>,
+        toml_presets: Option<&str>,
+        local: bool,
+    ) -> (PathBuf, PathBuf, bool) {
+        let _guard = env_lock();
+        // SAFETY: the guard serializes these changes and restores the caller's environment.
+        for (name, value) in [
+            ("SHINE_CONFIG_DIR", config_dir),
+            ("SHINE_PRESETS", presets_env),
+        ] {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        resolve_runtime_config_dirs(
+            Path::new("/default"),
+            Path::new("/default/presets"),
+            toml_presets.map(Path::new),
+            local,
+        )
+    }
 
     #[test]
     fn shine_config_dir_overrides_everything() {
-        let _guard = env_lock();
-        let default_shine = PathBuf::from("/home/user/.shine");
-        let default_presets = PathBuf::from("/home/user/.shine/presets");
-        let custom = std::env::temp_dir().join("shine-override-test");
-
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom.to_str().unwrap()) };
-        let (shine, presets, is_external) =
-            resolve_runtime_config_dirs(&default_shine, &default_presets, None, false);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
-
-        assert_eq!(shine, custom);
-        assert_eq!(presets, custom.join("presets"));
-        assert!(
-            is_external,
-            "SHINE_CONFIG_DIR should set is_external_presets"
+        assert_eq!(
+            resolve_with_overrides(Some("/state"), None, None, false),
+            ("/state".into(), "/state/presets".into(), true)
         );
     }
 
     #[test]
     fn shine_presets_overrides_presets_only() {
-        let _guard = env_lock();
-        let default_shine = PathBuf::from("/home/user/.shine");
-        let default_presets = PathBuf::from("/home/user/.shine/presets");
-        let custom_presets = std::env::temp_dir().join("my-presets");
-
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_PRESETS", custom_presets.to_str().unwrap()) };
-        let (shine, presets, is_external) =
-            resolve_runtime_config_dirs(&default_shine, &default_presets, None, false);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-
-        assert_eq!(shine, default_shine);
-        assert_eq!(presets, custom_presets);
-        assert!(is_external, "SHINE_PRESETS should set is_external_presets");
+        assert_eq!(
+            resolve_with_overrides(None, Some("/env"), None, false),
+            ("/default".into(), "/env".into(), true)
+        );
     }
 
     #[test]
     fn shine_config_dir_takes_precedence_over_shine_presets() {
-        let _guard = env_lock();
-        let default_shine = PathBuf::from("/home/user/.shine");
-        let default_presets = PathBuf::from("/home/user/.shine/presets");
-        let custom_dir = std::env::temp_dir().join("shine-cfg-dir");
-        let custom_presets = std::env::temp_dir().join("shine-presets-ignored");
-
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom_dir.to_str().unwrap()) };
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_PRESETS", custom_presets.to_str().unwrap()) };
-        let (shine, presets, _) =
-            resolve_runtime_config_dirs(&default_shine, &default_presets, None, false);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-
-        assert_eq!(shine, custom_dir);
-        assert_eq!(presets, custom_dir.join("presets"));
+        assert_eq!(
+            resolve_with_overrides(Some("/state"), Some("/env"), None, false),
+            ("/state".into(), "/state/presets".into(), true)
+        );
     }
 
     #[test]
     fn local_config_keeps_shine_config_dir_as_state_only() {
-        let _guard = env_lock();
-        let default_shine = PathBuf::from("/home/user/.shine");
-        let default_presets = PathBuf::from("/home/user/.shine/presets");
-        let custom_dir = std::env::temp_dir().join("shine-local-state");
-        let toml_presets = PathBuf::from("/project/presets");
-
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom_dir.to_str().unwrap()) };
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-        let (shine, presets, _) = resolve_runtime_config_dirs(
-            &default_shine,
-            &default_presets,
-            Some(toml_presets.as_path()),
-            true,
+        assert_eq!(
+            resolve_with_overrides(Some("/state"), None, Some("/project"), true),
+            ("/state".into(), "/project".into(), true)
         );
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
-
-        assert_eq!(shine, custom_dir);
-        assert_eq!(presets, toml_presets);
     }
 
     #[test]
     fn config_toml_presets_dir_is_used_when_no_env() {
-        let _guard = env_lock();
-        let default_shine = PathBuf::from("/home/user/.shine");
-        let default_presets = PathBuf::from("/home/user/.shine/presets");
-        let toml_presets = PathBuf::from("/custom/presets");
-
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-        let (shine, presets, is_external) = resolve_runtime_config_dirs(
-            &default_shine,
-            &default_presets,
-            Some(toml_presets.as_path()),
-            false,
-        );
-
-        assert_eq!(shine, default_shine);
-        assert_eq!(presets, toml_presets);
-        assert!(
-            is_external,
-            "config.toml presets_dir should set is_external_presets"
+        assert_eq!(
+            resolve_with_overrides(None, None, Some("/configured"), false),
+            ("/default".into(), "/configured".into(), true)
         );
     }
 
     #[test]
     fn shine_presets_takes_precedence_over_config_toml() {
-        let _guard = env_lock();
-        let default_shine = PathBuf::from("/home/user/.shine");
-        let default_presets = PathBuf::from("/home/user/.shine/presets");
-        let env_presets = std::env::temp_dir().join("env-presets");
-        let toml_presets = PathBuf::from("/toml/presets");
-
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::set_var("SHINE_PRESETS", env_presets.to_str().unwrap()) };
-        let (_, presets, _) = resolve_runtime_config_dirs(
-            &default_shine,
-            &default_presets,
-            Some(toml_presets.as_path()),
-            false,
+        assert_eq!(
+            resolve_with_overrides(None, Some("/env"), Some("/configured"), false),
+            ("/default".into(), "/env".into(), true)
         );
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
+    }
 
-        assert_eq!(presets, env_presets);
+    #[test]
+    fn is_external_presets_false_when_no_override() {
+        assert_eq!(
+            resolve_with_overrides(None, None, None, false),
+            ("/default".into(), "/default/presets".into(), false)
+        );
     }
 
     #[tokio::test]
@@ -552,27 +475,5 @@ mod tests {
         assert_eq!(result, Some(PathBuf::from("/my/presets")));
 
         fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    // --- is_external_presets flag tests ---
-
-    #[test]
-    fn is_external_presets_false_when_no_override() {
-        let _guard = env_lock();
-        let default = PathBuf::from("/home/user/.shine");
-        let presets = PathBuf::from("/home/user/.shine/presets");
-
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-        let (_, _, is_external) = resolve_runtime_config_dirs(&default, &presets, None, false);
-
-        assert!(
-            !is_external,
-            "no override should leave is_external_presets false"
-        );
     }
 }

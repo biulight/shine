@@ -12,13 +12,7 @@ async fn shell_permission_defaults_expose_unrestricted_command_effects() {
             .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
             .build();
     let runtime = runtime(snapshot);
-    let request = ShellPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo/demo".to_string()),
-        force: false,
-        purge: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = shell_install_request();
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
 
     assert!(plan.is_ready(), "{plan:?}");
@@ -66,16 +60,7 @@ async fn shell_and_sys_plans_use_only_observation_operations() {
             .build();
     let (runtime, host) = observation_runtime(snapshot);
     if platform.is_unix() {
-        let shell = runtime
-            .plan_shells(ShellPlanRequest {
-                operation: LifecycleOperation::Install,
-                target: Some("demo/demo".to_string()),
-                force: false,
-                purge: false,
-                input_versions: PlanningInputVersions::default(),
-            })
-            .await
-            .unwrap();
+        let shell = runtime.plan_shells(shell_install_request()).await.unwrap();
         assert!(shell.is_ready());
     }
     let sys = runtime
@@ -236,10 +221,7 @@ async fn shell_upgrade_plans_only_profile_files_that_need_reconciliation() {
     );
     let request = ShellPlanRequest {
         operation: LifecycleOperation::Upgrade,
-        target: Some("demo/demo".to_string()),
-        force: false,
-        purge: false,
-        input_versions: PlanningInputVersions::default(),
+        ..shell_install_request()
     };
     let plan = changed.plan_shells(request.clone()).await.unwrap();
     assert!(plan.is_ready());
@@ -307,7 +289,7 @@ async fn shell_upgrade_plans_only_profile_files_that_need_reconciliation() {
     );
     let approval = PlanApprovalV1::for_reviewed_plan(&drifted).unwrap();
     changed
-        .upgrade_shells_approved(request, &approval)
+        .upgrade_shells_approved(request.clone(), &approval)
         .await
         .unwrap();
     let updated = String::from_utf8(changed.host().read(&shell_config).await.unwrap()).unwrap();
@@ -331,16 +313,7 @@ async fn shell_upgrade_plans_only_profile_files_that_need_reconciliation() {
             .join("shell/demo/shine.toml"),
         source_metadata.to_vec(),
     );
-    let plan = source_changed
-        .plan_shells(ShellPlanRequest {
-            operation: LifecycleOperation::Upgrade,
-            target: Some("demo/demo".to_string()),
-            force: false,
-            purge: false,
-            input_versions: PlanningInputVersions::default(),
-        })
-        .await
-        .unwrap();
+    let plan = source_changed.plan_shells(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     assert!(plan.steps.iter().any(|step| {
         step.target == "shell/profile" && step.resource.as_deref() == Some(profile_label.as_str())
@@ -350,16 +323,7 @@ async fn shell_upgrade_plans_only_profile_files_that_need_reconciliation() {
         }));
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     source_changed
-        .upgrade_shells_approved(
-            ShellPlanRequest {
-                operation: LifecycleOperation::Upgrade,
-                target: Some("demo/demo".to_string()),
-                force: false,
-                purge: false,
-                input_versions: PlanningInputVersions::default(),
-            },
-            &approval,
-        )
+        .upgrade_shells_approved(request, &approval)
         .await
         .unwrap();
 }
@@ -514,44 +478,30 @@ async fn shell_upgrade_after_source_relocation_still_blocks_foreign_launchers() 
 
 #[tokio::test]
 async fn occupied_shell_launcher_rollback_blocks_before_update() {
-    let original = runtime(shell_launcher_snapshot());
-    let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install.clone(), &approval)
-        .await
-        .unwrap();
+    let original = installed_shell_runtime().await;
     let runtime = CoreRuntime::new(
         original.host().clone(),
         original.context().clone(),
         shell_bun_launcher_snapshot(),
     );
-    let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
-    let rollback = managed_file_rollback_path(&launcher);
-    runtime.host().put_file(&rollback, b"user-owned".to_vec());
-
-    let plan = runtime.plan_shells(install).await.unwrap();
-    assert!(!plan.is_ready());
-    assert!(plan.steps.iter().any(|step| {
-        step.diagnostic_codes
-            .contains(&"shell_launcher_rollback_occupied".to_string())
-    }));
-    assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"user-owned");
+    assert_occupied_launcher_blocks(&runtime, shell_install_request()).await;
 }
 
 #[tokio::test]
 async fn occupied_shell_launcher_rollback_blocks_before_removal() {
     let runtime = installed_shell_runtime().await;
+    assert_occupied_launcher_blocks(&runtime, shell_uninstall_request()).await;
+}
+
+async fn assert_occupied_launcher_blocks(
+    runtime: &CoreRuntime<InMemoryHost>,
+    request: ShellPlanRequest,
+) {
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
     let rollback = managed_file_rollback_path(&launcher);
     runtime.host().put_file(&rollback, b"user-owned".to_vec());
 
-    let plan = runtime
-        .plan_shells(shell_uninstall_request())
-        .await
-        .unwrap();
+    let plan = runtime.plan_shells(request).await.unwrap();
     assert!(!plan.is_ready());
     assert!(plan.steps.iter().any(|step| {
         step.diagnostic_codes
@@ -768,13 +718,7 @@ async fn foreign_shell_launcher_blocks_without_mutation() {
             .build();
     let runtime = runtime(snapshot);
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
-    let request = ShellPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo/demo".to_string()),
-        force: false,
-        purge: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = shell_install_request();
     let missing = runtime.plan_shells(request.clone()).await.unwrap();
     runtime
         .host()
