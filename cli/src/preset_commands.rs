@@ -536,7 +536,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn copy_shell_category_only_extracts_matching_files() {
+    async fn copy_shell_category_preserves_scope_and_script_permissions() {
         let dir = make_temp_dir().await;
         let report = copy_embedded_preset("shell/proxy", &dir, false)
             .await
@@ -554,91 +554,51 @@ mod tests {
             );
         }
 
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn copy_skips_existing_files_when_overwrite_false() {
-        let dir = make_temp_dir().await;
-        let marker = b"original content";
-
-        copy_embedded_preset("shell/proxy", &dir, false)
-            .await
-            .unwrap();
-
-        let first_file = presets::embedded_asset_paths("shell/proxy")
-            .into_iter()
-            .find(|p| p.starts_with("shell/proxy/"))
-            .unwrap();
-        let dest = dir.join(&first_file);
-        fs::write(&dest, marker).await.unwrap();
-
-        let report = copy_embedded_preset("shell/proxy", &dir, false)
-            .await
-            .unwrap();
-        assert!(report.skipped.contains(&dest));
-
-        let content = fs::read(&dest).await.unwrap();
-        assert_eq!(content, marker, "existing file should not be overwritten");
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn copy_overwrites_when_overwrite_true() {
-        let dir = make_temp_dir().await;
-        let marker = b"marker";
-
-        copy_embedded_preset("shell/proxy", &dir, false)
-            .await
-            .unwrap();
-
-        let first_file = presets::embedded_asset_paths("shell/proxy")
-            .into_iter()
-            .find(|p| p.starts_with("shell/proxy/"))
-            .unwrap();
-        let dest = dir.join(&first_file);
-        fs::write(&dest, marker).await.unwrap();
-
-        let report = copy_embedded_preset("shell/proxy", &dir, true)
-            .await
-            .unwrap();
-        assert!(report.overwritten.contains(&dest));
-
-        let content = fs::read(&dest).await.unwrap();
-        assert_eq!(
-            content,
-            presets::read_embedded_asset_bytes(&first_file).unwrap(),
-            "force copy must publish the complete embedded content"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn copy_sets_executable_bit_on_sh_files() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = make_temp_dir().await;
-        let report = copy_embedded_preset("shell/proxy", &dir, false)
-            .await
-            .unwrap();
-
-        assert!(
-            report
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let scripts: Vec<_> = report
                 .created
                 .iter()
-                .any(|path| path.extension().is_some_and(|ext| ext == "sh"))
-        );
-        for path in &report.created {
-            if path.extension().and_then(|e| e.to_str()) == Some("sh") {
+                .filter(|path| path.extension().is_some_and(|ext| ext == "sh"))
+                .collect();
+            assert!(!scripts.is_empty());
+            for path in scripts {
                 let mode = fs::metadata(path).await.unwrap().permissions().mode();
                 assert!(mode & 0o111 != 0, "{path:?} should be executable");
             }
         }
-
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_preserves_or_replaces_existing_files_according_to_force() {
+        let marker = b"original content";
+        for force in [false, true] {
+            let dir = make_temp_dir().await;
+            copy_embedded_preset("shell/proxy", &dir, false)
+                .await
+                .unwrap();
+            let asset = presets::embedded_asset_paths("shell/proxy")
+                .into_iter()
+                .find(|path| path.starts_with("shell/proxy/"))
+                .unwrap();
+            let dest = dir.join(&asset);
+            fs::write(&dest, marker).await.unwrap();
+
+            let report = copy_embedded_preset("shell/proxy", &dir, force)
+                .await
+                .unwrap();
+            let content = fs::read(&dest).await.unwrap();
+            if force {
+                assert!(report.overwritten.contains(&dest));
+                assert_eq!(content, presets::read_embedded_asset_bytes(&asset).unwrap());
+            } else {
+                assert!(report.skipped.contains(&dest));
+                assert_eq!(content, marker);
+            }
+            fs::remove_dir_all(&dir).await.unwrap();
+        }
     }
 
     #[test]
@@ -766,45 +726,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn link_writes_presets_dir_to_config() {
-        let dir = make_temp_dir().await;
-        let presets = make_temp_dir().await;
-        let config = config_in(&dir);
+    async fn link_saves_canonical_presets_dir_and_requested_live_mode() {
+        for live in [false, true] {
+            let dir = make_temp_dir().await;
+            let presets = make_temp_dir().await;
+            let config = config_in(&dir);
+            handle_preset_link(&config, presets.clone(), false, live)
+                .await
+                .unwrap();
 
-        handle_preset_link(&config, presets.clone(), false, false)
-            .await
-            .unwrap();
-
-        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
-        let parsed: toml::Table = toml::from_str(&content).unwrap();
-        let saved = parsed
-            .get("presets_dir")
-            .and_then(toml::Value::as_str)
-            .map(PathBuf::from);
-        assert_eq!(
-            saved.as_deref(),
-            Some(fs::canonicalize(&presets).await.unwrap().as_path()),
-            "config.toml should contain the canonical linked path"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-        fs::remove_dir_all(&presets).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn live_link_persists_external_shell_mode() {
-        let dir = make_temp_dir().await;
-        let presets = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        handle_preset_link(&config, presets.clone(), false, true)
-            .await
-            .unwrap();
-
-        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
-        assert!(content.contains("external_shell_mode = \"live\""));
-        fs::remove_dir_all(&dir).await.unwrap();
-        fs::remove_dir_all(&presets).await.unwrap();
+            let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
+            let parsed: toml::Table = toml::from_str(&content).unwrap();
+            let saved = parsed
+                .get("presets_dir")
+                .and_then(toml::Value::as_str)
+                .map(PathBuf::from);
+            assert_eq!(
+                saved,
+                Some(fs::canonicalize(&presets).await.unwrap()),
+                "live={live}"
+            );
+            if live {
+                assert!(content.contains("external_shell_mode = \"live\""));
+            }
+            fs::remove_dir_all(&dir).await.unwrap();
+            fs::remove_dir_all(&presets).await.unwrap();
+        }
     }
 
     #[tokio::test]

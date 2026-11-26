@@ -345,21 +345,11 @@ async fn pacman_failure_guidance_preserves_status_logs_and_never_retries() {
     }
 }
 
-async fn run_failed_pacman(
-    stdout: &str,
-    stderr: &str,
-    output_truncated: bool,
-) -> execution::ExecutionResult {
+async fn run_pacman_once(
+    output: Result<crate::runtime::ProcessOutput>,
+) -> Result<execution::ExecutionResult> {
     let runtime = runtime(false);
-    runtime
-        .host()
-        .queue_process_output(Ok(crate::runtime::ProcessOutput {
-            exit_code: Some(1),
-            stdout: stdout.as_bytes().to_vec(),
-            stderr: stderr.as_bytes().to_vec(),
-            output_truncated,
-            ..Default::default()
-        }));
+    runtime.host().queue_process_output(output);
     let result = runtime
         .run_package(
             "arch",
@@ -369,10 +359,39 @@ async fn run_failed_pacman(
             "fzf",
             &mut NullObserver,
         )
-        .await
-        .unwrap();
-    assert_eq!(runtime.host().process_requests().len(), 1);
+        .await;
+    assert_eq!(
+        runtime.host().process_requests().len(),
+        1,
+        "pacman must not retry"
+    );
     result
+}
+
+async fn assert_generic_pacman_failure(stderr: &str) {
+    let result = run_failed_pacman("", stderr, false).await;
+    assert!(!result.success);
+    assert_eq!(
+        result.failure_detail, "Pacman install failed (exit 1)",
+        "{stderr}"
+    );
+    assert_eq!(result.logs, stderr.lines().collect::<Vec<_>>());
+}
+
+async fn run_failed_pacman(
+    stdout: &str,
+    stderr: &str,
+    output_truncated: bool,
+) -> execution::ExecutionResult {
+    run_pacman_once(Ok(crate::runtime::ProcessOutput {
+        exit_code: Some(1),
+        stdout: stdout.as_bytes().to_vec(),
+        stderr: stderr.as_bytes().to_vec(),
+        output_truncated,
+        ..Default::default()
+    }))
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -397,13 +416,7 @@ async fn pacman_download_hint_requires_an_exact_download_error_not_a_404_substri
         "error: failed retrieving file 'tool.pkg.tar.zst' from mirror.example : The requested URL returned error:",
     ] {
         let stderr = format!("{stderr}\n{PACMAN_DOWNLOAD_FAILURE}");
-        let result = run_failed_pacman("", &stderr, false).await;
-        assert!(!result.success);
-        assert_eq!(
-            result.failure_detail, "Pacman install failed (exit 1)",
-            "{stderr}"
-        );
-        assert_eq!(result.logs, stderr.lines().collect::<Vec<_>>());
+        assert_generic_pacman_failure(&stderr).await;
     }
 }
 
@@ -468,25 +481,13 @@ async fn pacman_hint_accepts_native_color_prefix_without_changing_raw_logs() {
         .collect::<Vec<_>>()
         .join("\n");
     for exit_code in [0, 1] {
-        let runtime = runtime(false);
-        runtime
-            .host()
-            .queue_process_output(Ok(crate::runtime::ProcessOutput {
-                exit_code: Some(exit_code),
-                stderr: stderr.as_bytes().to_vec(),
-                ..Default::default()
-            }));
-        let result = runtime
-            .run_package(
-                "arch",
-                SysPackageProvider::Pacman,
-                "fzf",
-                false,
-                "fzf",
-                &mut NullObserver,
-            )
-            .await
-            .unwrap();
+        let result = run_pacman_once(Ok(crate::runtime::ProcessOutput {
+            exit_code: Some(exit_code),
+            stderr: stderr.as_bytes().to_vec(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
         assert_eq!(result.success, exit_code == 0);
         assert_eq!(
             result
@@ -495,7 +496,6 @@ async fn pacman_hint_accepts_native_color_prefix_without_changing_raw_logs() {
             exit_code != 0
         );
         assert_eq!(result.logs, stderr.lines().collect::<Vec<_>>());
-        assert_eq!(runtime.host().process_requests().len(), 1);
     }
 }
 
@@ -525,13 +525,7 @@ async fn pacman_hint_requires_download_transaction_failure_after_404() {
             PACMAN_DOWNLOAD_404.replace("404", "404\x1b[0m0")
         ),
     ] {
-        let result = run_failed_pacman("", &stderr, false).await;
-        assert_eq!(
-            result.failure_detail, "Pacman install failed (exit 1)",
-            "{stderr}"
-        );
-        assert!(!result.success);
-        assert_eq!(result.logs, stderr.lines().collect::<Vec<_>>());
+        assert_generic_pacman_failure(&stderr).await;
     }
 }
 
@@ -539,31 +533,18 @@ async fn pacman_hint_requires_download_transaction_failure_after_404() {
 async fn pacman_signal_termination_keeps_original_failure_without_download_advice() {
     // SIGINT/SIGTERM set interrupted; other signals also have no exit code.
     for interrupted in [false, true] {
-        let runtime = runtime(false);
         let stderr = format!("{PACMAN_DOWNLOAD_404}\n{PACMAN_DOWNLOAD_FAILURE}");
-        runtime
-            .host()
-            .queue_process_output(Ok(crate::runtime::ProcessOutput {
-                exit_code: None,
-                interrupted,
-                stderr: stderr.as_bytes().to_vec(),
-                ..Default::default()
-            }));
-        let result = runtime
-            .run_package(
-                "arch",
-                SysPackageProvider::Pacman,
-                "fzf",
-                false,
-                "fzf",
-                &mut NullObserver,
-            )
-            .await
-            .unwrap();
+        let result = run_pacman_once(Ok(crate::runtime::ProcessOutput {
+            exit_code: None,
+            interrupted,
+            stderr: stderr.as_bytes().to_vec(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
         assert!(!result.success);
         assert_eq!(result.failure_detail, "Pacman install failed (exit signal)");
         assert_eq!(result.logs, stderr.lines().collect::<Vec<_>>());
-        assert_eq!(runtime.host().process_requests().len(), 1);
     }
 }
 
@@ -573,20 +554,7 @@ async fn pacman_diagnostics_do_not_reclassify_timeouts_or_spawn_errors() {
         std::io::ErrorKind::TimedOut,
         std::io::ErrorKind::PermissionDenied,
     ] {
-        let runtime = runtime(false);
-        runtime
-            .host()
-            .queue_process_output(Err(std::io::Error::new(kind, "HTTP 404").into()));
-        let result = runtime
-            .run_package(
-                "arch",
-                SysPackageProvider::Pacman,
-                "fzf",
-                false,
-                "fzf",
-                &mut NullObserver,
-            )
-            .await;
+        let result = run_pacman_once(Err(std::io::Error::new(kind, "HTTP 404").into())).await;
         if kind == std::io::ErrorKind::TimedOut {
             let result = result.unwrap();
             assert!(!result.success);
@@ -599,6 +567,5 @@ async fn pacman_diagnostics_do_not_reclassify_timeouts_or_spawn_errors() {
             assert!(format!("{error:#}").contains("HTTP 404"));
             assert!(!format!("{error:#}").contains("pacman -Syu"));
         }
-        assert_eq!(runtime.host().process_requests().len(), 1);
     }
 }

@@ -1,4 +1,6 @@
-use shine_core::runtime::RuntimePlatform;
+use shine_core::runtime::{
+    CoreRuntime, InMemoryHost, RuntimeContext, RuntimePlatform, SysBootstrapPlanRequest,
+};
 
 #[tokio::test]
 async fn arch_minimal_is_the_default_and_contains_only_native_packages() {
@@ -20,6 +22,23 @@ async fn arch_minimal_is_the_default_and_contains_only_native_packages() {
         };
         assert_eq!(provider, shine_core::runtime::SysPackageProvider::Pacman);
         assert_eq!(package, item.id);
+    }
+}
+
+fn linux_memory_runtime(configure: impl FnOnce(&mut RuntimeContext)) -> CoreRuntime<InMemoryHost> {
+    let embedded = super::support::runtime(RuntimePlatform::Linux);
+    let mut context = embedded.context().clone();
+    configure(&mut context);
+    CoreRuntime::new(InMemoryHost::new(), context, embedded.presets().clone())
+}
+
+fn bootstrap_request(os: &str, shell: &str, item_ids: Vec<String>) -> SysBootstrapPlanRequest {
+    SysBootstrapPlanRequest {
+        os_id: os.into(),
+        sys_shell: shell.into(),
+        item_ids,
+        force_profile: false,
+        input_versions: Default::default(),
     }
 }
 
@@ -48,10 +67,8 @@ impl shine_core::runtime::RuntimeInteraction for NoPrompts {
 #[tokio::test]
 async fn arch_plan_binds_both_startup_files_and_rejects_stale_approval() {
     use shine_core::plan::{PermissionV1, PlanApprovalV1};
-    use shine_core::runtime::{
-        CoreRuntime, HostOperation, InMemoryHost, NullObserver, ShellType, SysBootstrapPlanRequest,
-    };
-    for shell in [ShellType::Bash, ShellType::Zsh] {
+    use shine_core::runtime::{HostOperation, NullObserver, ShellType};
+    for (shell, shell_name) in [(ShellType::Bash, "bash"), (ShellType::Zsh, "zsh")] {
         for changed_file in [
             ".bashrc",
             ".zshrc",
@@ -62,25 +79,12 @@ async fn arch_plan_binds_both_startup_files_and_rejects_stale_approval() {
             ".shine/profile/arch-sys.pre.new.sh",
             ".shine/profile/arch-sys.post.merge.sh",
         ] {
-            let embedded = super::support::runtime(RuntimePlatform::Linux);
-            let mut context = embedded.context().clone();
-            context.shell = shell;
-            context.path_env = Some(String::new());
-            context.shine_dir = context.home_dir.join(".shine");
-            let runtime =
-                CoreRuntime::new(InMemoryHost::new(), context, embedded.presets().clone());
-            let request = SysBootstrapPlanRequest {
-                os_id: "arch".into(),
-                item_ids: vec!["fzf".into()],
-                sys_shell: if shell == ShellType::Bash {
-                    "bash"
-                } else {
-                    "zsh"
-                }
-                .into(),
-                force_profile: false,
-                input_versions: Default::default(),
-            };
+            let runtime = linux_memory_runtime(|context| {
+                context.shell = shell;
+                context.path_env = Some(String::new());
+                context.shine_dir = context.home_dir.join(".shine");
+            });
+            let request = bootstrap_request("arch", shell_name, vec!["fzf".into()]);
             let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
             assert!(plan.is_ready(), "{plan:#?}");
             assert!(plan.permissions.required.contains(&PermissionV1::Command {
@@ -127,8 +131,8 @@ async fn arch_plan_binds_both_startup_files_and_rejects_stale_approval() {
 async fn arch_bootstrap_installs_once_and_profiles_switch_disable_and_detach_safely() {
     use shine_core::plan::PlanApprovalV1;
     use shine_core::runtime::{
-        CoreRuntime, NullObserver, RealHost, ShellType, SysBootstrapPlanRequest, SysItemStatus,
-        SysProfilePlanRequest, SysRunManifest, capture_embedded_preset_snapshot, detach_sys_loader,
+        NullObserver, RealHost, ShellType, SysItemStatus, SysProfilePlanRequest, SysRunManifest,
+        capture_embedded_preset_snapshot, detach_sys_loader,
     };
     use std::os::unix::fs::PermissionsExt;
     for (shell, kind) in [("bash", ShellType::Bash), ("zsh", ShellType::Zsh)] {
@@ -200,13 +204,7 @@ cp "$bin/$command" "$bin/$command-{suffix}"
             selection.item_ids,
             ["neovim", "fzf", "bat", "eza", "zoxide"]
         );
-        let request = SysBootstrapPlanRequest {
-            os_id: "arch".into(),
-            item_ids: selection.item_ids,
-            sys_shell: shell.into(),
-            force_profile: false,
-            input_versions: Default::default(),
-        };
+        let request = bootstrap_request("arch", shell, selection.item_ids);
         for expected in [SysItemStatus::Installed, SysItemStatus::AlreadyInstalled] {
             let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
             let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -333,22 +331,14 @@ cp "$bin/$command" "$bin/$command-{suffix}"
 async fn arch_failed_install_or_missing_binary_stops_before_later_packages() {
     use shine_core::plan::PlanApprovalV1;
     use shine_core::runtime::{
-        CoreRuntime, HostOperation, InMemoryHost, NullObserver, ProcessOutput,
-        SysBootstrapPlanRequest, SysItemStatus, SysRunManifest,
+        HostOperation, NullObserver, ProcessOutput, SysItemStatus, SysRunManifest,
     };
     for exit_code in [0, 1] {
-        let embedded = super::support::runtime(RuntimePlatform::Linux);
-        let mut context = embedded.context().clone();
-        context.running_as_admin = true;
-        context.path_env = Some(String::new());
-        let runtime = CoreRuntime::new(InMemoryHost::new(), context, embedded.presets().clone());
-        let request = SysBootstrapPlanRequest {
-            os_id: "arch".into(),
-            item_ids: vec!["neovim".into(), "fzf".into()],
-            sys_shell: "bash".into(),
-            force_profile: false,
-            input_versions: Default::default(),
-        };
+        let runtime = linux_memory_runtime(|context| {
+            context.running_as_admin = true;
+            context.path_env = Some(String::new());
+        });
+        let request = bootstrap_request("arch", "bash", vec!["neovim".into(), "fzf".into()]);
         let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         runtime.host().queue_process_output(Ok(ProcessOutput {
@@ -406,15 +396,11 @@ async fn arch_failed_install_or_missing_binary_stops_before_later_packages() {
 #[tokio::test]
 async fn bootstrap_approval_binds_unselected_enabled_profile_items() {
     use shine_core::plan::PlanApprovalV1;
-    use shine_core::runtime::{
-        CoreRuntime, InMemoryHost, SysBootstrapPlanRequest, SysItemStatus, SysRunEntry,
-        SysRunManifest,
-    };
+    use shine_core::runtime::{SysItemStatus, SysRunEntry, SysRunManifest};
     for os in ["arch", "ubuntu"] {
-        let embedded = super::support::runtime(RuntimePlatform::Linux);
-        let mut context = embedded.context().clone();
-        context.path_env = Some(String::new());
-        let runtime = CoreRuntime::new(InMemoryHost::new(), context, embedded.presets().clone());
+        let runtime = linux_memory_runtime(|context| {
+            context.path_env = Some(String::new());
+        });
         let mut receipt = SysRunManifest::default();
         receipt.upsert(SysRunEntry {
             os_id: os.into(),
@@ -431,13 +417,7 @@ async fn bootstrap_approval_binds_unselected_enabled_profile_items() {
             .save(runtime.host(), &runtime.context().shine_dir)
             .await
             .unwrap();
-        let request = SysBootstrapPlanRequest {
-            os_id: os.into(),
-            item_ids: vec!["fzf".into()],
-            sys_shell: "bash".into(),
-            force_profile: false,
-            input_versions: Default::default(),
-        };
+        let request = bootstrap_request(os, "bash", vec!["fzf".into()]);
         let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         receipt.entries[0].profile_enabled = true;
@@ -456,20 +436,12 @@ async fn bootstrap_approval_binds_unselected_enabled_profile_items() {
 #[tokio::test]
 async fn sys_profile_plan_covers_pending_artifact_removal() {
     use shine_core::plan::{FilesystemAccessV1, PermissionV1};
-    use shine_core::runtime::{CoreRuntime, InMemoryHost, SysBootstrapPlanRequest};
     for os in ["arch", "ubuntu"] {
-        let embedded = super::support::runtime(RuntimePlatform::Linux);
-        let mut context = embedded.context().clone();
-        context.shine_dir = context.home_dir.join(".shine");
-        let runtime = CoreRuntime::new(InMemoryHost::new(), context, embedded.presets().clone());
+        let runtime = linux_memory_runtime(|context| {
+            context.shine_dir = context.home_dir.join(".shine");
+        });
         let plan = runtime
-            .plan_sys_bootstrap(SysBootstrapPlanRequest {
-                os_id: os.into(),
-                item_ids: vec!["fzf".into()],
-                sys_shell: "bash".into(),
-                force_profile: false,
-                input_versions: Default::default(),
-            })
+            .plan_sys_bootstrap(bootstrap_request(os, "bash", vec!["fzf".into()]))
             .await
             .unwrap();
         for phase in ["pre", "post"] {
@@ -491,20 +463,15 @@ async fn sys_profile_plan_covers_pending_artifact_removal() {
 #[tokio::test]
 async fn force_profile_plan_covers_backup_directory_only_when_requested() {
     use shine_core::plan::{FilesystemAccessV1, PermissionV1};
-    use shine_core::runtime::{CoreRuntime, InMemoryHost, SysBootstrapPlanRequest};
     for os in ["arch", "ubuntu"] {
-        let embedded = super::support::runtime(RuntimePlatform::Linux);
-        let mut context = embedded.context().clone();
-        context.shine_dir = context.home_dir.join(".shine");
-        let runtime = CoreRuntime::new(InMemoryHost::new(), context, embedded.presets().clone());
+        let runtime = linux_memory_runtime(|context| {
+            context.shine_dir = context.home_dir.join(".shine");
+        });
         for force_profile in [false, true] {
             let plan = runtime
                 .plan_sys_bootstrap(SysBootstrapPlanRequest {
-                    os_id: os.into(),
-                    item_ids: vec!["fzf".into()],
-                    sys_shell: "bash".into(),
                     force_profile,
-                    input_versions: Default::default(),
+                    ..bootstrap_request(os, "bash", vec!["fzf".into()])
                 })
                 .await
                 .unwrap();
@@ -523,12 +490,11 @@ async fn force_profile_plan_covers_backup_directory_only_when_requested() {
 
 #[tokio::test]
 async fn pacman_preparation_is_planned_only_for_missing_native_packages() {
-    use shine_core::runtime::{CoreRuntime, HostOperation, InMemoryHost, SysBootstrapPlanRequest};
+    use shine_core::runtime::HostOperation;
     for (os, present) in [("arch", false), ("arch", true), ("ubuntu", false)] {
-        let embedded = super::support::runtime(RuntimePlatform::Linux);
-        let mut context = embedded.context().clone();
-        context.path_env = Some(String::new());
-        let runtime = CoreRuntime::new(InMemoryHost::new(), context, embedded.presets().clone());
+        let runtime = linux_memory_runtime(|context| {
+            context.path_env = Some(String::new());
+        });
         if present {
             runtime.host().put_file_with_mode(
                 runtime.context().home_dir.join(".local/bin/fzf"),
@@ -537,13 +503,7 @@ async fn pacman_preparation_is_planned_only_for_missing_native_packages() {
             );
         }
         let plan = runtime
-            .plan_sys_bootstrap(SysBootstrapPlanRequest {
-                os_id: os.into(),
-                item_ids: vec!["fzf".into()],
-                sys_shell: "bash".into(),
-                force_profile: false,
-                input_versions: Default::default(),
-            })
+            .plan_sys_bootstrap(bootstrap_request(os, "bash", vec!["fzf".into()]))
             .await
             .unwrap();
         assert!(plan.is_ready());
