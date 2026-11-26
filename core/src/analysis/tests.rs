@@ -9,13 +9,25 @@ fn declaration(body: &str) -> PermissionDeclarationV1 {
     toml::from_str(&format!("schema_version = 1\n{body}")).unwrap()
 }
 fn report(code: &str, declaration: Option<&PermissionDeclarationV1>) -> Report {
+    report_for_file("main.ts", code, declaration)
+}
+
+fn report_for_file(
+    file: &str,
+    code: &str,
+    declaration: Option<&PermissionDeclarationV1>,
+) -> Report {
+    let input = BTreeMap::from([(file.into(), code.as_bytes())]);
+    report_for_sources(&input, file, declaration)
+}
+
+fn report_for_sources(
+    input: &BTreeMap<String, impl AsRef<[u8]>>,
+    file: &str,
+    declaration: Option<&PermissionDeclarationV1>,
+) -> Report {
     Session::default()
-        .analyze(
-            &sources(code),
-            "main.ts",
-            declaration,
-            &EnvironmentContract::default(),
-        )
+        .analyze(input, file, declaration, &EnvironmentContract::default())
         .unwrap()
 }
 fn has(report: &Report, code: &str) -> bool {
@@ -209,14 +221,7 @@ fn transparent_wrappers_have_matching_javascript_and_typescript_behavior() {
         ("(Bun.file('in')).text();", 1),
     ] {
         for file in ["main.js", "main.ts"] {
-            let r = Session::default()
-                .analyze(
-                    &BTreeMap::from([(file.into(), code.as_bytes())]),
-                    file,
-                    None,
-                    &EnvironmentContract::default(),
-                )
-                .unwrap();
+            let r = report_for_file(file, code, None);
             assert_eq!(differences(&r), expected, "{file}: {code}: {r:?}");
             assert!(!has(&r, "code_analysis_parse_failure"), "{r:?}");
             if code.starts_with("/*") {
@@ -346,9 +351,7 @@ fn wrapped_literals_preserve_dependencies_locations_and_depth_limits() {
                 b"fetch(('https://example.org/private'));".as_slice(),
             ),
         ]);
-        let r = Session::default()
-            .analyze(&input, file, None, &EnvironmentContract::default())
-            .unwrap();
+        let r = report_for_sources(&input, file, None);
         assert_eq!(differences(&r), 3, "{file}: {r:?}");
         for (source, line, column) in [(file, 3, 3), (file, 4, 3), ("dep.js", 1, 1)] {
             assert!(
@@ -491,9 +494,7 @@ fn unsupported_import_spellings_still_shadow_builtin_globals() {
                     b"fetch('https://dependency.invalid');".as_slice(),
                 ),
             ]);
-            let r = Session::default()
-                .analyze(&input, file, None, &EnvironmentContract::default())
-                .unwrap();
+            let r = report_for_sources(&input, file, None);
             assert!(
                 r.allowed && has(&r, "code_analysis_call_unknown"),
                 "{file}: {code}: {r:?}"
@@ -572,19 +573,9 @@ fn quoted_builtin_import_names_match_identifier_spelling() {
         ),
     ] {
         for file in ["main.js", "main.ts"] {
-            let input = BTreeMap::from([(file.into(), code.as_bytes())]);
-            let r = Session::default()
-                .analyze(&input, file, None, &EnvironmentContract::default())
-                .unwrap();
+            let r = report_for_file(file, code, None);
             assert_eq!(differences(&r), expected, "{file}: {code}: {r:?}");
-            let matching = Session::default()
-                .analyze(
-                    &input,
-                    file,
-                    Some(&permissions),
-                    &EnvironmentContract::default(),
-                )
-                .unwrap();
+            let matching = report_for_file(file, code, Some(&permissions));
             assert!(matching.allowed, "{file}: {code}: {matching:?}");
             assert!(
                 !has(&matching, "code_analysis_call_unknown"),
@@ -651,23 +642,13 @@ fn escaped_network_names_and_urls_match_plain_spelling() {
         "fetch('https://exam\\\r\nple.org');",
     ] {
         for file in ["main.js", "main.ts"] {
-            let input = BTreeMap::from([(file.into(), code.as_bytes())]);
-            let r = Session::default()
-                .analyze(&input, file, None, &EnvironmentContract::default())
-                .unwrap();
+            let r = report_for_file(file, code, None);
             assert_eq!(differences(&r), 1, "{code}: {r:?}");
             assert!(
                 r.diagnostics.iter().all(|d| d.behavior == "network"),
                 "{r:?}"
             );
-            let matching = Session::default()
-                .analyze(
-                    &input,
-                    file,
-                    Some(&declared),
-                    &EnvironmentContract::default(),
-                )
-                .unwrap();
+            let matching = report_for_file(file, code, Some(&declared));
             assert!(matching.diagnostics.is_empty(), "{code}: {matching:?}");
             assert_eq!(differences(&report(code, Some(&wrong))), 1);
         }
@@ -983,9 +964,7 @@ fn comments_preserve_literal_arguments_and_dependency_identity() {
         ),
         ("dep.ts".into(), b"fetch('https://example.org');".as_slice()),
     ]);
-    let r = Session::default()
-        .analyze(&input, "main.ts", None, &EnvironmentContract::default())
-        .unwrap();
+    let r = report_for_sources(&input, "main.ts", None);
     assert_eq!(differences(&r), 1, "{r:?}");
     assert_eq!(r.files.len(), 2);
 }
@@ -1016,7 +995,7 @@ fn binding_mutations_and_builtin_lookups_respect_lexical_scope() {
 
 #[test]
 fn default_parameters_use_outer_bindings_before_function_body_scope() {
-    for extension in ["js", "ts"] {
+    for file in ["main.js", "main.ts"] {
         for code in [
             "function run(x = fetch('https://example.org')) { var fetch = other; }",
             "function run(x = fetch('https://example.org')) { function fetch() {} }",
@@ -1026,11 +1005,7 @@ fn default_parameters_use_outer_bindings_before_function_body_scope() {
             "const object = { run(x = fetch('https://example.org')) { for (var fetch of []) {} } };",
             "function run(x = () => fetch('https://example.org')) { var fetch = other; }",
         ] {
-            let file = format!("main.{extension}");
-            let input = BTreeMap::from([(file.clone(), code.as_bytes())]);
-            let r = Session::default()
-                .analyze(&input, &file, None, &EnvironmentContract::default())
-                .unwrap();
+            let r = report_for_file(file, code, None);
             assert_eq!(differences(&r), 1, "{code}: {r:?}");
         }
     }
@@ -1067,30 +1042,20 @@ fn replaced_require_does_not_produce_builtin_evidence() {
             ("main.ts".into(), code.as_bytes()),
             ("dep.ts".into(), b"fetch('https://example.org');".as_slice()),
         ]);
-        let r = Session::default()
-            .analyze(&input, "main.ts", None, &EnvironmentContract::default())
-            .unwrap();
+        let r = report_for_sources(&input, "main.ts", None);
         assert_eq!(differences(&r), 1, "{code}: {r:?}");
     }
 }
 
 #[test]
 fn generator_declarations_shadow_globals_without_leaking_local_bindings() {
-    for extension in ["js", "ts"] {
+    for file in ["main.js", "main.ts"] {
         for source in [
             "export {}; function* fetch(url) { yield url; } fetch('https://fake.invalid');",
             "export {}; async function* fetch(url) { yield url; } fetch('https://fake.invalid');",
             "export {}; function* run() { var fetch = other; fetch('https://fake.invalid'); }",
         ] {
-            let input = BTreeMap::from([(format!("main.{extension}"), source.as_bytes())]);
-            let r = Session::default()
-                .analyze(
-                    &input,
-                    &format!("main.{extension}"),
-                    None,
-                    &EnvironmentContract::default(),
-                )
-                .unwrap();
+            let r = report_for_file(file, source, None);
             assert!(r.allowed, "{source}: {r:?}");
             assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
             // A generator's local var must not shadow the real global outside it.
@@ -1110,7 +1075,7 @@ fn generator_declarations_shadow_globals_without_leaking_local_bindings() {
 
 #[test]
 fn review_comments_do_not_hide_namespace_bindings_or_assignment_targets() {
-    for extension in ["js", "ts"] {
+    for file in ["main.js", "main.ts"] {
         for (code, expected) in [
             (
                 "import * /* ns */ as fs from 'node:fs'; fs.readFileSync('config');",
@@ -1137,11 +1102,7 @@ fn review_comments_do_not_hide_namespace_bindings_or_assignment_targets() {
                 1,
             ),
         ] {
-            let file = format!("main.{extension}");
-            let input = BTreeMap::from([(file.clone(), code.as_bytes())]);
-            let r = Session::default()
-                .analyze(&input, &file, None, &EnvironmentContract::default())
-                .unwrap();
+            let r = report_for_file(file, code, None);
             assert_eq!(differences(&r), expected, "{code}: {r:?}");
             if expected == 0 {
                 assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
@@ -1256,7 +1217,7 @@ fn review_typescript_write_wrappers_do_not_hide_targets_or_visit_type_names() {
 
 #[test]
 fn review_method_keys_and_static_blocks_keep_their_own_binding_scopes() {
-    for extension in ["js", "ts"] {
+    for file in ["main.js", "main.ts"] {
         for (code, expected) in [
             (
                 "const object = { [fetch('https://example.org')](fetch) {} };",
@@ -1284,11 +1245,7 @@ fn review_method_keys_and_static_blocks_keep_their_own_binding_scopes() {
                 0,
             ),
         ] {
-            let file = format!("main.{extension}");
-            let input = BTreeMap::from([(file.clone(), code.as_bytes())]);
-            let r = Session::default()
-                .analyze(&input, &file, None, &EnvironmentContract::default())
-                .unwrap();
+            let r = report_for_file(file, code, None);
             assert_eq!(differences(&r), expected, "{code}: {r:?}");
         }
     }
@@ -1324,9 +1281,7 @@ fn review_captured_loaders_keep_dependency_effects_and_builtin_return_identity()
             ("main.ts".into(), code.as_bytes()),
             ("dep.ts".into(), b"fetch('https://example.org');".as_slice()),
         ]);
-        let r = Session::default()
-            .analyze(&input, "main.ts", None, &EnvironmentContract::default())
-            .unwrap();
+        let r = report_for_sources(&input, "main.ts", None);
         assert_eq!(differences(&r), expected, "{code}: {r:?}");
         if expected == 0 {
             assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
@@ -1554,10 +1509,7 @@ fn review_optional_call_arguments_remain_conditional() {
             "function run(cb){{{call}; Object.assign(globalThis,{{fetch:other}});}} run(null); run(other);"
         );
         for file in ["main.js", "main.ts"] {
-            let input = BTreeMap::from([(file.into(), code.as_bytes())]);
-            let r = Session::default()
-                .analyze(&input, file, None, &EnvironmentContract::default())
-                .unwrap();
+            let r = report_for_file(file, &code, None);
             assert_eq!(r.allowed, expected == 0, "{file}: {code}: {r:?}");
             assert_eq!(differences(&r), expected, "{file}: {code}");
         }
@@ -1631,9 +1583,7 @@ fn review_destructuring_defaults_see_prior_stores_and_the_original_input() {
             ("main.ts".into(), code.as_bytes()),
             ("dep.ts".into(), b"fetch('https://example.org')".as_slice()),
         ]);
-        let r = Session::default()
-            .analyze(&input, "main.ts", None, &EnvironmentContract::default())
-            .unwrap();
+        let r = report_for_sources(&input, "main.ts", None);
         assert_eq!(r.allowed, expected == 0, "{code}: {r:?}");
         assert_eq!(differences(&r), expected, "{code}");
     }
@@ -1712,9 +1662,7 @@ fn condition_loads_analyze_dependencies_before_loader_replacement() {
                 (file.into(), code.as_bytes()),
                 ("dep.js".into(), b"fetch('https://example.org');".as_slice()),
             ]);
-            let r = Session::default()
-                .analyze(&input, file, None, &EnvironmentContract::default())
-                .unwrap();
+            let r = report_for_sources(&input, file, None);
             assert_eq!(r.allowed, expected == 0, "{code}: {r:?}");
             assert_eq!(differences(&r), expected, "{code}: {r:?}");
             assert_eq!(
@@ -2108,14 +2056,7 @@ fn object_assign_tracks_replaced_members_without_erasing_other_evidence() {
              const after = fs.readFileSync; after('in');"
         );
         for file in ["main.js", "main.ts"] {
-            let r = Session::default()
-                .analyze(
-                    &BTreeMap::from([(file.into(), code.as_bytes())]),
-                    file,
-                    None,
-                    &EnvironmentContract::default(),
-                )
-                .unwrap();
+            let r = report_for_file(file, &code, None);
             for (line, definite) in [
                 (3, expected_read),
                 (4, expected_write),
@@ -2186,13 +2127,9 @@ fn member_mutations_preserve_captured_functions_and_unrelated_members() {
             1,
         ),
     ] {
-        for extension in ["js", "ts"] {
-            let file = format!("main.{extension}");
-            let input = BTreeMap::from([(file.clone(), source.as_bytes())]);
-            let r = Session::default()
-                .analyze(&input, &file, None, &EnvironmentContract::default())
-                .unwrap();
-            assert_eq!(differences(&r), expected, "{extension}: {source}: {r:?}");
+        for file in ["main.js", "main.ts"] {
+            let r = report_for_file(file, source, None);
+            assert_eq!(differences(&r), expected, "{file}: {source}: {r:?}");
             assert!(!has(&r, "code_analysis_parse_failure"), "{r:?}");
             if expected == 0 {
                 assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
@@ -2301,14 +2238,10 @@ fn binding_patterns_exclude_defaults_keys_and_type_queries() {
             0,
         ),
     ] {
-        for extension in ["js", "ts"] {
-            let file = format!("main.{extension}");
-            let input = BTreeMap::from([(file.clone(), source.as_bytes())]);
-            let r = Session::default()
-                .analyze(&input, &file, None, &EnvironmentContract::default())
-                .unwrap();
+        for file in ["main.js", "main.ts"] {
+            let r = report_for_file(file, source, None);
             assert!(!has(&r, "code_analysis_parse_failure"), "{source}: {r:?}");
-            assert_eq!(differences(&r), expected, "{extension}: {source}: {r:?}");
+            assert_eq!(differences(&r), expected, "{file}: {source}: {r:?}");
         }
     }
     for source in [
@@ -2368,14 +2301,10 @@ fn destructuring_assignments_invalidate_only_written_targets() {
             1,
         ),
     ] {
-        for extension in ["js", "ts"] {
-            let file = format!("main.{extension}");
-            let input = BTreeMap::from([(file.clone(), source.as_bytes())]);
-            let r = Session::default()
-                .analyze(&input, &file, None, &EnvironmentContract::default())
-                .unwrap();
+        for file in ["main.js", "main.ts"] {
+            let r = report_for_file(file, source, None);
             assert!(!has(&r, "code_analysis_parse_failure"), "{source}: {r:?}");
-            assert_eq!(differences(&r), expected, "{extension}: {source}: {r:?}");
+            assert_eq!(differences(&r), expected, "{file}: {source}: {r:?}");
             if expected == 0 {
                 assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
             }
@@ -2607,9 +2536,7 @@ fn relative_graph_handles_cycles_missing_and_ambiguous_dependencies() {
         "a.ts".into(),
         b"import './main'; fetch('https://example.org');".to_vec(),
     );
-    let r = Session::default()
-        .analyze(&input, "main.ts", None, &EnvironmentContract::default())
-        .unwrap();
+    let r = report_for_sources(&input, "main.ts", None);
     assert_eq!(r.files, ["a.ts", "main.ts"]);
     assert_eq!(differences(&r), 1);
     for code in [
@@ -2620,9 +2547,7 @@ fn relative_graph_handles_cycles_missing_and_ambiguous_dependencies() {
         assert!(has(&r, code), "{r:?}");
     }
     input.insert("a.js".into(), b"export {};".to_vec());
-    let r = Session::default()
-        .analyze(&input, "main.ts", None, &EnvironmentContract::default())
-        .unwrap();
+    let r = report_for_sources(&input, "main.ts", None);
     assert!(has(&r, "code_analysis_dependency_ambiguous"));
 }
 
@@ -2752,9 +2677,7 @@ fn commonjs_relative_dependencies_and_builtin_aliases_are_analyzed() {
         "helper.js".into(),
         b"fetch('https://example.org');".to_vec(),
     );
-    let r = Session::default()
-        .analyze(&input, "main.ts", None, &EnvironmentContract::default())
-        .unwrap();
+    let r = report_for_sources(&input, "main.ts", None);
     assert_eq!(differences(&r), 2, "{r:?}");
     assert_eq!(r.files, ["helper.js", "main.ts"]);
 }
@@ -2789,12 +2712,7 @@ fn binding_scope_walks_consume_the_command_budget() {
     // Few syntax nodes can still require a long ancestor walk for a var binding.
     let source = "{".repeat(128) + "var local = 0;" + &"}".repeat(128);
     let input = sources(&source);
-    assert!(
-        Session::default()
-            .analyze(&input, "main.ts", None, &EnvironmentContract::default())
-            .unwrap()
-            .allowed
-    );
+    assert!(report_for_sources(&input, "main.ts", None).allowed);
     let mut session = Session::new(
         Limits {
             nodes: 450,
@@ -2987,14 +2905,7 @@ fn advisory_diagnostics_coexist_without_granting_or_blocking_admission() {
     assert!(has(&gaps, "code_analysis_call_unknown"));
     let mut input = sources("import './broken'; fetch('https://missing.example'); unknownCall();");
     input.insert("broken.ts".into(), b"const broken = ;".to_vec());
-    let r = Session::default()
-        .analyze(
-            &input,
-            "main.ts",
-            Some(&extra),
-            &EnvironmentContract::default(),
-        )
-        .unwrap();
+    let r = report_for_sources(&input, "main.ts", Some(&extra));
     assert!(!r.allowed);
     for kind in [
         DiagnosticKind::Difference,
@@ -3057,9 +2968,7 @@ fn review_missing_punctuation_and_escaped_static_modules_are_not_silent() {
         "export type { X } from './broken'; export { type X } from './broken'; import { type X } from './broken';",
     );
     input.insert("broken.ts".into(), b"const broken = ;".to_vec());
-    let r = Session::default()
-        .analyze(&input, "main.ts", None, &EnvironmentContract::default())
-        .unwrap();
+    let r = report_for_sources(&input, "main.ts", None);
     assert!(r.allowed, "{r:?}");
     assert_eq!(r.files, ["main.ts"]);
 }

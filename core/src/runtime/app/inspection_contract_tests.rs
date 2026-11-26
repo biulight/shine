@@ -65,6 +65,26 @@ async fn seed(
     .unwrap();
 }
 
+async fn seed_copy(
+    runtime: &CoreRuntime<InMemoryHost>,
+    resource: &str,
+    directory: &str,
+    recorded: &[u8],
+    current: Option<&[u8]>,
+) -> PathBuf {
+    let destination = runtime.context().home_dir.join(directory).join(resource);
+    seed(
+        runtime,
+        resource,
+        &destination,
+        AppInstallStrategy::Copy,
+        hash_content(recorded),
+        current,
+    )
+    .await;
+    destination
+}
+
 fn service(runtime: &CoreRuntime<InMemoryHost>) -> FrontendService<InMemoryHost> {
     FrontendService::new(CoreRuntime::new(
         runtime.host().clone(),
@@ -89,21 +109,8 @@ async fn inspect(runtime: &CoreRuntime<InMemoryHost>) -> AppInspection {
     result
 }
 
-#[tokio::test]
-async fn app_entry_status_reports_missing_when_destination_absent() {
-    let runtime = static_runtime(b"hello");
-    let destination = runtime.context().home_dir.join("dest/dest.txt");
-    seed(
-        &runtime,
-        "dest.txt",
-        &destination,
-        AppInstallStrategy::Copy,
-        hash_content(b"hello"),
-        None,
-    )
-    .await;
-    let inspection = inspect(&runtime).await;
-    assert_eq!(inspection.files[0].status, InspectionFileStatus::Missing);
+#[track_caller]
+fn dest_file_outcome(inspection: &AppInspection) -> &crate::lifecycle::LifecycleOutcomeV1 {
     assert_eq!(inspection.lifecycle.outcomes.len(), 1);
     let outcome = &inspection.lifecycle.outcomes[0];
     assert_eq!(outcome.target, "app/sample");
@@ -114,6 +121,25 @@ async fn app_entry_status_reports_missing_when_destination_absent() {
             .unwrap()
             .contains("shine-app-status-contracts")
     );
+    outcome
+}
+
+#[track_caller]
+fn assert_update(inspection: &AppInspection, changes: &[InspectionChange]) {
+    assert_eq!(
+        inspection.files[0].status,
+        InspectionFileStatus::UpdateAvail
+    );
+    assert_eq!(inspection.files[0].changes, changes);
+}
+
+#[tokio::test]
+async fn app_entry_status_reports_missing_when_destination_absent() {
+    let runtime = static_runtime(b"hello");
+    seed_copy(&runtime, "dest.txt", "dest", b"hello", None).await;
+    let inspection = inspect(&runtime).await;
+    assert_eq!(inspection.files[0].status, InspectionFileStatus::Missing);
+    let outcome = dest_file_outcome(&inspection);
     assert_eq!(outcome.status, LifecycleStatus::Pending);
     assert_eq!(
         outcome.effects,
@@ -127,13 +153,11 @@ async fn app_entry_status_reports_missing_when_destination_absent() {
 #[tokio::test]
 async fn app_entry_status_reports_user_modified_when_dest_hash_differs() {
     let runtime = static_runtime(b"original");
-    let destination = runtime.context().home_dir.join("dest/dest.txt");
-    seed(
+    seed_copy(
         &runtime,
         "dest.txt",
-        &destination,
-        AppInstallStrategy::Copy,
-        hash_content(b"original"),
+        "dest",
+        b"original",
         Some(b"locally edited"),
     )
     .await;
@@ -142,15 +166,7 @@ async fn app_entry_status_reports_user_modified_when_dest_hash_differs() {
         inspection.files[0].status,
         InspectionFileStatus::UserModified
     );
-    assert_eq!(inspection.lifecycle.outcomes.len(), 1);
-    let outcome = &inspection.lifecycle.outcomes[0];
-    assert_eq!(outcome.target, "app/sample");
-    assert_eq!(outcome.resource.as_deref(), Some("dest.txt"));
-    assert!(
-        !serde_json::to_string(outcome)
-            .unwrap()
-            .contains("shine-app-status-contracts")
-    );
+    let outcome = dest_file_outcome(&inspection);
     assert_eq!(outcome.status, LifecycleStatus::Conflict);
     assert_eq!(outcome.effects, [LifecycleEffect::UserResourcePreserved]);
     assert_eq!(outcome.diagnostic_codes, ["app_user_modified"]);
@@ -161,16 +177,7 @@ async fn missing_declared_source_is_rejected_instead_of_being_classified_as_curr
     // The removed CLI-only helper silently tolerated an unavailable source. The production
     // metadata boundary rejects a missing declared file before inspecting installed bytes.
     let runtime = runtime("~/dest", "[[files]]\nsource = 'missing'\n", &[]);
-    let destination = runtime.context().home_dir.join("dest/missing");
-    seed(
-        &runtime,
-        "missing",
-        &destination,
-        AppInstallStrategy::Copy,
-        hash_content(b"hello"),
-        Some(b"hello"),
-    )
-    .await;
+    seed_copy(&runtime, "missing", "dest", b"hello", Some(b"hello")).await;
     let before = runtime.host().operations().len();
     let error = service(&runtime)
         .inspect_apps(vec!["sample".into()])
@@ -192,25 +199,9 @@ async fn missing_declared_source_is_rejected_instead_of_being_classified_as_curr
 #[tokio::test]
 async fn app_entry_status_reports_update_available_when_source_changed() {
     let runtime = static_runtime(b"new upstream content");
-    let destination = runtime.context().home_dir.join("dest/dest.txt");
-    seed(
-        &runtime,
-        "dest.txt",
-        &destination,
-        AppInstallStrategy::Copy,
-        hash_content(b"hello"),
-        Some(b"hello"),
-    )
-    .await;
+    seed_copy(&runtime, "dest.txt", "dest", b"hello", Some(b"hello")).await;
     let inspection = inspect(&runtime).await;
-    assert_eq!(
-        inspection.files[0].status,
-        InspectionFileStatus::UpdateAvail
-    );
-    assert_eq!(
-        inspection.files[0].changes,
-        [InspectionChange::ContentChanged]
-    );
+    assert_update(&inspection, &[InspectionChange::ContentChanged]);
 }
 
 #[tokio::test]
@@ -235,63 +226,29 @@ async fn app_file_row_status_reports_new_file_in_installed_category_as_update() 
         "[[files]]\nsource = 'new.txt'\n",
         &[("new.txt", b"new")],
     );
-    let old = runtime.context().home_dir.join("dest/old.txt");
-    seed(
-        &runtime,
-        "old.txt",
-        &old,
-        AppInstallStrategy::Copy,
-        hash_content(b"old"),
-        Some(b"old"),
-    )
-    .await;
+    seed_copy(&runtime, "old.txt", "dest", b"old", Some(b"old")).await;
     let inspection = inspect(&runtime).await;
-    assert_eq!(
-        inspection.files[0].status,
-        InspectionFileStatus::UpdateAvail
-    );
-    assert_eq!(
-        inspection.files[0].changes,
-        [InspectionChange::NewFile {
-            destination: runtime.context().home_dir.join("dest/new.txt")
-        }]
+    assert_update(
+        &inspection,
+        &[InspectionChange::NewFile {
+            destination: runtime.context().home_dir.join("dest/new.txt"),
+        }],
     );
 }
 
 #[tokio::test]
 async fn app_file_row_status_reports_destination_move_as_update() {
     let runtime = static_runtime(b"managed");
-    let old = runtime.context().home_dir.join("old/dest.txt");
-    seed(
-        &runtime,
-        "dest.txt",
-        &old,
-        AppInstallStrategy::Copy,
-        hash_content(b"managed"),
-        Some(b"managed"),
-    )
-    .await;
+    let old = seed_copy(&runtime, "dest.txt", "old", b"managed", Some(b"managed")).await;
     let inspection = inspect(&runtime).await;
-    assert_eq!(
-        inspection.files[0].status,
-        InspectionFileStatus::UpdateAvail
-    );
-    assert_eq!(
-        inspection.files[0].changes,
-        [InspectionChange::DestinationRelocated {
+    assert_update(
+        &inspection,
+        &[InspectionChange::DestinationRelocated {
             from: old,
-            to: runtime.context().home_dir.join("dest/dest.txt")
-        }]
+            to: runtime.context().home_dir.join("dest/dest.txt"),
+        }],
     );
-    assert_eq!(inspection.lifecycle.outcomes.len(), 1);
-    let outcome = &inspection.lifecycle.outcomes[0];
-    assert_eq!(outcome.target, "app/sample");
-    assert_eq!(outcome.resource.as_deref(), Some("dest.txt"));
-    assert!(
-        !serde_json::to_string(outcome)
-            .unwrap()
-            .contains("shine-app-status-contracts")
-    );
+    let outcome = dest_file_outcome(&inspection);
     assert_eq!(outcome.status, LifecycleStatus::Pending);
     assert_eq!(
         outcome.effects,
@@ -314,13 +271,11 @@ fn manual_runtime() -> CoreRuntime<InMemoryHost> {
 #[tokio::test]
 async fn manual_generator_destination_move_preserves_installed_snapshot() {
     let runtime = manual_runtime();
-    let old = runtime.context().home_dir.join("old/dest.txt");
-    seed(
+    let old = seed_copy(
         &runtime,
         "dest.txt",
-        &old,
-        AppInstallStrategy::Copy,
-        hash_content(b"generated snapshot"),
+        "old",
+        b"generated snapshot",
         Some(b"generated snapshot"),
     )
     .await;
@@ -341,16 +296,7 @@ async fn manual_generator_destination_move_preserves_installed_snapshot() {
 async fn explicit_manual_evaluation_keeps_refresh_identity_and_receipt_unchanged() {
     use crate::runtime::FileSystemObservationHost;
     let runtime = manual_runtime();
-    let old = runtime.context().home_dir.join("old/dest.txt");
-    seed(
-        &runtime,
-        "dest.txt",
-        &old,
-        AppInstallStrategy::Copy,
-        hash_content(b"previous"),
-        Some(b"previous"),
-    )
-    .await;
+    let old = seed_copy(&runtime, "dest.txt", "old", b"previous", Some(b"previous")).await;
     let receipt_path = runtime.context().shine_dir.join("app-manifest.toml");
     let receipt = runtime.host().read(&receipt_path).await.unwrap();
     let before = runtime.host().operations().len();
@@ -390,30 +336,24 @@ async fn explicit_manual_evaluation_keeps_refresh_identity_and_receipt_unchanged
 #[tokio::test]
 async fn app_destination_move_can_also_report_content_change() {
     let runtime = static_runtime(b"new content");
-    let old = runtime.context().home_dir.join("old/dest.txt");
-    seed(
+    let old = seed_copy(
         &runtime,
         "dest.txt",
-        &old,
-        AppInstallStrategy::Copy,
-        hash_content(b"old content"),
+        "old",
+        b"old content",
         Some(b"old content"),
     )
     .await;
     let inspection = inspect(&runtime).await;
-    assert_eq!(
-        inspection.files[0].status,
-        InspectionFileStatus::UpdateAvail
-    );
-    assert_eq!(
-        inspection.files[0].changes,
-        [
+    assert_update(
+        &inspection,
+        &[
             InspectionChange::DestinationRelocated {
                 from: old,
-                to: runtime.context().home_dir.join("dest/dest.txt")
+                to: runtime.context().home_dir.join("dest/dest.txt"),
             },
-            InspectionChange::ContentChanged
-        ]
+            InspectionChange::ContentChanged,
+        ],
     );
 }
 

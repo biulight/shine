@@ -1149,9 +1149,7 @@ mod tests {
         fs::write(category.join("two.sh"), b"#!/bin/sh\necho two\n")
             .await
             .unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
 
         let install = handle_install_with_result(&config, Some("custom/one"), false)
@@ -1226,6 +1224,48 @@ mod tests {
         assert!(!sibling.exists());
 
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    const BUN_TOOL_METADATA: &[u8] = b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n[files.permissions]\nschema_version = 1\n";
+
+    #[cfg(unix)]
+    const TEMPLATE_BUN_TOOL_METADATA: &[u8] = b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n";
+
+    #[cfg(unix)]
+    const SHELL_TOOL_METADATA: &[u8] = b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n";
+
+    #[cfg(unix)]
+    async fn write_custom_preset(
+        dir: &Path,
+        metadata: &[u8],
+        script: &str,
+        contents: &[u8],
+    ) -> PathBuf {
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(category.join("shine.toml"), metadata)
+            .await
+            .unwrap();
+        fs::write(category.join(script), contents).await.unwrap();
+        category
+    }
+
+    #[cfg(unix)]
+    async fn external_config(dir: &Path) -> Config {
+        let mut config = Config::new_for_test(dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        config
+    }
+
+    #[cfg(unix)]
+    async fn upgrade_installed(config: &Config) -> ShellUpgradeReport {
+        let mut separator = crate::output::SectionSeparator::new();
+        handle_upgrade_installed_target_with_result(config, None, false, &mut separator)
+            .await
+            .unwrap()
+            .0
     }
 
     #[cfg(unix)]
@@ -1638,14 +1678,9 @@ mod tests {
         )
         .await
         .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&script).await.unwrap().permissions();
-        perms.set_mode(perms.mode() | 0o111);
-        fs::set_permissions(&script, perms).await.unwrap();
+        make_executable(&script).await;
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "shell/custom/my_tool").await;
 
         handle_install_approved(&config, Some("custom"), false, true)
@@ -1687,14 +1722,9 @@ mod tests {
         fs::write(&script, b"#!/bin/bash\n# Set proxy.\necho hi\n")
             .await
             .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&script).await.unwrap().permissions();
-        perms.set_mode(perms.mode() | 0o111);
-        fs::set_permissions(&script, perms).await.unwrap();
+        make_executable(&script).await;
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "shell/custom/setproxy").await;
 
         handle_install_approved(&config, Some("custom"), false, true)
@@ -1732,9 +1762,7 @@ mod tests {
         .await
         .unwrap();
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
         crate::trust::grant_current_for_test(&config, "shell/proxy/usetproxy").await;
 
@@ -1832,9 +1860,7 @@ mod tests {
         .unwrap();
         make_executable(&script).await;
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         fs::write(config.rendered_dir(), b"not a directory")
             .await
             .unwrap();
@@ -2079,16 +2105,7 @@ ANTHROPIC_MODEL = "first-model"
         fs::remove_file(&link).await.unwrap();
         fs::symlink(&stale_source, &link).await.unwrap();
 
-        let mut separator = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config,
-            None,
-            false,
-            true,
-            &mut separator,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed(&config).await;
 
         assert_eq!(report.updated_targets, vec!["utils/copyfile"]);
         assert_eq!(report.updated_categories, vec!["utils"]);
@@ -2127,9 +2144,7 @@ ANTHROPIC_MODEL = "first-model"
             .unwrap();
         make_executable(&extra_tool).await;
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
 
         handle_install_approved(&config, Some("proxy"), false, true)
@@ -2150,12 +2165,7 @@ ANTHROPIC_MODEL = "first-model"
         make_executable(&setproxy).await;
         crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
 
-        let mut sep = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config, None, false, true, &mut sep,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed(&config).await;
 
         assert_eq!(
             report.templates_updated, 1,
@@ -2176,22 +2186,11 @@ ANTHROPIC_MODEL = "first-model"
     #[tokio::test]
     async fn external_bun_preset_installs_launcher_and_uninstall_removes_it() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/custom");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n[files.permissions]\nschema_version = 1\n",
-        )
-        .await
-        .unwrap();
         // A non-executable .ts source: bun launchers do not require the exec bit.
-        fs::write(cat_dir.join("tool.ts"), b"console.log('hi')\n")
-            .await
-            .unwrap();
+        let cat_dir =
+            write_custom_preset(&dir, BUN_TOOL_METADATA, "tool.ts", b"console.log('hi')\n").await;
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "custom").await;
 
         handle_install_approved(&config, Some("custom"), false, true)
@@ -2236,21 +2235,18 @@ ANTHROPIC_MODEL = "first-model"
     #[tokio::test]
     async fn external_bun_preset_with_env_wraps_launcher_in_shine_env_run() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/custom");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [{ source = 'API_URL', sensitivity = 'plain' }, { source = 'SERVICE_TOKEN', target = 'API_TOKEN', sensitivity = 'plain' }]\n[files.permissions]\nschema_version = 1\nenvironment = [{ name = \"API_URL\", sensitivity = \"plain\" }, { name = \"SERVICE_TOKEN\", sensitivity = \"plain\" }]\n",
-        )
-        .await
-        .unwrap();
-        fs::write(cat_dir.join("tool.ts"), b"console.log(Bun.env.API_URL)\n")
-            .await
-            .unwrap();
+        let metadata = br#"[[files]]
+source = "tool.ts"
+target = "mytool"
+runtime = "bun"
+env = [{ source = 'API_URL', sensitivity = 'plain' }, { source = 'SERVICE_TOKEN', target = 'API_TOKEN', sensitivity = 'plain' }]
+[files.permissions]
+schema_version = 1
+environment = [{ name = "API_URL", sensitivity = "plain" }, { name = "SERVICE_TOKEN", sensitivity = "plain" }]
+"#;
+        write_custom_preset(&dir, metadata, "tool.ts", b"console.log(Bun.env.API_URL)\n").await;
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "custom").await;
 
         handle_install_approved(&config, Some("custom"), false, true)
@@ -2272,17 +2268,8 @@ ANTHROPIC_MODEL = "first-model"
     #[tokio::test]
     async fn external_bun_preset_with_locked_package_uses_fallback_and_records_hash() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/custom");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n[files.permissions]\nschema_version = 1\n",
-        )
-        .await
-        .unwrap();
-        fs::write(cat_dir.join("tool.ts"), b"import 'zod'\n")
-            .await
-            .unwrap();
+        let cat_dir =
+            write_custom_preset(&dir, BUN_TOOL_METADATA, "tool.ts", b"import 'zod'\n").await;
         fs::write(
             cat_dir.join("package.json"),
             b"{\"dependencies\":{\"zod\":\"4.0.0\"}}",
@@ -2299,9 +2286,7 @@ ANTHROPIC_MODEL = "first-model"
             .await
             .unwrap();
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "custom").await;
         handle_install_approved(&config, Some("custom"), false, true)
             .await
@@ -2332,17 +2317,13 @@ ANTHROPIC_MODEL = "first-model"
     #[tokio::test]
     async fn external_bun_preset_with_template_transform_targets_rendered_copy() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/custom");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n",
+        write_custom_preset(
+            &dir,
+            TEMPLATE_BUN_TOOL_METADATA,
+            "tool.ts",
+            b"const host = '@@PROXY_HOST@@'\n",
         )
-        .await
-        .unwrap();
-        fs::write(cat_dir.join("tool.ts"), b"const host = '@@PROXY_HOST@@'\n")
-            .await
-            .unwrap();
+        .await;
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
@@ -2383,18 +2364,14 @@ ANTHROPIC_MODEL = "first-model"
     #[tokio::test]
     async fn live_transformed_bun_renders_again_on_demand() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/custom");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n",
+        let cat_dir = write_custom_preset(
+            &dir,
+            TEMPLATE_BUN_TOOL_METADATA,
+            "tool.ts",
+            b"console.log('@@PROXY_HOST@@')\n",
         )
-        .await
-        .unwrap();
+        .await;
         let source = cat_dir.join("tool.ts");
-        fs::write(&source, b"console.log('@@PROXY_HOST@@')\n")
-            .await
-            .unwrap();
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
@@ -2454,22 +2431,16 @@ ANTHROPIC_MODEL = "first-model"
     #[tokio::test]
     async fn snapshot_upgrade_applies_external_raw_source_change() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/custom");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n",
+        let cat_dir = write_custom_preset(
+            &dir,
+            SHELL_TOOL_METADATA,
+            "tool.sh",
+            b"#!/bin/sh\necho first\n",
         )
-        .await
-        .unwrap();
+        .await;
         let source = cat_dir.join("tool.sh");
-        fs::write(&source, b"#!/bin/sh\necho first\n")
-            .await
-            .unwrap();
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "custom").await;
         handle_install_approved(&config, Some("custom"), false, true)
             .await
@@ -2486,16 +2457,7 @@ ANTHROPIC_MODEL = "first-model"
             .await
             .unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
-        let mut separator = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config,
-            None,
-            false,
-            true,
-            &mut separator,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed(&config).await;
         assert_eq!(report.snapshots_updated, 1);
         assert_eq!(report.updated_targets, vec!["custom/mytool"]);
         assert_eq!(report.updated_categories, vec!["custom"]);
@@ -2518,36 +2480,21 @@ ANTHROPIC_MODEL = "first-model"
     #[tokio::test]
     async fn upgrade_migrates_legacy_external_link_to_snapshot() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/custom");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n",
+        let cat_dir = write_custom_preset(
+            &dir,
+            SHELL_TOOL_METADATA,
+            "tool.sh",
+            b"#!/bin/sh\necho legacy\n",
         )
-        .await
-        .unwrap();
+        .await;
         let source = cat_dir.join("tool.sh");
-        fs::write(&source, b"#!/bin/sh\necho legacy\n")
-            .await
-            .unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "custom").await;
         fs::symlink(&source, config.bin_dir().join("mytool"))
             .await
             .unwrap();
 
-        let mut separator = crate::output::SectionSeparator::new();
-        let (report, _) = handle_upgrade_installed_target_with_result_approved(
-            &config,
-            None,
-            false,
-            true,
-            &mut separator,
-        )
-        .await
-        .unwrap();
+        let report = upgrade_installed(&config).await;
         assert_eq!(report.snapshots_updated, 1);
         assert_eq!(
             fs::read_link(config.bin_dir().join("mytool"))
@@ -2569,19 +2516,15 @@ ANTHROPIC_MODEL = "first-model"
     #[tokio::test]
     async fn upgrade_switches_snapshot_raw_link_to_explicit_live_source() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/custom");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n",
+        let cat_dir = write_custom_preset(
+            &dir,
+            SHELL_TOOL_METADATA,
+            "tool.sh",
+            b"#!/bin/sh\necho live\n",
         )
-        .await
-        .unwrap();
+        .await;
         let source = cat_dir.join("tool.sh");
-        fs::write(&source, b"#!/bin/sh\necho live\n").await.unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let mut config = external_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "custom").await;
         handle_install_approved(&config, Some("custom"), false, true)
             .await
@@ -2589,17 +2532,7 @@ ANTHROPIC_MODEL = "first-model"
 
         config.external_shell_mode = crate::config::ExternalShellMode::Live;
         crate::trust::grant_development_for_test(&config, "custom").await;
-        let mut separator = crate::output::SectionSeparator::new();
-        handle_upgrade_installed_target_with_result_approved(
-            &config,
-            None,
-            false,
-            true,
-            &mut separator,
-        )
-        .await
-        .map(|(report, _)| report)
-        .unwrap();
+        upgrade_installed(&config).await;
         assert_eq!(
             fs::read_link(config.bin_dir().join("mytool"))
                 .await
