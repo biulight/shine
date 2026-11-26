@@ -627,20 +627,26 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn clone_whitespace_neighbors(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let source = root.join("source");
+        let selected = root.join("selected ");
+        let neighbor = root.join("selected");
+        init_repo(&source);
+        for dir in [&selected, &neighbor] {
+            git(
+                root,
+                &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
+            );
+        }
+        (source, selected, neighbor)
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn pull_updates_whitespace_path_without_touching_neighbor() {
         for verbose in [false, true] {
             let root = temp_dir("pull-whitespace");
-            let source = root.join("source");
-            let selected = root.join("selected ");
-            let neighbor = root.join("selected");
-            init_repo(&source);
-            for dir in [&selected, &neighbor] {
-                git(
-                    &root,
-                    &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
-                );
-            }
+            let (source, selected, neighbor) = clone_whitespace_neighbors(&root);
             let neighbor_head = head_short(&neighbor).await.unwrap();
             std::fs::write(source.join("preset.txt"), "two\n").unwrap();
             git(&source, &["commit", "-am", "update"]);
@@ -667,16 +673,7 @@ mod tests {
     #[tokio::test]
     async fn pull_checks_selected_whitespace_path_before_fetch() {
         let root = temp_dir("dirty-whitespace");
-        let source = root.join("source");
-        let selected = root.join("selected ");
-        let neighbor = root.join("selected");
-        init_repo(&source);
-        for dir in [&selected, &neighbor] {
-            git(
-                &root,
-                &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
-            );
-        }
+        let (_, selected, neighbor) = clone_whitespace_neighbors(&root);
         std::fs::write(selected.join("preset.txt"), "user changes\n").unwrap();
         let state = root.join("state");
         std::fs::create_dir_all(state.join("presets")).unwrap();
@@ -819,34 +816,18 @@ mod tests {
     #[tokio::test]
     async fn pulls_fast_forward_from_local_remote() {
         let root = temp_dir("fast-forward");
-        let remote = root.join("remote.git");
-        let seed = root.join("seed");
+        let (_, seed, url) = seed_remote(&root);
         let presets = root.join("presets");
-        std::fs::create_dir_all(&root).unwrap();
-        git(&root, &["init", "--bare", remote.to_str().unwrap()]);
-        git(
-            &root,
-            &["clone", remote.to_str().unwrap(), seed.to_str().unwrap()],
-        );
-        git(&seed, &["config", "user.name", "Shine Tests"]);
-        git(&seed, &["config", "user.email", "shine@example.invalid"]);
-        std::fs::write(seed.join("preset.txt"), "one\n").unwrap();
-        git(&seed, &["add", "preset.txt"]);
-        git(&seed, &["commit", "-m", "initial"]);
-        git(&seed, &["push", "-u", "origin", "HEAD"]);
-        git(
-            &root,
-            &["clone", remote.to_str().unwrap(), presets.to_str().unwrap()],
-        );
-        std::fs::write(seed.join("preset.txt"), "two\n").unwrap();
-        git(&seed, &["add", "preset.txt"]);
+        git(&root, &["clone", &url, presets.to_str().unwrap()]);
+        std::fs::write(seed.join("overlay.txt"), "two\n").unwrap();
+        git(&seed, &["add", "overlay.txt"]);
         git(&seed, &["commit", "-m", "update"]);
         git(&seed, &["push"]);
         let config = Config::new_for_test(&root);
 
         handle_pull(&config, false).await.unwrap();
 
-        assert_eq!(read_text(presets.join("preset.txt")), "two\n");
+        assert_eq!(read_text(presets.join("overlay.txt")), "two\n");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1106,6 +1087,17 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    async fn assert_origin(dir: &Path, expected: &Path) {
+        let output = git_output(dir, &["remote", "get-url", "origin"])
+            .await
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            output.stdout,
+            format!("{}\n", expected.display()).as_bytes()
+        );
+    }
+
     #[tokio::test]
     async fn managed_overlay_relink_uses_new_source_and_remote_default() {
         let root = temp_dir("relink");
@@ -1125,14 +1117,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(read_text(dir.join("preset.txt")), "second source\n");
-        let origin = git_output(&dir, &["remote", "get-url", "origin"])
-            .await
-            .unwrap();
-        assert!(origin.status.success());
-        assert_eq!(
-            String::from_utf8(origin.stdout).unwrap().trim(),
-            second.to_str().unwrap()
-        );
+        assert_origin(&dir, &second).await;
 
         // A failed relink must retain both the last working content and origin.
         assert!(
@@ -1141,13 +1126,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(read_text(dir.join("preset.txt")), "second source\n");
-        assert_eq!(
-            git_output(&dir, &["remote", "get-url", "origin"])
-                .await
-                .unwrap()
-                .stdout,
-            format!("{}\n", second.display()).as_bytes()
-        );
+        assert_origin(&dir, &second).await;
 
         // Explicit branch selection still overrides the remote's default.
         git(&second, &["checkout", "-b", "selected"]);

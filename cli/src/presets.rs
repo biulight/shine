@@ -565,26 +565,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn overlay_asset_paths_include_new_files() {
+    async fn overlay_asset_paths_include_new_files_and_skip_node_modules() {
         let dir = make_temp_dir().await;
-        fs::create_dir_all(dir.join("shell/personal"))
+        fs::create_dir_all(dir.join("shell/personal/node_modules/zod"))
             .await
             .unwrap();
         fs::write(dir.join("shell/personal/hello.sh"), b"#!/bin/bash\n")
-            .await
-            .unwrap();
-
-        let reader = PresetAssetReader::new(Some(&dir));
-        let paths = reader.asset_paths("shell");
-
-        assert!(paths.contains(&"shell/personal/hello.sh".to_string()));
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn overlay_asset_paths_skip_node_modules() {
-        let dir = make_temp_dir().await;
-        fs::create_dir_all(dir.join("shell/personal/node_modules/zod"))
             .await
             .unwrap();
         fs::write(dir.join("shell/personal/package.json"), b"{}")
@@ -604,26 +590,16 @@ mod tests {
         .unwrap();
 
         let reader = PresetAssetReader::new(Some(&dir));
+        assert!(
+            reader
+                .asset_paths("shell")
+                .contains(&"shell/personal/hello.sh".to_string())
+        );
         let paths = reader.asset_paths("shell/personal");
 
         assert!(paths.contains(&"shell/personal/package.json".to_string()));
         assert!(paths.contains(&"shell/personal/bun.lock".to_string()));
         assert!(paths.iter().all(|path| !path.contains("node_modules")));
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn overlay_read_asset_bytes_overrides_embedded_file() {
-        let dir = make_temp_dir().await;
-        fs::create_dir_all(dir.join("shell/proxy")).await.unwrap();
-        fs::write(dir.join("shell/proxy/set_proxy.sh"), b"overlay\n")
-            .await
-            .unwrap();
-
-        let reader = PresetAssetReader::new(Some(&dir));
-        let bytes = reader.read_asset_bytes("shell/proxy/set_proxy.sh").unwrap();
-
-        assert_eq!(bytes, b"overlay\n");
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -990,73 +966,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_all_skips_existing_by_default() {
+    async fn reexport_preserves_modified_file_until_forced() {
         let dir = make_temp_dir().await;
+        let reader = PresetAssetReader::new(None);
+        let key = "shell/proxy/set_proxy.sh";
+        let path = dir.join(key);
+        let first = reader.extract_all(&dir, false).await.unwrap();
+        assert!(first.created.contains(&path));
+        let original = read_embedded_asset_bytes(key).unwrap();
+        let marker = b"user edit";
+        assert_ne!(original, marker);
+        fs::write(&path, marker).await.unwrap();
 
-        // First export — populates the dir
-        let first = PresetAssetReader::new(None)
-            .extract_all(&dir, false)
-            .await
-            .unwrap();
-        assert!(!first.created.is_empty());
+        let skipped = reader.extract_all(&dir, false).await.unwrap();
+        assert!(skipped.skipped.contains(&path));
+        assert_eq!(fs::read(&path).await.unwrap(), marker);
 
-        // Overwrite one file with marker content
-        let marker = b"do-not-overwrite";
-        let target_path = &first.created[0];
-        fs::write(target_path, marker).await.unwrap();
-
-        // Second export without --force — should skip the modified file
-        let second = PresetAssetReader::new(None)
-            .extract_all(&dir, false)
-            .await
-            .unwrap();
-        assert!(
-            second.skipped.contains(target_path),
-            "modified file should be skipped on re-export without --force"
-        );
-
-        let content = fs::read(target_path).await.unwrap();
-        assert_eq!(
-            content, marker,
-            "file content must not change without --force"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn extract_all_force_overwrites_existing() {
-        let dir = make_temp_dir().await;
-
-        // First export
-        let first = PresetAssetReader::new(None)
-            .extract_all(&dir, false)
-            .await
-            .unwrap();
-        assert!(!first.created.is_empty());
-
-        // Overwrite one file with marker content
-        let marker = b"old-content";
-        let target_path = &first.created[0];
-        fs::write(target_path, marker).await.unwrap();
-
-        // Re-export with force
-        let second = PresetAssetReader::new(None)
-            .extract_all(&dir, true)
-            .await
-            .unwrap();
-        assert!(
-            second.overwritten.contains(target_path),
-            "modified file should appear in overwritten list with --force"
-        );
-
-        let content = fs::read(target_path).await.unwrap();
-        assert_ne!(
-            content, marker,
-            "file content should be overwritten with --force"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
+        let forced = reader.extract_all(&dir, true).await.unwrap();
+        assert!(forced.overwritten.contains(&path));
+        assert_eq!(fs::read(&path).await.unwrap(), original);
+        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

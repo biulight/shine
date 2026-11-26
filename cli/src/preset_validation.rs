@@ -122,6 +122,15 @@ mod tests {
         crate::test_support::make_temp_dir(name).await
     }
 
+    async fn assert_category_error(category: &Path, expected: &str) {
+        let report = validate_path(category).await;
+        assert!(!report.valid, "{report:#?}");
+        assert_eq!(
+            report.categories[0].diagnostics[0].code, expected,
+            "{report:#?}"
+        );
+    }
+
     #[tokio::test]
     async fn text_report_uses_singular_counts_and_omits_a_duplicate_diagnostic_path() {
         let root = fixture_root("validation-text-production").await;
@@ -374,12 +383,7 @@ runtime = "bun"
         write(category.join("two.ts"), "console.log('two')\n");
         write(category.join("package.json"), "{\"dependencies\":{}}\n");
 
-        let missing_lock = validate_path(&category).await;
-        assert!(!missing_lock.valid);
-        assert_eq!(
-            missing_lock.categories[0].diagnostics[0].code,
-            "duplicate_command"
-        );
+        assert_category_error(&category, "duplicate_command").await;
 
         // Make targets unique so the dependency policy becomes the next stable
         // diagnostic.
@@ -395,11 +399,7 @@ target = "two"
 runtime = "bun"
 "#,
         );
-        let missing_lock = validate_path(&category).await;
-        assert_eq!(
-            missing_lock.categories[0].diagnostics[0].code,
-            "bun_dependency_policy"
-        );
+        assert_category_error(&category, "bun_dependency_policy").await;
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -407,37 +407,18 @@ runtime = "bun"
     async fn validates_all_app_platform_destinations_and_duplicate_targets() {
         let root = fixture_root("preset-validation-app-platforms").await;
         let category = root.join("app/editor");
-        write(
-            category.join("shine.toml"),
-            r#"dest = { unix = "~/.config/editor", windows = "relative/windows" }
-[[files]]
-source = "one.toml"
-"#,
-        );
         write(category.join("one.toml"), "one = true\n");
-
-        let invalid_windows = validate_path(&category).await;
-        assert!(!invalid_windows.valid);
-        assert_eq!(
-            invalid_windows.categories[0].diagnostics[0].code,
-            "invalid_metadata"
-        );
-
-        // Every declared branch is validated even when exact OS destinations
-        // shadow the Unix compatibility fallback on both Unix operating systems.
-        write(
-            category.join("shine.toml"),
-            r#"dest = { macos = "~/Library/Editor", linux = "~/.config/editor", unix = "relative/shadowed" }
-[[files]]
-source = "one.toml"
-"#,
-        );
-        let invalid_shadowed_unix = validate_path(&category).await;
-        assert!(!invalid_shadowed_unix.valid);
-        assert_eq!(
-            invalid_shadowed_unix.categories[0].diagnostics[0].code,
-            "invalid_metadata"
-        );
+        for dest in [
+            r#"{ unix = "~/.config/editor", windows = "relative/windows" }"#,
+            // Exact OS destinations do not exempt the shadowed Unix fallback from validation.
+            r#"{ macos = "~/Library/Editor", linux = "~/.config/editor", unix = "relative/shadowed" }"#,
+        ] {
+            write(
+                category.join("shine.toml"),
+                &format!("dest = {dest}\n[[files]]\nsource = 'one.toml'\n"),
+            );
+            assert_category_error(&category, "invalid_metadata").await;
+        }
 
         write(
             category.join("shine.toml"),
@@ -451,11 +432,7 @@ target = "same.toml"
 "#,
         );
         write(category.join("two.toml"), "two = true\n");
-        let duplicate = validate_path(&category).await;
-        assert_eq!(
-            duplicate.categories[0].diagnostics[0].code,
-            "duplicate_target"
-        );
+        assert_category_error(&category, "duplicate_target").await;
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -501,9 +478,7 @@ target = "tool"
 platforms = []
 "#,
         );
-        let empty = validate_path(&category).await;
-        assert!(!empty.valid);
-        assert_eq!(empty.categories[0].diagnostics[0].code, "invalid_metadata");
+        assert_category_error(&category, "invalid_metadata").await;
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -582,40 +557,22 @@ platforms = ["macos"]
     async fn permission_schema_errors_have_stable_diagnostic_codes() {
         let root = fixture_root("preset-validation-permission-errors").await;
         let category = root.join("app/editor");
-        write(
-            category.join("shine.toml"),
-            r#"dest = "~/.config/editor"
-[permissions]
-schema_version = 3
-[[files]]
-source = "config.toml"
-"#,
-        );
         write(category.join("config.toml"), "theme = 'dark'\n");
-
-        let unsupported = validate_path(&category).await;
-        assert!(!unsupported.valid);
-        assert_eq!(
-            unsupported.categories[0].diagnostics[0].code,
-            "unsupported_permission_schema"
-        );
-
-        write(
-            category.join("shine.toml"),
-            r#"dest = "~/.config/editor"
-[permissions]
-schema_version = 1
-commands = ["bun", "bun"]
-[[files]]
-source = "config.toml"
-"#,
-        );
-        let duplicate = validate_path(&category).await;
-        assert!(!duplicate.valid);
-        assert_eq!(
-            duplicate.categories[0].diagnostics[0].code,
-            "duplicate_permission"
-        );
+        for (permissions, code) in [
+            ("schema_version = 3", "unsupported_permission_schema"),
+            (
+                "schema_version = 1\ncommands = ['bun', 'bun']",
+                "duplicate_permission",
+            ),
+        ] {
+            write(
+                category.join("shine.toml"),
+                &format!(
+                    "dest = '~/.config/editor'\n[permissions]\n{permissions}\n[[files]]\nsource = 'config.toml'\n"
+                ),
+            );
+            assert_category_error(&category, code).await;
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -636,12 +593,7 @@ schema_version = 1
         );
         write(category.join("tool.sh"), "#!/bin/sh\n");
 
-        let report = validate_path(&category).await;
-        assert!(!report.valid);
-        assert_eq!(
-            report.categories[0].diagnostics[0].code,
-            "invalid_permission_declaration"
-        );
+        assert_category_error(&category, "invalid_permission_declaration").await;
         std::fs::remove_dir_all(root).unwrap();
     }
 }
