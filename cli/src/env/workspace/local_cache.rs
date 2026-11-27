@@ -251,36 +251,19 @@ mod tests {
         let workspace = dir.join("shine.workspace.toml");
         let mut config = Config::new_for_test(&dir);
         config.hybrid_decrypt_backend = Some("gpg".into());
-        assert_eq!(
-            load_config(&config, &workspace)
-                .await
-                .unwrap()
-                .hybrid_decrypt_backend
-                .as_deref(),
-            Some("gpg")
-        );
         let path = dir.join(LOCAL_CONFIG);
-        tokio::fs::write(&path, "hybrid_decrypt_backend = 'age'")
-            .await
-            .unwrap();
-        assert_eq!(
-            load_config(&config, &workspace)
-                .await
-                .unwrap()
-                .hybrid_decrypt_backend
-                .as_deref(),
-            Some("age")
-        );
-        assert_eq!(config.hybrid_decrypt_backend.as_deref(), Some("gpg"));
-        tokio::fs::write(&path, "# inherit").await.unwrap();
-        assert_eq!(
-            load_config(&config, &workspace)
-                .await
-                .unwrap()
-                .hybrid_decrypt_backend
-                .as_deref(),
-            Some("gpg")
-        );
+        for (contents, expected) in [
+            (None, "gpg"),
+            (Some("hybrid_decrypt_backend = 'age'"), "age"),
+            (Some("# inherit"), "gpg"),
+        ] {
+            if let Some(contents) = contents {
+                tokio::fs::write(&path, contents).await.unwrap();
+            }
+            let effective = load_config(&config, &workspace).await.unwrap();
+            assert_eq!(effective.hybrid_decrypt_backend.as_deref(), Some(expected));
+            assert_eq!(config.hybrid_decrypt_backend.as_deref(), Some("gpg"));
+        }
         for invalid in [
             "hybrid_decrypt_backend = 'hybrid'",
             "hybrid_decrypt_backend = 'invalid'",

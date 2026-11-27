@@ -172,16 +172,43 @@ mod tests {
     use super::*;
     use crate::runtime::*;
 
-    #[test]
-    fn app_contract_keeps_state_and_cache_without_http_output() {
-        let root = std::env::temp_dir().join("shine-app-contract");
-        let context = RuntimeContext::isolated(
-            root.join("home"),
+    fn script_context(root: &Path, home: std::path::PathBuf) -> RuntimeContext {
+        RuntimeContext::isolated(
+            home,
             root.join("state"),
             root.join("presets"),
             root.join("bin"),
             RuntimePlatform::current(),
-        );
+        )
+    }
+
+    async fn run_test_script<H: FileSystemHost + ProcessHost>(
+        runtime: &CoreRuntime<H>,
+        script: &str,
+        kind: ArtifactRuntime,
+        request: ProcessRequest,
+    ) -> Result<ProcessOutput> {
+        let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
+        let binding = runtime
+            .app_analysis_binding(&category, "test", Some(script), kind, &[])
+            .unwrap();
+        runtime.prepare_code_analysis(&[binding]).await.unwrap();
+        runtime
+            .run_app_script(
+                "demo",
+                &format!("app/demo/{script}"),
+                kind,
+                "test",
+                &[],
+                request,
+            )
+            .await
+    }
+
+    #[test]
+    fn app_contract_keeps_state_and_cache_without_http_output() {
+        let root = std::env::temp_dir().join("shine-app-contract");
+        let context = script_context(&root, root.join("home"));
         let runtime = CoreRuntime::new(
             InMemoryHost::new(),
             context,
@@ -219,13 +246,7 @@ mod tests {
             return;
         }
         let root = std::env::temp_dir().join(format!("shine-app-overlay-{}", uuid::Uuid::new_v4()));
-        let context = RuntimeContext::isolated(
-            root.join("home"),
-            root.join("state"),
-            root.join("presets"),
-            root.join("bin"),
-            RuntimePlatform::current(),
-        );
+        let context = script_context(&root, root.join("home"));
         let runtime = CoreRuntime::new(
             RealHost,
             context,
@@ -236,34 +257,20 @@ mod tests {
                 )
                 .build(),
         );
-        let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
-        let binding = runtime
-            .app_analysis_binding(
-                &category,
-                "test",
-                Some("probe.sh"),
-                ArtifactRuntime::Native,
-                &[],
-            )
-            .unwrap();
-        runtime.prepare_code_analysis(&[binding]).await.unwrap();
-        let output = runtime
-            .run_app_script(
-                "demo",
-                "app/demo/probe.sh",
-                ArtifactRuntime::Native,
-                "test",
-                &[],
-                ProcessRequest {
-                    env: std::collections::BTreeMap::from([(
-                        "SHINE_APP_OVERLAY_DIR".into(),
-                        "/injected/overlay".into(),
-                    )]),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
+        let output = run_test_script(
+            &runtime,
+            "probe.sh",
+            ArtifactRuntime::Native,
+            ProcessRequest {
+                env: std::collections::BTreeMap::from([(
+                    "SHINE_APP_OVERLAY_DIR".into(),
+                    "/injected/overlay".into(),
+                )]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         std::fs::remove_dir_all(root).unwrap();
         assert_eq!(output.exit_code, Some(0));
         assert!(
@@ -276,13 +283,7 @@ mod tests {
     async fn failed_spawn_cleans_only_its_own_snapshot() {
         let host = InMemoryHost::new();
         let root = std::env::temp_dir().join("shine-app-script-cleanup");
-        let context = RuntimeContext::isolated(
-            root.clone(),
-            root.join("state"),
-            root.join("presets"),
-            root.join("bin"),
-            RuntimePlatform::current(),
-        );
+        let context = script_context(&root, root.clone());
         let retained = context.shine_dir.join("runtime/app/demo/other-run/keep");
         host.put_file(&retained, b"keep".to_vec());
         host.queue_process_output(Err(anyhow::anyhow!("spawn failure")));
@@ -293,28 +294,14 @@ mod tests {
                 .file("app/demo/build.ts", b"export {};".to_vec())
                 .build(),
         );
-        let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
-        let binding = runtime
-            .app_analysis_binding(
-                &category,
-                "test",
-                Some("build.ts"),
-                ArtifactRuntime::Bun,
-                &[],
-            )
-            .unwrap();
-        runtime.prepare_code_analysis(&[binding]).await.unwrap();
-        let error = runtime
-            .run_app_script(
-                "demo",
-                "app/demo/build.ts",
-                ArtifactRuntime::Bun,
-                "test",
-                &[],
-                ProcessRequest::default(),
-            )
-            .await
-            .unwrap_err();
+        let error = run_test_script(
+            &runtime,
+            "build.ts",
+            ArtifactRuntime::Bun,
+            ProcessRequest::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("spawn failure"));
         assert_eq!(runtime.host().read(&retained).await.unwrap(), b"keep");
         let runs = runtime
@@ -333,8 +320,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let root =
             std::env::temp_dir().join(format!("shine-app-snapshot-{}", uuid::Uuid::new_v4()));
-        let presets = root.join("presets");
-        let category = presets.join("app/demo");
+        let mut context = script_context(&root, root.join("home"));
+        let category = context.presets_dir.join("app/demo");
         std::fs::create_dir_all(category.join("scripts")).unwrap();
         std::fs::write(
             category.join("shine.toml"),
@@ -355,7 +342,6 @@ generator = { script = "scripts/generate.sh", env = [{ source = 'ENABLE', sensit
         )
         .unwrap();
         std::fs::write(category.join("fallback.txt"), "fallback").unwrap();
-        std::fs::write(category.join("helper.sh"), "emit() { printf reviewed; }\n").unwrap();
         for (script, suffix) in [
             ("scripts/generate.sh", "emit"),
             (
@@ -390,7 +376,7 @@ generator = { script = "scripts/generate.sh", env = [{ source = 'ENABLE', sensit
         let snapshot = capture_preset_snapshot(
             &RealHost,
             PresetSnapshotRequest {
-                source: PresetSnapshotSource::External(presets.clone()),
+                source: PresetSnapshotSource::External(context.presets_dir.clone()),
                 overlay_root: Some(overlay.clone()),
             },
         )
@@ -403,13 +389,6 @@ generator = { script = "scripts/generate.sh", env = [{ source = 'ENABLE', sensit
         ] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
         }
-        let mut context = RuntimeContext::isolated(
-            root.join("home"),
-            root.join("state"),
-            presets,
-            root.join("bin"),
-            RuntimePlatform::current(),
-        );
         context.is_external_presets = true;
         context.overlay_dir = Some(overlay.clone());
         context.env.insert("ENABLE".into(), "yes".into());

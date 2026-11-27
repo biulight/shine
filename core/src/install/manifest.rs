@@ -163,6 +163,7 @@ content_hash = 8
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::RealHost;
     use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {
@@ -210,11 +211,10 @@ mod tests {
 
     #[tokio::test]
     async fn app_manifest_direct_reader_preserves_io_errors() {
-        let host = crate::runtime::RealHost;
         let root = make_temp_dir().await;
         let path = root.join(MANIFEST_FILE);
         fs::create_dir_all(&path).await.unwrap();
-        let error = AppManifest::load(&host, &root).await.unwrap_err();
+        let error = AppManifest::load(&RealHost, &root).await.unwrap_err();
         assert_eq!(error.to_string(), "failed to read app manifest");
         assert!(error.downcast_ref::<std::io::Error>().is_some());
         assert!(path.is_dir());
@@ -239,32 +239,23 @@ mod tests {
     #[tokio::test]
     async fn load_returns_empty_when_missing() {
         let dir = make_temp_dir().await;
-        let manifest = AppManifest::load(&crate::runtime::RealHost, &dir)
-            .await
-            .unwrap();
+        let manifest = AppManifest::load(&RealHost, &dir).await.unwrap();
         assert!(manifest.entries.is_empty());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn save_and_load_roundtrip() {
+    async fn upserted_entries_roundtrip_through_disk() {
         let dir = make_temp_dir().await;
+        let entries = [sample_entry("/tmp/foo.toml"), sample_entry("/tmp/b.toml")];
         let mut manifest = AppManifest::default();
-        manifest.upsert(sample_entry("/tmp/foo.toml"));
-        manifest
-            .save(&crate::runtime::RealHost, &dir)
-            .await
-            .unwrap();
-
-        let loaded = AppManifest::load(&crate::runtime::RealHost, &dir)
-            .await
-            .unwrap();
-        assert_eq!(loaded.schema_version, APP_MANIFEST_SCHEMA_VERSION);
-        assert_eq!(loaded.entries.len(), 1);
-        assert_eq!(
-            loaded.entries[0].destination,
-            PathBuf::from("/tmp/foo.toml")
-        );
+        for (index, entry) in entries.iter().enumerate() {
+            manifest.upsert(entry.clone());
+            manifest.save(&RealHost, &dir).await.unwrap();
+            let loaded = AppManifest::load(&RealHost, &dir).await.unwrap();
+            assert_eq!(loaded.schema_version, APP_MANIFEST_SCHEMA_VERSION);
+            assert_eq!(loaded.entries, entries[..=index]);
+        }
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -282,16 +273,11 @@ content_hash = 7
         .await
         .unwrap();
 
-        let manifest = AppManifest::load(&crate::runtime::RealHost, &dir)
-            .await
-            .unwrap();
+        let manifest = AppManifest::load(&RealHost, &dir).await.unwrap();
         assert_eq!(manifest.schema_version, APP_MANIFEST_SCHEMA_VERSION);
         let after_read = fs::read_to_string(dir.join(MANIFEST_FILE)).await.unwrap();
         assert!(!after_read.contains("schema_version"));
-        manifest
-            .save(&crate::runtime::RealHost, &dir)
-            .await
-            .unwrap();
+        manifest.save(&RealHost, &dir).await.unwrap();
 
         let written = fs::read_to_string(dir.join(MANIFEST_FILE)).await.unwrap();
         assert!(written.contains("schema_version = 2"));
@@ -305,54 +291,25 @@ content_hash = 7
             .await
             .unwrap();
 
-        let error = AppManifest::load(&crate::runtime::RealHost, &dir)
-            .await
-            .unwrap_err();
+        let error = AppManifest::load(&RealHost, &dir).await.unwrap_err();
         assert!(error.to_string().contains("newer than this Shine supports"));
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn upsert_adds_new_entry() {
-        let dir = make_temp_dir().await;
-        let mut manifest = AppManifest::default();
-        manifest.upsert(sample_entry("/tmp/a.toml"));
-        manifest.upsert(sample_entry("/tmp/b.toml"));
-        manifest
-            .save(&crate::runtime::RealHost, &dir)
-            .await
-            .unwrap();
-
-        let loaded = AppManifest::load(&crate::runtime::RealHost, &dir)
-            .await
-            .unwrap();
-        assert_eq!(loaded.entries.len(), 2);
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]
     fn upsert_updates_existing_entry_by_destination() {
-        let mut manifest = AppManifest::default();
-        manifest.upsert(AppEntry {
-            source: "app/x/foo.toml".to_string(),
-            destination: PathBuf::from("/tmp/foo.toml"),
-            backup: None,
-            content_hash: 1,
-            install_strategy: AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
-        });
-        manifest.upsert(AppEntry {
-            source: "app/x/foo.toml".to_string(),
-            destination: PathBuf::from("/tmp/foo.toml"),
-            backup: None,
-            content_hash: 2,
-            install_strategy: AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
-        });
-        assert_eq!(manifest.entries.len(), 1);
-        assert_eq!(manifest.entries[0].content_hash, 2);
+        let original = sample_entry("/tmp/foo.toml");
+        for source in [original.source.as_str(), "app/other/foo.toml"] {
+            let mut manifest = AppManifest::default();
+            manifest.upsert(original.clone());
+            let updated = AppEntry {
+                source: source.into(),
+                content_hash: 2,
+                ..original.clone()
+            };
+            manifest.upsert(updated.clone());
+            assert_eq!(manifest.entries, [updated]);
+        }
     }
 
     #[test]
@@ -374,20 +331,12 @@ content_hash = 7
         let old = AppEntry {
             source: source.clone(),
             destination: PathBuf::from("C:/Users/example/.config/clash-verge/merge.yaml"),
-            backup: None,
             content_hash: 1,
-            install_strategy: AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
+            ..sample_entry("merge.yaml")
         };
         let current = AppEntry {
-            source: source.clone(),
             destination: PathBuf::from("C:/Users/example/.shine/clash-verge/merge.yaml"),
-            backup: None,
-            content_hash: 1,
-            install_strategy: AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
+            ..old.clone()
         };
         let manifest = AppManifest {
             schema_version: 0,

@@ -177,19 +177,30 @@ async fn fixture(update: bool) -> Fixture {
     }
 }
 
+impl Fixture {
+    async fn mark_receipt_committed(&self) -> Result<()> {
+        self.runtime
+            .mark_shell_launcher_receipt_committed(&self.execution)
+            .await
+    }
+
+    async fn commit(&self) -> Result<()> {
+        self.runtime
+            .commit_shell_launcher_operation(&self.execution)
+            .await
+    }
+}
+
 #[tokio::test]
 async fn mixed_shell_commit_keeps_markers_and_journal_until_all_cleanup_succeeds() {
     for update in [false, true] {
         let f = fixture(update).await;
-        f.runtime
-            .mark_shell_launcher_receipt_committed(&f.execution)
+        let host = f.runtime.host();
+        f.mark_receipt_committed().await.unwrap();
+        let (journal, _) = load_shell_operation_journal(host, &f.runtime.context().shine_dir)
             .await
+            .unwrap()
             .unwrap();
-        let (journal, _) =
-            load_shell_operation_journal(f.runtime.host(), &f.runtime.context().shine_dir)
-                .await
-                .unwrap()
-                .unwrap();
         assert_eq!(journal.receipt_committed, ["cache", "rendered"]);
         // Creation and update commit from matching receipts without a positive marker.
         let mut invalid_marker = journal.clone();
@@ -198,45 +209,29 @@ async fn mixed_shell_commit_keeps_markers_and_journal_until_all_cleanup_succeeds
 
         let cache_rollback = managed_file_rollback_path(&f.cache);
         let rendered_rollback = managed_file_rollback_path(&f.rendered);
-        f.runtime.host().fail_remove_after(&rendered_rollback, 0);
-        assert!(
-            f.runtime
-                .commit_shell_launcher_operation(&f.execution)
-                .await
-                .is_err()
-        );
-        assert!(f.runtime.host().metadata(&cache_rollback).await.is_err());
-        assert_eq!(
-            f.runtime.host().read(&rendered_rollback).await.unwrap(),
-            b"previous"
-        );
-        assert!(f.runtime.host().read(&f.journal_path).await.is_ok());
+        host.fail_remove_after(&rendered_rollback, 0);
+        assert!(f.commit().await.is_err());
+        assert!(host.metadata(&cache_rollback).await.is_err());
+        assert_eq!(host.read(&rendered_rollback).await.unwrap(), b"previous");
+        assert!(host.read(&f.journal_path).await.is_ok());
         for path in [&f.cache, &f.rendered] {
-            assert_eq!(f.runtime.host().read(path).await.unwrap(), b"desired");
+            assert_eq!(host.read(path).await.unwrap(), b"desired");
         }
-        assert_eq!(
-            f.runtime.host().read(&f.launcher).await.unwrap(),
-            b"desired-launcher"
-        );
+        assert_eq!(host.read(&f.launcher).await.unwrap(), b"desired-launcher");
 
         // The retry tolerates already-cleaned cache rollback and completes the rest.
-        f.runtime
-            .commit_shell_launcher_operation(&f.execution)
-            .await
-            .unwrap();
-        assert!(f.runtime.host().metadata(&rendered_rollback).await.is_err());
-        assert!(f.runtime.host().metadata(&f.journal_path).await.is_err());
+        f.commit().await.unwrap();
+        assert!(host.metadata(&rendered_rollback).await.is_err());
+        assert!(host.metadata(&f.journal_path).await.is_err());
         if update {
             assert!(
-                f.runtime
-                    .host()
-                    .metadata(&managed_file_rollback_path(&f.launcher))
+                host.metadata(&managed_file_rollback_path(&f.launcher))
                     .await
                     .is_err()
             );
         }
         assert!(
-            matches!(f.runtime.host().operations().last(), Some(HostOperation::Remove(path)) if path == &f.journal_path)
+            matches!(host.operations().last(), Some(HostOperation::Remove(path)) if path == &f.journal_path)
         );
     }
 }
@@ -244,47 +239,23 @@ async fn mixed_shell_commit_keeps_markers_and_journal_until_all_cleanup_succeeds
 #[tokio::test]
 async fn shell_commit_checks_every_resource_before_any_rollback_cleanup() {
     let f = fixture(false).await;
-    f.runtime
-        .mark_shell_launcher_receipt_committed(&f.execution)
-        .await
-        .unwrap();
-    let journal = f.runtime.host().read(&f.journal_path).await.unwrap();
-    f.runtime
-        .host()
-        .put_file(&f.rendered, b"user-modified".to_vec());
-    let since = f.runtime.host().operations().len();
+    let host = f.runtime.host();
+    f.mark_receipt_committed().await.unwrap();
+    let journal = host.read(&f.journal_path).await.unwrap();
+    host.put_file(&f.rendered, b"user-modified".to_vec());
+    let since = host.operations().len();
+    assert!(f.mark_receipt_committed().await.is_err());
+    assert!(f.commit().await.is_err());
     assert!(
-        f.runtime
-            .mark_shell_launcher_receipt_committed(&f.execution)
-            .await
-            .is_err()
-    );
-    assert!(
-        f.runtime
-            .commit_shell_launcher_operation(&f.execution)
-            .await
-            .is_err()
-    );
-    assert!(
-        f.runtime.host().operations()[since..]
+        host.operations()[since..]
             .iter()
             .all(|op| matches!(op, HostOperation::Read(_)))
     );
-    assert_eq!(
-        f.runtime.host().read(&f.journal_path).await.unwrap(),
-        journal
-    );
-    assert_eq!(
-        f.runtime.host().read(&f.rendered).await.unwrap(),
-        b"user-modified"
-    );
+    assert_eq!(host.read(&f.journal_path).await.unwrap(), journal);
+    assert_eq!(host.read(&f.rendered).await.unwrap(), b"user-modified");
     for path in [&f.cache, &f.rendered] {
         assert_eq!(
-            f.runtime
-                .host()
-                .read(&managed_file_rollback_path(path))
-                .await
-                .unwrap(),
+            host.read(&managed_file_rollback_path(path)).await.unwrap(),
             b"previous"
         );
     }
@@ -295,6 +266,7 @@ async fn shell_commit_entry_points_reject_foreign_actions_without_mutation() {
     use crate::action::{ActionProvenanceV1, RollbackSupportV1, SysSplitDnsStateV1};
     for family in ["app", "sys", "opaque"] {
         let f = fixture(false).await;
+        let host = f.runtime.host();
         let foreign = match family {
             "app" => DeclarativeActionV1::create_managed_file(
                 "foreign",
@@ -332,28 +304,19 @@ async fn shell_commit_entry_points_reject_foreign_actions_without_mutation() {
                 },
             },
         };
-        let (mut journal, _) =
-            load_shell_operation_journal(f.runtime.host(), &f.runtime.context().shine_dir)
-                .await
-                .unwrap()
-                .unwrap();
+        let (mut journal, _) = load_shell_operation_journal(host, &f.runtime.context().shine_dir)
+            .await
+            .unwrap()
+            .unwrap();
         journal.applied.push(foreign.action_id.clone());
         journal.action_ir.actions.push(foreign);
         journal.action_ir.validate().unwrap();
         // Model an on-disk journal that passes Action IR validation but crosses domains.
         let bytes = toml::to_string_pretty(&journal).unwrap().into_bytes();
-        f.runtime.host().put_file(&f.journal_path, bytes.clone());
-        let since = f.runtime.host().operations().len();
-        let marker = f
-            .runtime
-            .mark_shell_launcher_receipt_committed(&f.execution)
-            .await
-            .unwrap_err();
-        let commit = f
-            .runtime
-            .commit_shell_launcher_operation(&f.execution)
-            .await
-            .unwrap_err();
+        host.put_file(&f.journal_path, bytes.clone());
+        let since = host.operations().len();
+        let marker = f.mark_receipt_committed().await.unwrap_err();
+        let commit = f.commit().await.unwrap_err();
         let review = f.runtime.plan_shell_operation_recovery().await.unwrap_err();
         assert_eq!(
             marker.to_string(),
@@ -362,15 +325,13 @@ async fn shell_commit_entry_points_reject_foreign_actions_without_mutation() {
         assert_eq!(commit.to_string(), marker.to_string());
         assert_eq!(review.to_string(), marker.to_string());
         assert!(
-            f.runtime.host().operations()[since..]
+            host.operations()[since..]
                 .iter()
                 .all(|op| matches!(op, HostOperation::Read(_)))
         );
-        assert_eq!(f.runtime.host().read(&f.journal_path).await.unwrap(), bytes);
+        assert_eq!(host.read(&f.journal_path).await.unwrap(), bytes);
         assert_eq!(
-            f.runtime
-                .host()
-                .read(&managed_file_rollback_path(&f.cache))
+            host.read(&managed_file_rollback_path(&f.cache))
                 .await
                 .unwrap(),
             b"previous"

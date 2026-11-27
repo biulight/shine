@@ -1,7 +1,11 @@
 use super::*;
 use crate::lifecycle_plan::{planning_input_versions, review_upgrade_plans};
 use shine_core::runtime::{AppPlanRequest, NullObserver, ShellPlanRequest, SysManagedPlanRequest};
-use std::{future::Future, path::PathBuf, pin::Pin};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+};
 
 struct Interaction;
 impl RuntimeInteraction for Interaction {
@@ -30,6 +34,16 @@ fn config() -> (PathBuf, Config) {
     config.is_external_presets = true;
     (root, config)
 }
+fn write_malformed_trust_store(root: &Path) {
+    std::fs::create_dir_all(root).unwrap();
+    std::fs::write(root.join("trust.toml"), "malformed [").unwrap();
+}
+
+fn assert_only_state_file(root: &Path, expected: &str) {
+    assert!(root.join(expected).is_file(), "missing {expected}");
+    assert_eq!(std::fs::read_dir(root).unwrap().count(), 1);
+}
+
 fn request(config: &Config, domain: &str) -> LifecyclePlanRequest {
     let operation = LifecycleOperation::Upgrade;
     let input_versions = planning_input_versions(config);
@@ -82,8 +96,7 @@ async fn upgrade_batch_rejects_missing_extra_duplicate_and_misordered_domains_be
         let (root, config) = config();
         let reviewed = reviews(&config, &domains).await;
         // A capture would fail on this store. Batch shape errors must win without a capture.
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("trust.toml"), "malformed [").unwrap();
+        write_malformed_trust_store(&root);
         let error = prepare_upgrade_plans(&config, reviewed)
             .await
             .err()
@@ -94,7 +107,7 @@ async fn upgrade_batch_rejects_missing_extra_duplicate_and_misordered_domains_be
         );
         assert!(!config.bin_dir().exists());
         assert!(!config.presets_dir().exists());
-        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        assert_only_state_file(&root, "trust.toml");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
@@ -107,8 +120,7 @@ async fn upgrade_batch_rejects_non_upgrade_before_preparing_any_domain() {
         unreachable!()
     };
     request.operation = LifecycleOperation::Install;
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("trust.toml"), "malformed [").unwrap();
+    write_malformed_trust_store(&root);
     let error = prepare_upgrade_plans(&config, reviewed)
         .await
         .err()
@@ -117,7 +129,7 @@ async fn upgrade_batch_rejects_non_upgrade_before_preparing_any_domain() {
         error.to_string().contains("managed Sys upgrade Plan third"),
         "{error:#}"
     );
-    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    assert_only_state_file(&root, "trust.toml");
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -128,7 +140,7 @@ async fn later_domain_prevalidation_failure_never_executes_earlier_domains() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("sys-manifest.toml"), "schema_version = 999\n").unwrap();
     assert!(prepare_upgrade_plans(&config, reviewed).await.is_err());
-    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    assert_only_state_file(&root, "sys-manifest.toml");
     assert!(!config.bin_dir().exists());
     assert!(!config.presets_dir().exists());
     std::fs::remove_dir_all(root).unwrap();
@@ -140,37 +152,23 @@ async fn prepared_domains_return_their_reports_and_still_revalidate_at_apply() {
     let reviewed = reviews(&config, &["shell", "app", "sys"]).await;
     let prepared = prepare_upgrade_plans(&config, reviewed).await.unwrap();
     assert!(!root.exists(), "prevalidation must not initialize state");
+    let options = ExecutionOptions::default();
     let shell = prepared
         .shell
-        .execute(
-            &config,
-            ExecutionOptions::default(),
-            &mut NullObserver,
-            &mut Interaction,
-        )
+        .execute(&config, options, &mut NullObserver, &mut Interaction)
         .await
         .unwrap();
     assert!(shell.runs.is_empty());
     let app = prepared
         .app
-        .execute(
-            &config,
-            ExecutionOptions::default(),
-            &mut NullObserver,
-            &mut Interaction,
-        )
+        .execute(&config, options, &mut NullObserver, &mut Interaction)
         .await
         .unwrap();
     assert!(app.files.is_empty());
     let sys = prepared
         .sys
         .into_managed()
-        .execute(
-            &config,
-            ExecutionOptions::default(),
-            &mut NullObserver,
-            &mut Interaction,
-        )
+        .execute(&config, options, &mut NullObserver, &mut Interaction)
         .await
         .unwrap();
     assert!(sys.items.is_empty());
@@ -187,12 +185,7 @@ async fn prepared_domains_return_their_reports_and_still_revalidate_at_apply() {
     .unwrap();
     let error = prepared
         .app
-        .execute(
-            &config,
-            ExecutionOptions::default(),
-            &mut NullObserver,
-            &mut Interaction,
-        )
+        .execute(&config, options, &mut NullObserver, &mut Interaction)
         .await
         .unwrap_err();
     assert!(
@@ -213,8 +206,7 @@ async fn singleton_handoffs_reject_other_domains_before_capture() {
             .await
             .try_into()
             .unwrap();
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("trust.toml"), "malformed [").unwrap();
+    write_malformed_trust_store(&root);
     for error in [
         PreparedAppUpgrade::prepare(&config, shell)
             .await
@@ -234,6 +226,6 @@ async fn singleton_handoffs_reject_other_domains_before_capture() {
             "{error:#}"
         );
     }
-    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    assert_only_state_file(&root, "trust.toml");
     std::fs::remove_dir_all(root).unwrap();
 }

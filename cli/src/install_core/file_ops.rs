@@ -120,30 +120,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uninstall_restores_backup() {
-        let dir = make_temp_dir().await;
-        let dest = dir.join("dest.toml");
-        let backup = dir.join("dest.toml.shine.bak");
-        let content = b"managed";
-        fs::write(&dest, content).await.unwrap();
-        fs::write(&backup, b"original").await.unwrap();
+    async fn uninstall_restores_backup_for_managed_and_forced_modified_files() {
+        for (force, current) in [(false, b"managed".as_slice()), (true, b"user modified")] {
+            let dir = make_temp_dir().await;
+            let dest = dir.join("dest.toml");
+            let backup = dir.join("dest.toml.shine.bak");
+            fs::write(&dest, current).await.unwrap();
+            fs::write(&backup, b"original").await.unwrap();
+            let entry = AppEntry {
+                source: "app/test/dest.toml".into(),
+                backup: Some(backup.clone()),
+                ..entry_for(&dest, hash_content(b"managed"))
+            };
 
-        let entry = AppEntry {
-            source: "app/test/dest.toml".to_string(),
-            destination: dest.clone(),
-            backup: Some(backup.clone()),
-            content_hash: hash_content(content),
-            install_strategy: AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
-        };
-        let outcome = uninstall_entry_with_host(&RealHost, &entry, false, false)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, UninstallOutcome::RestoredBackup { .. }));
-        assert!(!backup.exists());
-        assert_eq!(fs::read(&dest).await.unwrap(), b"original");
-        fs::remove_dir_all(&dir).await.unwrap();
+            let outcome = uninstall_entry_with_host(&RealHost, &entry, false, force)
+                .await
+                .unwrap();
+            assert!(matches!(
+                (force, outcome),
+                (false, UninstallOutcome::RestoredBackup { .. })
+                    | (true, UninstallOutcome::ForceRestoredBackup { .. })
+            ));
+            assert!(!backup.exists());
+            assert_eq!(fs::read(&dest).await.unwrap(), b"original");
+            fs::remove_dir_all(dir).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -160,63 +161,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uninstall_skips_user_modified_file() {
-        let dir = make_temp_dir().await;
-        let dest = dir.join("dest.toml");
-        fs::write(&dest, b"user modified").await.unwrap();
-        let entry = entry_for(&dest, hash_content(b"original content"));
+    async fn uninstall_preserves_user_edits_unless_forced() {
+        for force in [false, true] {
+            let dir = make_temp_dir().await;
+            let dest = dir.join("dest.toml");
+            fs::write(&dest, b"user modified").await.unwrap();
+            let entry = entry_for(&dest, hash_content(b"original content"));
 
-        let outcome = uninstall_entry_with_host(&RealHost, &entry, false, false)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, UninstallOutcome::UserModified));
-        assert!(dest.exists(), "user-modified file must not be removed");
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn uninstall_force_removes_user_modified_file() {
-        let dir = make_temp_dir().await;
-        let dest = dir.join("dest.toml");
-        fs::write(&dest, b"user modified").await.unwrap();
-        let entry = entry_for(&dest, hash_content(b"original content"));
-
-        let outcome = uninstall_entry_with_host(&RealHost, &entry, false, true)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, UninstallOutcome::ForceRemoved));
-        assert!(!dest.exists(), "force should remove user-modified file");
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn uninstall_force_restores_backup_after_user_modified_file() {
-        let dir = make_temp_dir().await;
-        let dest = dir.join("dest.toml");
-        let backup = dir.join("dest.toml.shine.bak");
-        fs::write(&dest, b"user modified").await.unwrap();
-        fs::write(&backup, b"original").await.unwrap();
-
-        let entry = AppEntry {
-            source: "app/test/dest.toml".to_string(),
-            destination: dest.clone(),
-            backup: Some(backup.clone()),
-            content_hash: hash_content(b"managed"),
-            install_strategy: AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
-        };
-
-        let outcome = uninstall_entry_with_host(&RealHost, &entry, false, true)
-            .await
-            .unwrap();
-        assert!(matches!(
-            outcome,
-            UninstallOutcome::ForceRestoredBackup { .. }
-        ));
-        assert!(!backup.exists());
-        assert_eq!(fs::read(&dest).await.unwrap(), b"original");
-        fs::remove_dir_all(&dir).await.unwrap();
+            let outcome = uninstall_entry_with_host(&RealHost, &entry, false, force)
+                .await
+                .unwrap();
+            if force {
+                assert!(matches!(outcome, UninstallOutcome::ForceRemoved));
+                assert!(!dest.exists(), "force should remove user-modified file");
+            } else {
+                assert!(matches!(outcome, UninstallOutcome::UserModified));
+                assert_eq!(fs::read(&dest).await.unwrap(), b"user modified");
+            }
+            fs::remove_dir_all(dir).await.unwrap();
+        }
     }
 
     #[tokio::test]

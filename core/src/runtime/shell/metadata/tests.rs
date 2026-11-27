@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::{PresetSnapshot, PresetSourceKind, RuntimeContext};
 
-fn runtime(metadata: &str) -> CoreRuntime<()> {
+fn shell_context() -> RuntimeContext {
     let root = std::env::temp_dir().join("shine-shell-metadata");
     let mut context = RuntimeContext::isolated(
         root.join("home"),
@@ -11,9 +11,13 @@ fn runtime(metadata: &str) -> CoreRuntime<()> {
         RuntimePlatform::Linux,
     );
     context.shell = ShellType::Zsh;
+    context
+}
+
+fn runtime(metadata: &str) -> CoreRuntime<()> {
     CoreRuntime::new(
         (),
-        context,
+        shell_context(),
         PresetSnapshot::builder(PresetSourceKind::External)
             .file("shell/demo/shine.toml", metadata.as_bytes().to_vec())
             .file(
@@ -92,25 +96,16 @@ fn admitted_shell_entries_preserve_missing_reference_and_duplicate_diagnostics()
 fn parsed_shell_entry_permissions_replace_defaults_without_inheriting_opaque_grants() {
     use crate::plan::{OpaqueCodeScopeV1, PermissionV1};
     let categories = runtime("[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'a.sh'\n[[files]]\nsource = 'b.sh'\n[files.permissions]\nschema_version = 1\ncommands = ['git']\n").shell_categories(None).unwrap();
+    let permissions =
+        |file: &ShellFile| file.permissions.as_ref().unwrap().permission_set().unwrap();
     let files = &categories[0].files;
-    let inherited = files[0]
-        .permissions
-        .as_ref()
-        .unwrap()
-        .permission_set()
-        .unwrap();
-    let overridden = files[1]
-        .permissions
-        .as_ref()
-        .unwrap()
-        .permission_set()
-        .unwrap();
-    assert!(inherited.contains(&PermissionV1::OpaqueCode {
-        scope: OpaqueCodeScopeV1::Unrestricted
-    }));
-    assert!(!overridden.contains(&PermissionV1::OpaqueCode {
-        scope: OpaqueCodeScopeV1::Unrestricted
-    }));
+    let inherited = permissions(&files[0]);
+    let overridden = permissions(&files[1]);
+    let unrestricted = PermissionV1::OpaqueCode {
+        scope: OpaqueCodeScopeV1::Unrestricted,
+    };
+    assert!(inherited.contains(&unrestricted));
+    assert!(!overridden.contains(&unrestricted));
     assert!(overridden.contains(&PermissionV1::Command {
         program: "git".into()
     }));
@@ -126,11 +121,18 @@ fn bun_snapshot(kind: PresetSourceKind) -> crate::runtime::preset::PresetSnapsho
 }
 
 fn bun_spec(snapshot: PresetSnapshot) -> Result<BunRuntimeSpec> {
-    let mut context = runtime("").context().clone();
+    let mut context = shell_context();
     context.is_external_presets = snapshot.source_kind() == PresetSourceKind::External;
     let runtime = CoreRuntime::new((), context, snapshot);
     let categories = runtime.shell_categories(Some("demo"))?;
     runtime.shell_bun_runtime_spec("demo", &categories[0].files[0])
+}
+
+fn assert_bun_dependency_error(snapshot: PresetSnapshot, expected: &str) {
+    let error = bun_spec(snapshot).unwrap_err();
+    assert!(error.to_string().contains(expected), "{error}");
+    let diagnostic = error.downcast_ref::<MetadataDiagnosticError>().unwrap();
+    assert_eq!(diagnostic.kind, MetadataDiagnosticKind::BunDependencyPolicy);
 }
 
 #[test]
@@ -155,15 +157,7 @@ fn external_scripts_require_a_complete_locked_pair() {
         let snapshot = bun_snapshot(PresetSourceKind::External)
             .file(format!("shell/demo/{file}"), bytes.to_vec())
             .build();
-        let error = bun_spec(snapshot).unwrap_err();
-        assert!(error.to_string().contains(missing));
-        assert_eq!(
-            error
-                .downcast_ref::<MetadataDiagnosticError>()
-                .unwrap()
-                .kind,
-            MetadataDiagnosticKind::BunDependencyPolicy
-        );
+        assert_bun_dependency_error(snapshot, missing);
     }
 }
 
@@ -200,15 +194,7 @@ fn external_scripts_reject_trusted_dependencies() {
         )
         .file("shell/demo/bun.lock", b"lock".to_vec())
         .build();
-    let error = bun_spec(snapshot).unwrap_err();
-    assert!(error.to_string().contains("trustedDependencies"));
-    assert_eq!(
-        error
-            .downcast_ref::<MetadataDiagnosticError>()
-            .unwrap()
-            .kind,
-        MetadataDiagnosticKind::BunDependencyPolicy
-    );
+    assert_bun_dependency_error(snapshot, "trustedDependencies");
 }
 
 #[test]
@@ -223,13 +209,12 @@ fn overlay_scripts_require_package_and_lock_from_their_own_layer() {
         bun_spec(snapshot().build()).unwrap(),
         BunRuntimeSpec::default()
     );
-    let error = bun_spec(
+    assert_bun_dependency_error(
         snapshot()
             .overlay_file("shell/demo/package.json", b"{}".to_vec())
             .build(),
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("bun.lock"));
+        "bun.lock",
+    );
     let spec = bun_spec(
         snapshot()
             .overlay_file("shell/demo/package.json", b"{}".to_vec())
@@ -255,7 +240,7 @@ fn production_description(bytes: &[u8], link_runtime: LinkRuntime) -> Vec<String
         )
         .file(format!("shell/demo/{source}"), bytes.to_vec())
         .build();
-    CoreRuntime::new((), runtime("").context().clone(), snapshot)
+    CoreRuntime::new((), shell_context(), snapshot)
         .shell_categories(Some("demo"))
         .unwrap()[0]
         .files[0]

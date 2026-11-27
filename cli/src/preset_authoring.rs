@@ -277,32 +277,35 @@ mod tests {
         PresetAuthoringPlanSectionV1, PresetDiagnostic, PresetDiagnosticSeverity,
     };
 
+    fn blocked_report(target: &str) -> PresetAuthoringPlanReportV1 {
+        PresetAuthoringPlanReportV1 {
+            complete: true,
+            schema_version: PRESET_AUTHORING_PLAN_SCHEMA_VERSION,
+            valid: true,
+            ready: false,
+            target: Some(target.into()),
+            platform: "macos".into(),
+            assumptions: PresetAuthoringPlanAssumptionsV1::default(),
+            diagnostics: Vec::new(),
+            plans: Vec::new(),
+        }
+    }
+
     #[test]
     fn platform_mapping_is_explicit() {
-        assert_eq!(
-            runtime_platform(PresetPlatform::Macos),
-            RuntimePlatform::Macos
-        );
-        assert_eq!(
-            runtime_platform(PresetPlatform::Linux),
-            RuntimePlatform::Linux
-        );
-        assert_eq!(
-            runtime_platform(PresetPlatform::Windows),
-            RuntimePlatform::Windows
-        );
+        for (input, expected) in [
+            (PresetPlatform::Macos, RuntimePlatform::Macos),
+            (PresetPlatform::Linux, RuntimePlatform::Linux),
+            (PresetPlatform::Windows, RuntimePlatform::Windows),
+        ] {
+            assert_eq!(runtime_platform(input), expected);
+        }
     }
 
     #[test]
     fn invalid_text_shows_validation_details_without_irrelevant_assumptions() {
         let report = PresetAuthoringPlanReportV1 {
-            complete: true,
-            schema_version: PRESET_AUTHORING_PLAN_SCHEMA_VERSION,
             valid: false,
-            ready: false,
-            target: Some("shell/chrome".to_string()),
-            platform: "macos".to_string(),
-            assumptions: PresetAuthoringPlanAssumptionsV1::default(),
             diagnostics: vec![
                 PresetDiagnostic {
                     severity: PresetDiagnosticSeverity::Error,
@@ -317,7 +320,7 @@ mod tests {
                     path: None,
                 },
             ],
-            plans: Vec::new(),
+            ..blocked_report("shell/chrome")
         };
 
         let output = authoring_text(&report);
@@ -331,19 +334,7 @@ mod tests {
 
     #[test]
     fn valid_text_wraps_all_hypothetical_assumptions_across_two_lines() {
-        let report = PresetAuthoringPlanReportV1 {
-            complete: true,
-            schema_version: PRESET_AUTHORING_PLAN_SCHEMA_VERSION,
-            valid: true,
-            ready: false,
-            target: Some("shell/chrome".to_string()),
-            platform: "macos".to_string(),
-            assumptions: PresetAuthoringPlanAssumptionsV1::default(),
-            diagnostics: Vec::new(),
-            plans: Vec::new(),
-        };
-
-        let output = authoring_text(&report);
+        let output = authoring_text(&blocked_report("shell/chrome"));
 
         assert!(output.contains("Lifecycle state empty · Environment absent · Secrets absent"));
         assert!(output.contains("Trust grants none · Commands absent · Administrator unavailable"));
@@ -398,14 +389,6 @@ mod tests {
             uncomputable_codes: Default::default(),
         };
         let report = PresetAuthoringPlanReportV1 {
-            complete: true,
-            schema_version: PRESET_AUTHORING_PLAN_SCHEMA_VERSION,
-            valid: true,
-            ready: false,
-            target: Some("shell/test".to_string()),
-            platform: "macos".to_string(),
-            assumptions: PresetAuthoringPlanAssumptionsV1::default(),
-            diagnostics: Vec::new(),
             plans: vec![PresetAuthoringPlanSectionV1 {
                 code_analysis: Vec::new(),
                 kind: "lifecycle-install".to_string(),
@@ -420,6 +403,7 @@ mod tests {
                 author_capabilities: PermissionSetV1::default(),
                 code_boundaries: Vec::new(),
             }],
+            ..blocked_report("shell/test")
         };
 
         let output = authoring_text(&report);

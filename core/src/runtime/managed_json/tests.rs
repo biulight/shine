@@ -67,39 +67,31 @@ fn managed_json_merge_remove_and_restore_preserve_current_unrelated_values() {
 
 #[test]
 fn managed_json_errors_retain_context_and_validation_order() {
+    #[track_caller]
+    fn assert_object_error<T: std::fmt::Debug>(result: Result<T>, context: &str) {
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!("json-merge: {context} must be a JSON object")
+        );
+    }
+
     let keys = vec!["owned".into()];
-    assert_eq!(
-        merge_managed_json_bytes(Some(b"[]"), b"null", &keys)
-            .unwrap_err()
-            .to_string(),
-        "json-merge: source must be a JSON object"
+    assert_object_error(
+        merge_managed_json_bytes(Some(b"[]"), b"null", &keys),
+        "source",
     );
-    assert_eq!(
-        merge_managed_json_bytes(Some(b"[]"), br#"{"owned":1}"#, &keys)
-            .unwrap_err()
-            .to_string(),
-        "json-merge: destination must be a JSON object"
+    assert_object_error(
+        merge_managed_json_bytes(Some(b"[]"), br#"{"owned":1}"#, &keys),
+        "destination",
     );
-    assert_eq!(
-        restore_managed_json_bytes(b"[]", b"null", &keys)
-            .unwrap_err()
-            .to_string(),
-        "json-merge: destination must be a JSON object"
+    assert_object_error(
+        restore_managed_json_bytes(b"[]", b"null", &keys),
+        "destination",
     );
-    assert_eq!(
-        restore_managed_json_bytes(b"{}", b"null", &keys)
-            .unwrap_err()
-            .to_string(),
-        "json-merge: rollback must be a JSON object"
+    assert_object_error(
+        restore_managed_json_bytes(b"{}", b"null", &keys),
+        "rollback",
     );
-    assert_eq!(
-        managed_json_keys_match(b"{}", b"[]", &keys)
-            .unwrap_err()
-            .to_string(),
-        "json-merge: comparison must be a JSON object"
-    );
-    assert_eq!(
-        installed_json_hash(b"{", &keys).unwrap_err().to_string(),
-        "json-merge: destination must be a JSON object"
-    );
+    assert_object_error(managed_json_keys_match(b"{}", b"[]", &keys), "comparison");
+    assert_object_error(installed_json_hash(b"{", &keys), "destination");
 }

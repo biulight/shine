@@ -1,6 +1,14 @@
 use super::*;
 use crate::runtime::{FileSystemObservationHost, HostOperation, InMemoryHost};
 
+fn assert_privileged_operation_used(host: &InMemoryHost, expected: bool) {
+    let acquired = host
+        .operations()
+        .iter()
+        .any(|op| matches!(op, HostOperation::AcquirePrivilegedOperation));
+    assert_eq!(acquired, expected);
+}
+
 #[tokio::test]
 async fn privileged_sys_install_routes_and_restores_failed_writes() {
     for privileged in [false, true] {
@@ -36,14 +44,7 @@ async fn privileged_sys_install_routes_and_restores_failed_writes() {
             privileged
         );
         assert_eq!(host.read(&backup).await.unwrap(), b"original");
-        if !privileged {
-            assert!(
-                !host
-                    .operations()
-                    .iter()
-                    .any(|op| matches!(op, HostOperation::AcquirePrivilegedOperation))
-            );
-        }
+        assert_privileged_operation_used(&host, privileged);
     }
 }
 
@@ -63,19 +64,17 @@ async fn privileged_sys_uninstall_preserves_edits_and_restores_backups() {
             uses_env: false,
             requires_admin: privileged,
         };
+        let uninstall =
+            async |entry: &AppEntry| uninstall_sys_entry(&host, entry, privileged).await.unwrap();
         host.put_file(&destination, b"edited".to_vec());
         assert!(matches!(
-            uninstall_sys_entry(&host, &entry, privileged)
-                .await
-                .unwrap(),
+            uninstall(&entry).await,
             UninstallOutcome::UserModified
         ));
         assert_eq!(host.read(&destination).await.unwrap(), b"edited");
         host.put_file(&destination, b"managed".to_vec());
         assert!(matches!(
-            uninstall_sys_entry(&host, &entry, privileged)
-                .await
-                .unwrap(),
+            uninstall(&entry).await,
             UninstallOutcome::RestoredBackup { .. }
         ));
         assert_eq!(host.read(&destination).await.unwrap(), b"original");
@@ -84,26 +83,12 @@ async fn privileged_sys_uninstall_preserves_edits_and_restores_backups() {
             content_hash: hash_content(b"original"),
             ..entry
         };
+        assert!(matches!(uninstall(&entry).await, UninstallOutcome::Removed));
         assert!(matches!(
-            uninstall_sys_entry(&host, &entry, privileged)
-                .await
-                .unwrap(),
-            UninstallOutcome::Removed
-        ));
-        assert!(matches!(
-            uninstall_sys_entry(&host, &entry, privileged)
-                .await
-                .unwrap(),
+            uninstall(&entry).await,
             UninstallOutcome::NotFound
         ));
-        if !privileged {
-            assert!(
-                !host
-                    .operations()
-                    .iter()
-                    .any(|op| matches!(op, HostOperation::AcquirePrivilegedOperation))
-            );
-        }
+        assert_privileged_operation_used(&host, privileged);
     }
 }
 

@@ -482,6 +482,11 @@ mod tests {
         toml::from_str(value)
     }
 
+    fn assert_invalid(value: &str, expected_code: &str) {
+        let error = parse(value).unwrap().validate().unwrap_err();
+        assert_eq!(error.diagnostic_code(), expected_code, "{value}");
+    }
+
     #[test]
     fn complete_declaration_normalizes_to_plan_permissions() {
         let declaration = parse(
@@ -518,11 +523,7 @@ system = [{ capability = "split-dns", resource = "private-domain" }]
 
     #[test]
     fn schema_and_unknown_fields_fail_closed() {
-        let declaration = parse("schema_version = 3\n").unwrap();
-        assert_eq!(
-            declaration.validate().unwrap_err().diagnostic_code(),
-            "unsupported_permission_schema"
-        );
+        assert_invalid("schema_version = 3\n", "unsupported_permission_schema");
         assert!(parse("schema_version = 1\nsecret_value = 'nope'\n").is_err());
     }
 
@@ -550,35 +551,16 @@ environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
 
     #[test]
     fn schema_v1_rejects_the_v2_opaque_code_field() {
-        let declaration = parse(
-            r#"
-schema_version = 1
-opaque_code = "unrestricted"
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            declaration.validate().unwrap_err().diagnostic_code(),
-            "invalid_permission_declaration"
+        assert_invalid(
+            "schema_version = 1\nopaque_code = 'unrestricted'",
+            "invalid_permission_declaration",
         );
     }
 
     #[test]
     fn duplicate_permissions_are_rejected() {
-        let declaration = parse(
-            r#"
-schema_version = 1
-commands = ["bun", "bun"]
-"#,
-        )
-        .unwrap();
-        assert_eq!(
-            declaration.validate().unwrap_err().diagnostic_code(),
-            "duplicate_permission"
-        );
-
         for value in [
+            "schema_version = 1\ncommands = ['bun', 'bun']",
             r#"
 schema_version = 1
 filesystem = [
@@ -594,14 +576,7 @@ network = [
 ]
 "#,
         ] {
-            assert_eq!(
-                parse(value)
-                    .unwrap()
-                    .validate()
-                    .unwrap_err()
-                    .diagnostic_code(),
-                "duplicate_permission"
-            );
+            assert_invalid(value, "duplicate_permission");
         }
     }
 
@@ -615,14 +590,7 @@ filesystem = [{ access = ["read"], base = "home", path = "../secret" }]
 filesystem = [{ access = ["write"], base = "absolute", path = "relative/file" }]
 "#,
         ] {
-            assert_eq!(
-                parse(value)
-                    .unwrap()
-                    .validate()
-                    .unwrap_err()
-                    .diagnostic_code(),
-                "invalid_permission_declaration"
-            );
+            assert_invalid(value, "invalid_permission_declaration");
         }
         for path in [
             "/etc/example",
@@ -649,14 +617,7 @@ environment = [{ name = "TOKEN=value", sensitivity = "secret" }]
 system = [{ capability = "Split DNS" }]
 "#,
         ] {
-            assert_eq!(
-                parse(value)
-                    .unwrap()
-                    .validate()
-                    .unwrap_err()
-                    .diagnostic_code(),
-                "invalid_permission_declaration"
-            );
+            assert_invalid(value, "invalid_permission_declaration");
         }
     }
 }

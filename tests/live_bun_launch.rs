@@ -127,20 +127,12 @@ impl Fixture {
             .unwrap();
         }
         let fixture = Self { root, state };
-        fixture.assert_ok(
-            fixture
-                .shine()
-                .args(["trust", "grant", "shell/demo/run", "--development", "--yes"])
-                .output()
-                .unwrap(),
-        );
-        fixture.assert_ok(
-            fixture
-                .shine()
-                .args(["install", "shell/demo/run", "--yes"])
-                .output()
-                .unwrap(),
-        );
+        for args in [
+            &["trust", "grant", "shell/demo/run", "--development", "--yes"][..],
+            &["install", "shell/demo/run", "--yes"],
+        ] {
+            fixture.assert_ok(fixture.shine().args(args).output().unwrap());
+        }
         fixture
     }
     fn command(&self, program: &Path) -> Command {
@@ -192,6 +184,15 @@ impl Fixture {
             command
         }
     }
+    fn launch_ok(&self) -> String {
+        self.assert_ok(self.launcher().output().unwrap())
+    }
+    fn launch_failure(&self) -> Output {
+        let output = self.launcher().output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        output
+    }
     fn assert_ok(&self, output: Output) -> String {
         assert!(output.status.success(), "{output:?}");
         String::from_utf8(output.stdout).unwrap()
@@ -223,14 +224,14 @@ fn live_bun_launcher_binds_state_keeps_project_layers_and_argv() {
     );
     let rendered = fixture.state.join("rendered/shell/demo/run.ts");
     let before = fs::metadata(&rendered).unwrap().modified().unwrap();
-    fixture.assert_ok(fixture.launcher().output().unwrap());
+    fixture.launch_ok();
     assert_eq!(fs::metadata(&rendered).unwrap().modified().unwrap(), before);
     fs::write(
         fixture.state.join("presets/shell/demo/run.ts"),
         "changed @@VALUE@@\n",
     )
     .unwrap();
-    let output = fixture.assert_ok(fixture.launcher().output().unwrap());
+    let output = fixture.launch_ok();
     assert!(output.contains("script=changed override-template"));
     // Metadata cannot silently expand the installed env declaration or change the runtime.
     fs::write(
@@ -238,11 +239,7 @@ fn live_bun_launcher_binds_state_keeps_project_layers_and_argv() {
         "invalid changed metadata",
     )
     .unwrap();
-    assert!(
-        fixture
-            .assert_ok(fixture.launcher().output().unwrap())
-            .contains("token=override")
-    );
+    assert!(fixture.launch_ok().contains("token=override"));
 }
 
 #[test]
@@ -254,11 +251,11 @@ fn live_bun_uses_project_config_above_global_env_for_rendering_and_injection() {
         "TOKEN = 'global-sidecar'\nVALUE = 'global-sidecar-template'\n",
     )
     .unwrap();
-    let output = fixture.assert_ok(fixture.launcher().output().unwrap());
+    let output = fixture.launch_ok();
     assert!(output.contains("token=project"), "{output}");
     assert!(output.contains("script=project-template"), "{output}");
     fs::write(fixture.root.join("project/shine.config.toml"), "").unwrap();
-    let output = fixture.assert_ok(fixture.launcher().output().unwrap());
+    let output = fixture.launch_ok();
     assert!(output.contains("token=global-sidecar"), "{output}");
     assert!(
         output.contains("script=global-sidecar-template"),
@@ -269,7 +266,7 @@ fn live_bun_uses_project_config_above_global_env_for_rendering_and_injection() {
 #[test]
 fn live_bun_empty_env_exit_codes_and_errors() {
     let fixture = Fixture::new(false);
-    let output = fixture.assert_ok(fixture.launcher().output().unwrap());
+    let output = fixture.launch_ok();
     assert!(output.contains("token=inherited-wrong"));
     assert!(output.contains("script=override-template"));
     assert_eq!(
@@ -289,9 +286,7 @@ fn live_bun_empty_env_exit_codes_and_errors() {
         "@@MISSING@@",
     )
     .unwrap();
-    let output = fixture.launcher().output().unwrap();
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    fixture.launch_failure();
     assert_eq!(fs::read(&rendered).unwrap(), last_good);
     fs::write(
         fixture.state.join("shell-operation-journal.toml"),
@@ -344,9 +339,7 @@ fn live_bun_missing_env_and_corrupt_secret_do_not_execute_or_leak() {
         "VALUE = 'latest-template'\nTOKEN_SECRET = 'age:DO_NOT_LOG_THIS_CIPHERTEXT'\n",
     )
     .unwrap();
-    let output = fixture.launcher().output().unwrap();
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    let output = fixture.launch_failure();
     assert!(!String::from_utf8_lossy(&output.stderr).contains("DO_NOT_LOG_THIS_CIPHERTEXT"));
     assert_eq!(
         fs::read_to_string(fixture.state.join("rendered/shell/demo/run.ts")).unwrap(),
@@ -372,9 +365,7 @@ fn live_bun_missing_env_and_corrupt_secret_do_not_execute_or_leak() {
         )
         .unwrap();
     }
-    let output = fixture.launcher().output().unwrap();
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    fixture.launch_failure();
 }
 
 #[cfg(unix)]
@@ -468,35 +459,14 @@ fn wait_for_launcher_exit(
 }
 
 #[cfg(unix)]
-#[test]
-fn live_bun_parent_signal_is_relayed_and_child_is_reaped() {
-    let fixture = Fixture::new(false);
-    let ready = fixture.root.join("ready");
-    let mut child = fixture
-        .shine()
-        .args(["__shell-launch", "shell/demo/run", "--"])
-        .env("PROBE_READY", &ready)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let pid = wait_for_bun_pid(&mut child, &ready, deadline);
-    unsafe {
-        libc::kill(child.id() as i32, libc::SIGTERM);
-    }
-    assert_eq!(wait_for_launcher_exit(&mut child, pid, deadline), Some(143));
-    assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "Bun remained alive");
-}
-
-#[cfg(unix)]
-#[test]
-fn live_bun_foreground_group_interrupt_is_reaped() {
-    let fixture = Fixture::new(false);
-    let ready = fixture.root.join("ready");
+fn assert_signal_reaps_bun(signal: i32, target_group: bool, expected_exit: i32) {
     use std::os::unix::process::CommandExt;
+    let fixture = Fixture::new(false);
+    let ready = fixture.root.join("ready");
     let mut command = fixture.shine();
-    command.process_group(0);
+    if target_group {
+        command.process_group(0);
+    }
     let mut child = command
         .args(["__shell-launch", "shell/demo/run", "--"])
         .env("PROBE_READY", &ready)
@@ -506,11 +476,29 @@ fn live_bun_foreground_group_interrupt_is_reaped() {
         .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let pid = wait_for_bun_pid(&mut child, &ready, deadline);
-    unsafe {
-        libc::kill(-(child.id() as i32), libc::SIGINT);
-    }
-    assert_eq!(wait_for_launcher_exit(&mut child, pid, deadline), Some(130));
+    let launcher_pid = child.id() as i32;
+    let target = if target_group {
+        -launcher_pid
+    } else {
+        launcher_pid
+    };
+    let sent = unsafe { libc::kill(target, signal) };
+    let exit = wait_for_launcher_exit(&mut child, pid, deadline);
+    assert_eq!(sent, 0, "signal delivery failed");
+    assert_eq!(exit, Some(expected_exit));
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "Bun remained alive");
+}
+
+#[cfg(unix)]
+#[test]
+fn live_bun_parent_signal_is_relayed_and_child_is_reaped() {
+    assert_signal_reaps_bun(libc::SIGTERM, false, 143);
+}
+
+#[cfg(unix)]
+#[test]
+fn live_bun_foreground_group_interrupt_is_reaped() {
+    assert_signal_reaps_bun(libc::SIGINT, true, 130);
 }
 
 #[cfg(unix)]

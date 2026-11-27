@@ -135,6 +135,11 @@ mod tests {
     use crate::config::CURRENT_RUNTIME_SCHEMA_VERSION;
     use std::path::Path;
 
+    async fn save_and_read(config: &Config) -> String {
+        config.save().await.unwrap();
+        fs::read_to_string(&config.config_path).await.unwrap()
+    }
+
     #[tokio::test]
     async fn config_writers_discard_source_bearing_parse_error_chains() {
         let dir = make_temp_dir().await;
@@ -196,36 +201,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn save_writes_config_file_for_new_config() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
-        let parsed: toml::Table = toml::from_str(&content).unwrap();
-        assert_eq!(
-            parsed["schema_version"].as_integer(),
-            Some(CURRENT_RUNTIME_SCHEMA_VERSION.into())
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn save_writes_new_toml_when_existing_file_is_empty() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-        fs::write(&config.config_path, b"").await.unwrap();
-
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
-        assert!(!content.is_empty());
-        let parsed: toml::Table = toml::from_str(&content).unwrap();
-        assert!(parsed.contains_key("schema_version"));
-
-        fs::remove_dir_all(&dir).await.unwrap();
+    async fn save_writes_current_schema_to_missing_and_empty_files() {
+        for existing in [false, true] {
+            let dir = make_temp_dir().await;
+            let config = config_in(&dir);
+            if existing {
+                fs::write(&config.config_path, b"").await.unwrap();
+            }
+            let content = save_and_read(&config).await;
+            let parsed: toml::Table = toml::from_str(&content).unwrap();
+            assert_eq!(
+                parsed["schema_version"].as_integer(),
+                Some(CURRENT_RUNTIME_SCHEMA_VERSION.into()),
+                "existing file: {existing}"
+            );
+            fs::remove_dir_all(dir).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -240,9 +231,7 @@ mod tests {
             schema_version: 2,
             ..config
         };
-        updated.save().await.unwrap();
-
-        let content = fs::read_to_string(&updated.config_path).await.unwrap();
+        let content = save_and_read(&updated).await;
         let parsed: toml::Table = toml::from_str(&content).unwrap();
         assert_eq!(parsed["schema_version"].as_integer(), Some(2));
 
@@ -255,9 +244,7 @@ mod tests {
         let mut config = config_in(&dir);
         config.last_cleared_schema_version = Some(1);
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         let parsed: toml::Table = toml::from_str(&content).unwrap();
         assert_eq!(parsed["last_cleared_schema_version"].as_integer(), Some(1));
 
@@ -273,9 +260,7 @@ mod tests {
             .await
             .unwrap();
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         assert!(
             content.contains("# keep this"),
             "comment should be preserved"
@@ -296,9 +281,7 @@ mod tests {
         .unwrap();
         config.env.insert("MY_TOKEN".into(), "new".into());
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         assert!(
             content.contains("MY_TOKEN = { value = \"new\", description = \"Internal token\" }")
         );
@@ -316,9 +299,7 @@ mod tests {
         .await
         .unwrap();
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         assert!(
             !content.contains("stale_key"),
             "stale key should be removed"
@@ -342,9 +323,7 @@ mod tests {
         let mut config = config_in(&dir);
         config.presets_dir_override = Some(PathBuf::from("/external/presets"));
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         assert!(
             content.contains("/external/presets"),
             "presets_dir should be written to config.toml"
@@ -365,9 +344,7 @@ mod tests {
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(PathBuf::from("/external/overlay"));
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         assert!(content.contains("presets_overlay_dir"));
 
         let loaded: Config = toml::from_str(&content).unwrap();
@@ -386,9 +363,7 @@ mod tests {
         config.presets_overlay_git = Some("https://example.com/overlay.git".to_string());
         config.presets_overlay_git_branch = Some("main".to_string());
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         assert!(content.contains("presets_overlay_git"));
 
         let loaded: Config = toml::from_str(&content).unwrap();
@@ -410,9 +385,7 @@ mod tests {
             "bob@example.com".to_string(),
         ];
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         let loaded: Config = toml::from_str(&content).unwrap();
         assert_eq!(
             loaded.gpg_recipients,
@@ -429,9 +402,7 @@ mod tests {
         config.legacy_allow_app_hooks = true;
         config.legacy_allow_sys_code = true;
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         assert!(!content.contains("allow_app_hooks"));
         assert!(!content.contains("allow_sys_code"));
 
@@ -444,9 +415,7 @@ mod tests {
         let mut config = config_in(&dir);
         config.sync_terminal_theme = false;
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         assert!(content.contains("sync_terminal_theme"));
         let loaded: Config = toml::from_str(&content).unwrap();
         assert!(!loaded.sync_terminal_theme);
@@ -459,9 +428,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = config_in(&dir); // sync_terminal_theme defaults to true
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         let parsed: toml::Table = toml::from_str(&content).unwrap();
         assert!(
             !parsed.contains_key("sync_terminal_theme"),
@@ -479,9 +446,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = config_in(&dir); // presets_dir_override: None
 
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let content = save_and_read(&config).await;
         let parsed: toml::Table = toml::from_str(&content).unwrap();
         assert!(
             !parsed.contains_key("presets_dir"),

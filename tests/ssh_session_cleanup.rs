@@ -25,6 +25,21 @@ impl Fixture {
             .unwrap()
     }
 
+    async fn local_status(&self, session: &str, socket: &std::path::Path) -> std::process::Output {
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_shine"))
+            .args(["local", "status"])
+            .current_dir(&self.0)
+            .env("SHINE_CONFIG_DIR", self.0.join("state"))
+            .env("SHINE_SSH_SESSION", session)
+            .env("SHINE_SSH_TOKEN", "fixture-token")
+            .env("SHINE_SSH_REMOTE_SOCK", socket)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap()
+    }
+
     fn assert_no_sessions(state: &std::path::Path) {
         let sessions = state.join("run/ssh");
         assert!(
@@ -42,29 +57,21 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn ssh_spawn_failure_removes_context_and_socket() {
-    let fixture = Fixture::new();
-    let state = fixture.0.join("s");
-    let output = fixture.run(&state);
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("failed to start ssh"),
-        "{output:?}"
-    );
-    Fixture::assert_no_sessions(&state);
-}
-
-#[test]
-fn ssh_listener_setup_failure_removes_partial_session_directory() {
-    let fixture = Fixture::new();
-    let state = fixture.0.join("a".repeat(110));
-    let output = fixture.run(&state);
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("binding local transfer socket"),
-        "{output:?}"
-    );
-    Fixture::assert_no_sessions(&state);
+fn ssh_setup_failures_clean_up_session_resources() {
+    for (state_dir, diagnostic) in [
+        ("s".to_owned(), "failed to start ssh"),
+        ("a".repeat(110), "binding local transfer socket"),
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join(state_dir);
+        let output = fixture.run(&state);
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+            "{output:?}"
+        );
+        Fixture::assert_no_sessions(&state);
+    }
 }
 
 #[test]
@@ -234,25 +241,12 @@ async fn local_status_response(mode: &str) -> std::process::Output {
         assert_eq!(stream.read(&mut [0]).await.unwrap(), 0);
     });
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_shine"))
-            .args(["local", "status"])
-            .current_dir(&fixture.0)
-            .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
-            .env(
-                "SHINE_SSH_SESSION",
-                if control_session {
-                    "session\nFORGED=id\r\t\u{1b}\\literal中文"
-                } else {
-                    "fixture-session"
-                },
-            )
-            .env("SHINE_SSH_TOKEN", "fixture-token")
-            .env("SHINE_SSH_REMOTE_SOCK", &socket)
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .unwrap();
+        let session = if control_session {
+            "session\nFORGED=id\r\t\u{1b}\\literal中文"
+        } else {
+            "fixture-session"
+        };
+        let output = fixture.local_status(session, &socket).await;
         server.await.unwrap();
         assert_eq!(
             fs::read(fixture.0.join("state/config.toml")).unwrap(),
@@ -264,54 +258,50 @@ async fn local_status_response(mode: &str) -> std::process::Output {
     .expect("local status must finish without a response")
 }
 
+fn success_stdout(output: std::process::Output) -> String {
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn failure_stderr(output: std::process::Output) -> String {
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    String::from_utf8(output.stderr).unwrap()
+}
+
 #[tokio::test]
 async fn local_status_handshake_timeout_reports_unreachable_with_success() {
-    let output = local_status_response("handshake_timeout").await;
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("connection: unreachable"), "{output:?}");
+    let stdout = success_stdout(local_status_response("handshake_timeout").await);
+    assert!(stdout.contains("connection: unreachable"), "{stdout:?}");
     assert!(
         stdout.contains("connection timed out after 5 seconds"),
-        "{output:?}"
+        "{stdout:?}"
     );
-    assert!(output.stderr.is_empty(), "{output:?}");
 }
 
 #[tokio::test]
 async fn local_status_response_timeout_remains_a_command_error() {
-    let output = local_status_response("response_timeout").await;
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = failure_stderr(local_status_response("response_timeout").await);
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("response timed out after 5 seconds"),
-        "{output:?}"
+        stderr.contains("response timed out after 5 seconds"),
+        "{stderr:?}"
     );
 }
 
 #[tokio::test]
 async fn local_status_success_and_token_rejection_preserve_output_streams() {
-    let output = local_status_response("connected").await;
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert!(output.stderr.is_empty(), "{output:?}");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("connection: connected"), "{output:?}");
-    assert!(stdout.contains("host:       fixture.invalid"), "{output:?}");
-    assert!(stdout.contains("local dir:  /fixture"), "{output:?}");
-    let output = local_status_response("rejected").await;
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(output.stdout.is_empty(), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("invalid session token"),
-        "{output:?}"
-    );
+    let stdout = success_stdout(local_status_response("connected").await);
+    assert!(stdout.contains("connection: connected"), "{stdout:?}");
+    assert!(stdout.contains("host:       fixture.invalid"), "{stdout:?}");
+    assert!(stdout.contains("local dir:  /fixture"), "{stdout:?}");
+    let stderr = failure_stderr(local_status_response("rejected").await);
+    assert!(stderr.contains("invalid session token"), "{stderr:?}");
 }
 
 #[tokio::test]
 async fn local_status_encodes_fields_without_changing_success_streams() {
-    let output = local_status_response("controls").await;
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert!(output.stderr.is_empty(), "{output:?}");
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stdout = success_stdout(local_status_response("controls").await);
     for expected in [
         "session:    session\\nFORGED=id\\r\\t\\u{1b}\\literal中文",
         "host:       host\\nFORGED=host\\r\\t\\u{1b}\\literal中文",
@@ -325,10 +315,7 @@ async fn local_status_encodes_fields_without_changing_success_streams() {
 
 #[tokio::test]
 async fn local_status_encodes_rejection_without_changing_error_streams() {
-    let output = local_status_response("rejected_controls").await;
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(output.stdout.is_empty(), "{output:?}");
-    let stderr = String::from_utf8(output.stderr).unwrap();
+    let stderr = failure_stderr(local_status_response("rejected_controls").await);
     assert!(
         stderr.contains("denied\\nFORGED=error\\r\\t\\u{1b}\\literal中文"),
         "{stderr:?}"
@@ -342,20 +329,10 @@ async fn local_status_unreachable_encodes_session_and_path_preserving_config() {
     fs::create_dir(fixture.0.join("state")).unwrap();
     fs::write(fixture.0.join("state/config.toml"), "schema_version = 2\n").unwrap();
     let socket = fixture.0.join("missing\nSOCKET\u{1b}");
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_shine"))
-        .args(["local", "status"])
-        .current_dir(&fixture.0)
-        .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
-        .env("SHINE_SSH_SESSION", "session\nFORGED=id\u{1b}")
-        .env("SHINE_SSH_TOKEN", "fixture-token")
-        .env("SHINE_SSH_REMOTE_SOCK", &socket)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .unwrap();
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert!(output.stderr.is_empty(), "{output:?}");
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let output = fixture
+        .local_status("session\nFORGED=id\u{1b}", &socket)
+        .await;
+    let stdout = success_stdout(output);
     assert!(
         stdout.contains("session:    session\\nFORGED=id\\u{1b}"),
         "{stdout:?}"

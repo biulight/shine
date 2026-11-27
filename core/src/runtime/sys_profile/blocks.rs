@@ -479,39 +479,21 @@ mod tests {
     const SENTINEL: (&str, &str) = ("START", "END");
 
     #[test]
-    fn remove_sentinel_block_returns_unchanged_when_sentinel_absent() {
-        let content = "no sentinel here\n";
-        assert_eq!(remove_sentinel_block(content, SENTINEL), content);
-    }
-
-    #[test]
-    fn remove_sentinel_block_removes_bounded_lines_but_keeps_preceding_blank_line() {
-        // Unlike shells/profile.rs's byte-offset version, this line-based
-        // implementation never consumes a preceding blank line separator —
-        // it only drops the sentinel lines themselves.
-        let content = "before\n\nSTART\nbody\nEND\nafter\n";
-        assert_eq!(
-            remove_sentinel_block(content, SENTINEL),
-            "before\n\nafter\n"
-        );
-    }
-
-    #[test]
-    fn remove_sentinel_block_normalizes_crlf_to_lf_even_without_sentinel() {
-        // content.lines() strips '\r' unconditionally, so any CRLF input is
-        // normalized to LF by this function, whether or not it contains the
-        // sentinel — a side effect shells/profile.rs's byte-offset version
-        // does not have.
-        let content = "before\r\nafter\r\n";
-        assert_eq!(remove_sentinel_block(content, SENTINEL), "before\nafter\n");
-    }
-
-    #[test]
-    fn remove_sentinel_block_preserves_trailing_newline_presence() {
-        let with_newline = "before\nSTART\nbody\nEND\nafter\n";
-        let without_newline = "before\nSTART\nbody\nEND\nafter";
-        assert!(remove_sentinel_block(with_newline, SENTINEL).ends_with('\n'));
-        assert!(!remove_sentinel_block(without_newline, SENTINEL).ends_with('\n'));
+    fn removing_sentinel_lines_preserves_blank_lines_and_final_newline() {
+        // Sys removal normalizes CRLF even without markers and retains the preceding blank line.
+        for (content, expected) in [
+            ("no sentinel here\n", "no sentinel here\n"),
+            ("before\n\nSTART\nbody\nEND\nafter\n", "before\n\nafter\n"),
+            ("before\r\nafter\r\n", "before\nafter\n"),
+            ("before\nSTART\nbody\nEND\nafter\n", "before\nafter\n"),
+            ("before\nSTART\nbody\nEND\nafter", "before\nafter"),
+        ] {
+            assert_eq!(
+                remove_sentinel_block(content, SENTINEL),
+                expected,
+                "{content:?}"
+            );
+        }
     }
 
     #[test]
@@ -536,32 +518,21 @@ mod tests {
     }
 
     #[test]
-    fn insert_start_adds_exactly_one_blank_line_before_nonempty_content() {
-        let updated =
-            insert_shell_profile_block("rest", "BLOCK\n", ShellProfileBlockPosition::Start);
-        assert_eq!(updated, "BLOCK\n\nrest");
-    }
-
-    #[test]
-    fn insert_start_into_empty_content_has_no_trailing_blank_line() {
-        let updated = insert_shell_profile_block("", "BLOCK\n", ShellProfileBlockPosition::Start);
-        assert_eq!(updated, "BLOCK\n");
-    }
-
-    #[test]
-    fn insert_end_adds_exactly_one_blank_line_regardless_of_existing_trailing_newline() {
-        let with_newline =
-            insert_shell_profile_block("rest\n", "BLOCK\n", ShellProfileBlockPosition::End);
-        let without_newline =
-            insert_shell_profile_block("rest", "BLOCK\n", ShellProfileBlockPosition::End);
-        assert_eq!(with_newline, "rest\n\nBLOCK\n");
-        assert_eq!(without_newline, "rest\n\nBLOCK\n");
-    }
-
-    #[test]
-    fn insert_end_into_empty_content_has_no_leading_blank_line() {
-        let updated = insert_shell_profile_block("", "BLOCK\n", ShellProfileBlockPosition::End);
-        assert_eq!(updated, "BLOCK\n");
+    fn inserting_profile_block_separates_it_from_existing_content() {
+        use ShellProfileBlockPosition::{End, Start};
+        for (position, existing, expected) in [
+            (Start, "rest", "BLOCK\n\nrest"),
+            (Start, "", "BLOCK\n"),
+            (End, "rest\n", "rest\n\nBLOCK\n"),
+            (End, "rest", "rest\n\nBLOCK\n"),
+            (End, "", "BLOCK\n"),
+        ] {
+            assert_eq!(
+                insert_shell_profile_block(existing, "BLOCK\n", position),
+                expected,
+                "{position:?} {existing:?}"
+            );
+        }
     }
 
     #[test]
@@ -637,7 +608,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_sys_shell_profile_blocks_inserts_pre_and_post_on_empty_file() {
+    async fn update_sys_shell_profile_blocks_inserts_ordered_blocks_once() {
         let dir = make_temp_dir("shine-sys-profile").await;
         let config = profile_config(&dir, ShellType::Bash);
         let path = dir.join(".bashrc");
@@ -653,21 +624,6 @@ mod tests {
         // Pre block must come before the post block.
         assert!(content.find("sys pre").unwrap() < content.find("sys post").unwrap());
 
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn update_sys_shell_profile_blocks_is_idempotent_when_already_up_to_date() {
-        let dir = make_temp_dir("shine-sys-profile").await;
-        let config = profile_config(&dir, ShellType::Bash);
-        let path = dir.join(".bashrc");
-
-        assert!(
-            update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
-                .await
-                .unwrap()
-                .updated
-        );
         // Second call against the now-converged file must report no change.
         assert!(
             !update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")

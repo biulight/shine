@@ -540,46 +540,37 @@ mod tests {
 
     #[tokio::test]
     async fn missing_sys_preset_is_distinct_from_invalid_manifest() {
+        let context = RuntimeContext::isolated(
+            "/home".into(),
+            "/state".into(),
+            "/presets".into(),
+            "/bin".into(),
+            RuntimePlatform::Linux,
+        );
         for source in [
             PresetSourceKind::Embedded,
             PresetSourceKind::External,
             PresetSourceKind::Overlay,
         ] {
-            let context = RuntimeContext::isolated(
-                "/home".into(),
-                "/state".into(),
-                "/presets".into(),
-                "/bin".into(),
-                RuntimePlatform::Linux,
-            );
-            let runtime = CoreRuntime::new(
-                InMemoryHost::new(),
-                context.clone(),
-                PresetSnapshot::builder(source).build(),
-            );
-            assert!(
-                runtime
-                    .load_sys_preset("arch")
-                    .await
-                    .unwrap_err()
-                    .to_string()
-                    .contains("No system preset found for `arch`")
-            );
-            let invalid = CoreRuntime::new(
-                InMemoryHost::new(),
-                context,
-                PresetSnapshot::builder(source)
-                    .file("sys/arch/shine.toml", b"invalid toml".to_vec())
-                    .build(),
-            );
-            assert!(
-                invalid
-                    .load_sys_preset("arch")
-                    .await
-                    .unwrap_err()
-                    .to_string()
-                    .contains("parsing sys/arch/shine.toml")
-            );
+            for (snapshot, expected) in [
+                (
+                    PresetSnapshot::builder(source).build(),
+                    "No system preset found for `arch`",
+                ),
+                (
+                    PresetSnapshot::builder(source)
+                        .file("sys/arch/shine.toml", b"invalid toml".to_vec())
+                        .build(),
+                    "parsing sys/arch/shine.toml",
+                ),
+            ] {
+                let runtime = CoreRuntime::new(InMemoryHost::new(), context.clone(), snapshot);
+                let error = runtime.load_sys_preset("arch").await.unwrap_err();
+                assert!(
+                    error.to_string().contains(expected),
+                    "{source:?}: {error:#}"
+                );
+            }
         }
     }
 
@@ -660,32 +651,18 @@ commands = ["git"]
         )
         .unwrap();
 
-        let inherited = manifest.items[0].permissions.as_ref().unwrap();
-        let overridden = manifest.items[1].permissions.as_ref().unwrap();
-        assert!(
-            inherited
-                .permission_set()
-                .unwrap()
-                .contains(&PermissionV1::OpaqueCode {
-                    scope: OpaqueCodeScopeV1::Unrestricted,
-                })
-        );
-        assert!(
-            overridden
-                .permission_set()
-                .unwrap()
-                .contains(&PermissionV1::Command {
-                    program: "git".to_string(),
-                })
-        );
-        assert!(
-            !overridden
-                .permission_set()
-                .unwrap()
-                .contains(&PermissionV1::OpaqueCode {
-                    scope: OpaqueCodeScopeV1::Unrestricted,
-                })
-        );
+        let permissions =
+            |item: &SysItem| item.permissions.as_ref().unwrap().permission_set().unwrap();
+        let inherited = permissions(&manifest.items[0]);
+        let overridden = permissions(&manifest.items[1]);
+        let unrestricted = PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        };
+        assert!(inherited.contains(&unrestricted));
+        assert!(overridden.contains(&PermissionV1::Command {
+            program: "git".into()
+        }));
+        assert!(!overridden.contains(&unrestricted));
     }
 
     #[cfg(unix)]

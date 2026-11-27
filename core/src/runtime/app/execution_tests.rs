@@ -64,6 +64,36 @@ fn mappings() -> Vec<EnvVarSpec> {
     }]
 }
 
+fn assert_mapped_environment(request: &ProcessRequest) {
+    assert_eq!(
+        request.env.get("MAPPED").map(String::as_str),
+        Some("selected")
+    );
+    assert!(!request.env.contains_key("VALUE"));
+    assert!(!request.env.contains_key("UNRELATED"));
+}
+
+async fn run_post_install_hooks(
+    runtime: &CoreRuntime<InMemoryHost>,
+    categories: Vec<AppCategory>,
+) -> AppHookReport {
+    let changed = categories
+        .iter()
+        .map(|category| category.name.clone())
+        .collect();
+    runtime
+        .run_app_hooks(
+            AppHookRequest {
+                categories,
+                changed,
+                phase: AppHookPhase::PostInstall,
+                show_success: true,
+            },
+            &mut NullObserver,
+        )
+        .await
+}
+
 fn generator(explicit: bool) -> AppGeneratorRequest {
     AppGeneratorRequest {
         category: "demo".into(),
@@ -102,24 +132,18 @@ fn artifact(implicit: bool) -> AppArtifactRequest {
 #[tokio::test]
 async fn generator_gates_before_effects_and_retains_bounded_allowlisted_execution() {
     let runtime = runtime(PresetSourceKind::Embedded).await;
-    assert!(
-        runtime
-            .run_app_generator(generator(false), &mut NullObserver)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(runtime.host().operations().is_empty());
     let mut disabled = generator(true);
     disabled.generator.when_env = "ABSENT".into();
-    assert!(
-        runtime
-            .run_app_generator(disabled, &mut NullObserver)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(runtime.host().operations().is_empty());
+    for request in [generator(false), disabled] {
+        assert!(
+            runtime
+                .run_app_generator(request, &mut NullObserver)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(runtime.host().operations().is_empty());
+    }
     runtime.host().queue_process_output(Ok(ProcessOutput {
         exit_code: Some(0),
         stdout: b"generated".to_vec(),
@@ -136,12 +160,8 @@ async fn generator_gates_before_effects_and_retains_bounded_allowlisted_executio
     let requests = runtime.host().process_requests();
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
-    assert_eq!(
-        request.env.get("MAPPED").map(String::as_str),
-        Some("selected")
-    );
-    assert!(!request.env.contains_key("VALUE"));
-    assert!(!request.env.contains_key("UNRELATED"));
+    assert_mapped_environment(request);
+
     assert_eq!(request.timeout, Some(std::time::Duration::from_secs(30)));
     assert_eq!(request.stdout_limit, Some(8 * 1024 * 1024));
     assert_eq!(request.stderr_limit, Some(64 * 1024));
@@ -186,17 +206,7 @@ async fn hook_failure_stops_its_category_preserves_prior_notes_and_continues_oth
             ..Default::default()
         }));
     }
-    let report = runtime
-        .run_app_hooks(
-            AppHookRequest {
-                categories: vec![category, other],
-                changed: BTreeSet::from(["demo".into(), "other".into()]),
-                phase: AppHookPhase::PostInstall,
-                show_success: true,
-            },
-            &mut NullObserver,
-        )
-        .await;
+    let report = run_post_install_hooks(&runtime, vec![category, other]).await;
     assert_eq!(report.notes, ["first note", "other note"]);
     assert_eq!(
         report
@@ -264,11 +274,8 @@ async fn artifact_retains_preview_implicit_failure_and_explicit_io_contracts() {
                 ProcessIo::Inherit
             }
         );
-        assert_eq!(
-            requests[0].env.get("MAPPED").map(String::as_str),
-            Some("selected")
-        );
-        assert!(!requests[0].env.contains_key("UNRELATED"));
+        assert_mapped_environment(&requests[0]);
+
         assert!(requests[0].timeout.is_none());
     }
 }
@@ -305,17 +312,7 @@ async fn untrusted_entrypoints_reject_or_skip_without_any_host_effects() {
         show_output: true,
         env: mappings(),
     }];
-    let report = runtime
-        .run_app_hooks(
-            AppHookRequest {
-                categories: vec![category],
-                changed: BTreeSet::from(["demo".into()]),
-                phase: AppHookPhase::PostInstall,
-                show_success: true,
-            },
-            &mut NullObserver,
-        )
-        .await;
+    let report = run_post_install_hooks(&runtime, vec![category]).await;
     assert_eq!(report.outcomes[0].status, LifecycleStatus::Skipped);
     assert_eq!(
         report.outcomes[0].diagnostic_codes,
@@ -339,27 +336,14 @@ async fn script_hook_keeps_fixed_environment_and_cleans_only_its_failed_invocati
         .host()
         .queue_process_output(Err(anyhow::anyhow!("spawn failure")));
 
-    let report = runtime
-        .run_app_hooks(
-            AppHookRequest {
-                categories: vec![category],
-                changed: BTreeSet::from(["demo".into()]),
-                phase: AppHookPhase::PostInstall,
-                show_success: true,
-            },
-            &mut NullObserver,
-        )
-        .await;
+    let report = run_post_install_hooks(&runtime, vec![category]).await;
 
     assert_eq!(report.outcomes[0].status, LifecycleStatus::Failed);
     assert_eq!(report.outcomes[0].diagnostic_codes, ["app_hook_failed"]);
     let requests = runtime.host().process_requests();
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
-    assert_eq!(
-        request.env.get("MAPPED").map(String::as_str),
-        Some("selected")
-    );
+    assert_mapped_environment(request);
     assert_eq!(
         request.env.get("SHINE_APP_ID").map(String::as_str),
         Some("demo")
@@ -368,8 +352,7 @@ async fn script_hook_keeps_fixed_environment_and_cleans_only_its_failed_invocati
         Path::new(&request.env["SHINE_APP_DIR"]),
         request.cwd.as_deref().unwrap()
     );
-    assert!(!request.env.contains_key("UNRELATED"));
-    assert!(!request.env.contains_key("VALUE"));
+
     assert!(
         runtime
             .host()

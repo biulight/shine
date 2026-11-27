@@ -618,10 +618,13 @@ mod tests {
         let runtime = CoreRuntime::new(host.clone(), context, snapshot);
         let loaded = runtime.load_sys_preset("ubuntu").await.unwrap();
 
-        let first = runtime
-            .install_composed_sys_profile("ubuntu", &loaded, &BTreeSet::new(), "zsh", false)
-            .await
-            .unwrap();
+        let install_profile = async || {
+            runtime
+                .install_composed_sys_profile("ubuntu", &loaded, &BTreeSet::new(), "zsh", false)
+                .await
+                .unwrap()
+        };
+        let first = install_profile().await;
         assert_eq!(first.status, SysItemStatus::Updated);
         assert_eq!(
             host.read(&shine_dir.join("profile/ubuntu-sys.pre.sh"))
@@ -633,10 +636,7 @@ mod tests {
         assert!(zshrc.contains("shine ubuntu sys pre"));
         assert!(zshrc.contains("shine ubuntu sys post"));
 
-        let second = runtime
-            .install_composed_sys_profile("ubuntu", &loaded, &BTreeSet::new(), "zsh", false)
-            .await
-            .unwrap();
+        let second = install_profile().await;
         assert_eq!(second.status, SysItemStatus::Skipped);
     }
 
@@ -658,20 +658,7 @@ mod tests {
             .await
             .unwrap();
 
-        let update = install_sys_profile_phase_with_template(
-            &crate::runtime::RealHost,
-            ProfilePhaseInstall {
-                profile_dir: &profile_dir,
-                os_id: "ubuntu",
-                script_dir: &script_dir,
-                phase: SysProfilePhase::Pre,
-                ext: "sh",
-                force_profile: false,
-                template_override: None,
-            },
-        )
-        .await
-        .unwrap();
+        let update = run_phase(&profile_dir, &script_dir).await;
         assert!(update.updated, "fresh install should write the loader file");
 
         let active_path = sys_profile_file_path(&profile_dir, "ubuntu", SysProfilePhase::Pre, "sh");

@@ -227,20 +227,18 @@ where
 mod tests {
     use super::*;
 
+    async fn round_trip<T: Serialize + DeserializeOwned>(message: &T) -> T {
+        let mut buf = Vec::new();
+        write_message(&mut buf, message).await.unwrap();
+        read_message(&mut buf.as_slice()).await.unwrap()
+    }
+
     #[tokio::test]
     async fn round_trips_a_control_message() {
-        let mut buf = Vec::new();
-        write_message(
-            &mut buf,
-            &ClientMessage::Hello {
-                protocol_version: PROTOCOL_VERSION,
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut cursor = std::io::Cursor::new(buf);
-        let decoded: ClientMessage = read_message(&mut cursor).await.unwrap();
+        let decoded = round_trip(&ClientMessage::Hello {
+            protocol_version: PROTOCOL_VERSION,
+        })
+        .await;
         match decoded {
             ClientMessage::Hello { protocol_version } => {
                 assert_eq!(protocol_version, PROTOCOL_VERSION);
@@ -251,24 +249,16 @@ mod tests {
 
     #[tokio::test]
     async fn round_trips_a_transfer_request() {
-        let mut buf = Vec::new();
-        write_message(
-            &mut buf,
-            &ClientMessage::Transfer {
-                token: "tok".to_string(),
-                direction: Direction::Download,
-                remote_spec: "/abs/logs/*.log".to_string(),
-                local_spec: Some("dest".to_string()),
-                force: true,
-                dry_run: false,
-                use_scp: false,
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut cursor = std::io::Cursor::new(buf);
-        let decoded: ClientMessage = read_message(&mut cursor).await.unwrap();
+        let decoded = round_trip(&ClientMessage::Transfer {
+            token: "tok".to_string(),
+            direction: Direction::Download,
+            remote_spec: "/abs/logs/*.log".to_string(),
+            local_spec: Some("dest".to_string()),
+            force: true,
+            dry_run: false,
+            use_scp: false,
+        })
+        .await;
         match decoded {
             ClientMessage::Transfer {
                 direction,
@@ -286,20 +276,13 @@ mod tests {
 
     #[tokio::test]
     async fn round_trips_a_direct_secret_request_without_exposing_values() {
-        let mut buf = Vec::new();
-        write_message(
-            &mut buf,
-            &ClientMessage::DirectSecret {
-                token: "session-token".into(),
-                specs: vec!["API_TOKEN".into()],
-                argv: vec!["bun".into(), "run".into(), "build".into()],
-                nonce: "12345678-1234-1234-1234-123456789abc".into(),
-            },
-        )
-        .await
-        .unwrap();
-        let mut cursor = std::io::Cursor::new(buf);
-        let decoded: ClientMessage = read_message(&mut cursor).await.unwrap();
+        let decoded = round_trip(&ClientMessage::DirectSecret {
+            token: "session-token".into(),
+            specs: vec!["API_TOKEN".into()],
+            argv: vec!["bun".into(), "run".into(), "build".into()],
+            nonce: "12345678-1234-1234-1234-123456789abc".into(),
+        })
+        .await;
         assert!(matches!(
             decoded,
             ClientMessage::DirectSecret { specs, argv, .. }
@@ -325,10 +308,11 @@ mod tests {
                 host: "dev".to_string(),
             },
         ] {
-            let mut buf = Vec::new();
-            write_message(&mut buf, &message).await.unwrap();
-            let mut cursor = std::io::Cursor::new(buf);
-            let _decoded: ServerMessage = read_message(&mut cursor).await.unwrap();
+            let decoded = round_trip(&message).await;
+            assert_eq!(
+                serde_json::to_value(decoded).unwrap(),
+                serde_json::to_value(message).unwrap()
+            );
         }
     }
 

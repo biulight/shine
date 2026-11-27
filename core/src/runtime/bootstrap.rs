@@ -149,6 +149,21 @@ mod tests {
     use super::*;
     use crate::runtime::InMemoryHost;
 
+    async fn capture_external(
+        host: &InMemoryHost,
+        base: &str,
+        overlay: Option<&str>,
+    ) -> Result<PresetSnapshot> {
+        capture_preset_snapshot(
+            host,
+            PresetSnapshotRequest {
+                source: PresetSnapshotSource::External(base.into()),
+                overlay_root: overlay.map(PathBuf::from),
+            },
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn external_and_overlay_discovery_use_the_selected_host() {
         let host = InMemoryHost::new();
@@ -156,15 +171,9 @@ mod tests {
         host.put_file("/virtual/base/node_modules/ignored.js", b"ignored".to_vec());
         host.put_file("/virtual/overlay/app/demo/shine.toml", b"overlay".to_vec());
 
-        let snapshot = capture_preset_snapshot(
-            &host,
-            PresetSnapshotRequest {
-                source: PresetSnapshotSource::External("/virtual/base".into()),
-                overlay_root: Some("/virtual/overlay".into()),
-            },
-        )
-        .await
-        .unwrap();
+        let snapshot = capture_external(&host, "/virtual/base", Some("/virtual/overlay"))
+            .await
+            .unwrap();
 
         assert_eq!(
             snapshot.get("app/demo/shine.toml"),
@@ -183,17 +192,12 @@ mod tests {
         let host = InMemoryHost::new();
         host.put_file("/base/.gitignore", b"ignored".to_vec());
         host.put_file("/overlay/app/demo/.github/config", b"config".to_vec());
-        let request = PresetSnapshotRequest {
-            source: PresetSnapshotSource::External("/base".into()),
-            overlay_root: Some("/overlay".into()),
-        };
-        let before = capture_preset_snapshot(&host, request.clone())
-            .await
-            .unwrap();
+        let capture = || capture_external(&host, "/base", Some("/overlay"));
+        let before = capture().await.unwrap();
         for path in ["/base/.git/objects/pack/data", "/overlay/app/demo/.GiT"] {
             host.put_file(path, b"git metadata".to_vec());
         }
-        let after = capture_preset_snapshot(&host, request).await.unwrap();
+        let after = capture().await.unwrap();
         assert_eq!(after.get(".gitignore"), Some(b"ignored".as_slice()));
         assert_eq!(
             after.get("app/demo/.github/config"),
@@ -213,30 +217,18 @@ mod tests {
         host.put_file("/virtual/base/app/demo/data", b"base".to_vec());
         host.put_file("/virtual/overlay/app/demo/data", b"overlay".to_vec());
         host.put_file("/virtual/outside", b"not captured".to_vec());
-        host.symlink(Path::new("/virtual/base"), Path::new("/virtual/base-link"))
+        for (target, link) in [
+            ("/virtual/base", "/virtual/base-link"),
+            ("/virtual/overlay", "/virtual/overlay-link"),
+            ("/virtual/outside", "/virtual/base/app/demo/link"),
+        ] {
+            host.symlink(Path::new(target), Path::new(link))
+                .await
+                .unwrap();
+        }
+        let snapshot = capture_external(&host, "/virtual/base-link", Some("/virtual/overlay-link"))
             .await
             .unwrap();
-        host.symlink(
-            Path::new("/virtual/overlay"),
-            Path::new("/virtual/overlay-link"),
-        )
-        .await
-        .unwrap();
-        host.symlink(
-            Path::new("/virtual/outside"),
-            Path::new("/virtual/base/app/demo/link"),
-        )
-        .await
-        .unwrap();
-        let snapshot = capture_preset_snapshot(
-            &host,
-            PresetSnapshotRequest {
-                source: PresetSnapshotSource::External("/virtual/base-link".into()),
-                overlay_root: Some("/virtual/overlay-link".into()),
-            },
-        )
-        .await
-        .unwrap();
         assert_eq!(snapshot.get("app/demo/data"), Some(b"overlay".as_slice()));
         assert_eq!(
             snapshot.base_bytes("app/demo/data"),
@@ -251,15 +243,9 @@ mod tests {
                 .as_deref(),
             Some(Path::new("/virtual/overlay/app/demo"))
         );
-        let direct = capture_preset_snapshot(
-            &host,
-            PresetSnapshotRequest {
-                source: PresetSnapshotSource::External("/virtual/base".into()),
-                overlay_root: Some("/virtual/overlay".into()),
-            },
-        )
-        .await
-        .unwrap();
+        let direct = capture_external(&host, "/virtual/base", Some("/virtual/overlay"))
+            .await
+            .unwrap();
         assert_eq!(snapshot, direct);
     }
 
@@ -269,15 +255,9 @@ mod tests {
         host.symlink(Path::new("/missing"), Path::new("/virtual/link"))
             .await
             .unwrap();
-        let error = capture_preset_snapshot(
-            &host,
-            PresetSnapshotRequest {
-                source: PresetSnapshotSource::External("/virtual/link".into()),
-                overlay_root: None,
-            },
-        )
-        .await
-        .unwrap_err();
+        let error = capture_external(&host, "/virtual/link", None)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("resolving preset root"));
     }
 }

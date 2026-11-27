@@ -607,6 +607,7 @@ async fn extract_recipient(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::make_temp_dir;
 
     #[test]
     fn touch_id_requires_macos() {
@@ -680,8 +681,7 @@ mod tests {
 
     #[tokio::test]
     async fn tagged_phone_setup_keeps_the_phone_identity_stub() {
-        let dir = std::env::temp_dir().join(format!("shine-phone-test-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let dir = make_temp_dir("shine-phone-test").await;
         let path = dir.join("phone.txt");
         let content = format!("# recipient: {TAG}\nAGE-PLUGIN-PHONE-1EXAMPLE\n");
         tokio::fs::write(&path, &content).await.unwrap();
@@ -742,9 +742,7 @@ mod tests {
 
     #[tokio::test]
     async fn identity_read_diagnostics_encode_paths_without_leaking_or_mutating_contents() {
-        let root =
-            std::env::temp_dir().join(format!("shine-identity-errors-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir(&root).await.unwrap();
+        let root = make_temp_dir("shine-identity-errors").await;
         let missing = root.join("missing\nFORGED\r\t\u{1b}");
         let result = PhoneSetupResult {
             schema_version: PHONE_SETUP_RESULT_VERSION,
@@ -832,8 +830,7 @@ mod tests {
 
     #[tokio::test]
     async fn extracts_recipient_from_identity_comment() {
-        let dir = std::env::temp_dir().join(format!("shine-identity-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let dir = make_temp_dir("shine-identity").await;
         let path = dir.join("identity.txt");
         tokio::fs::write(
             &path,
@@ -850,8 +847,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_recipient_errors_without_recipient_comment() {
-        let dir = std::env::temp_dir().join(format!("shine-identity-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let dir = make_temp_dir("shine-identity").await;
         let path = dir.join("identity.txt");
         tokio::fs::write(&path, "AGE-SECRET-KEY-1EXAMPLE\n")
             .await
@@ -864,54 +860,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validates_matching_phone_setup_result() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-phone-identity-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        let path = dir.join("identity.txt");
-        tokio::fs::write(
-            &path,
-            "# public age-plugin-phone identity stub\n# recipient: age1phone1qypkk9737tsjcsj8lz7wdetr53q0yacr0kqjm6en5r62zw29mzvv99sa27n9c\nAGE-PLUGIN-PHONE-1EXAMPLE\n",
-        )
-        .await
-        .unwrap();
+    async fn phone_setup_result_must_match_the_identity_stub() {
+        let dir = make_temp_dir("shine-phone-identity").await;
         let result = PhoneSetupResult {
             schema_version: PHONE_SETUP_RESULT_VERSION,
-            identity_path: path,
-            recipient: "age1phone1qypkk9737tsjcsj8lz7wdetr53q0yacr0kqjm6en5r62zw29mzvv99sa27n9c"
-                .to_string(),
+            identity_path: dir.join("identity.txt"),
+            recipient: PHONE.into(),
         };
-
+        let stub = format!(
+            "# public age-plugin-phone identity stub\n# recipient: {PHONE}\nAGE-PLUGIN-PHONE-1EXAMPLE\n"
+        );
+        tokio::fs::write(&result.identity_path, stub).await.unwrap();
         validate_phone_setup_result(&result, PhoneRecipientType::Phone)
             .await
             .unwrap();
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
 
-    #[tokio::test]
-    async fn rejects_phone_setup_result_that_disagrees_with_stub() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-phone-identity-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        let path = dir.join("identity.txt");
         tokio::fs::write(
-            &path,
+            &result.identity_path,
             "# recipient: age1phone1actual\nAGE-PLUGIN-PHONE-1EXAMPLE\n",
         )
         .await
         .unwrap();
-        let result = PhoneSetupResult {
-            schema_version: PHONE_SETUP_RESULT_VERSION,
-            identity_path: path,
-            recipient: "age1phone1qypkk9737tsjcsj8lz7wdetr53q0yacr0kqjm6en5r62zw29mzvv99sa27n9c"
-                .to_string(),
-        };
-
         let err = validate_phone_setup_result(&result, PhoneRecipientType::Phone)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("does not match"), "{err:#}");
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[cfg(unix)]
@@ -919,9 +893,7 @@ mod tests {
     async fn phone_setup_uses_the_versioned_plugin_handoff() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let dir =
-            std::env::temp_dir().join(format!("shine-phone-command-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let dir = make_temp_dir("shine-phone-command").await;
         let program = dir.join("fake-age-plugin-phone");
         for (kind, recipient) in [
             (PhoneRecipientType::Tag, TAG),
@@ -966,8 +938,7 @@ printf '%s\n' '{}'
     #[tokio::test]
     async fn unsupported_phone_setup_never_retries() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("shine-phone-test-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let dir = make_temp_dir("shine-phone-test").await;
         let program = dir.join("old-plugin");
         let calls = dir.join("calls");
         tokio::fs::write(

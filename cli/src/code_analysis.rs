@@ -237,35 +237,40 @@ pub(crate) fn verbose_generator_summary(scope: &Scope, entries: usize) -> Vec<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn matching_is_silent_and_differences_are_actionable_and_encoded() {
-        let mut scope = Scope {
-            target: "app/demo\nFORGED".into(),
-            entry: "generator".into(),
-            script: Some("gen.ts".into()),
-            report: shine_core::analysis::Report {
-                analyzer_version: shine_core::analysis::ANALYZER_VERSION.into(),
+    use shine_core::analysis::{ANALYZER_VERSION, RULE_VERSION, Report};
+
+    fn generator_scope(entry: &str, script: &str) -> Scope {
+        Scope {
+            target: "app/demo".into(),
+            entry: entry.into(),
+            script: Some(script.into()),
+            report: Report {
+                analyzer_version: ANALYZER_VERSION.into(),
                 schema_version: 1,
-                rule_version: 1,
-                files: vec!["gen.ts".into()],
+                rule_version: RULE_VERSION,
+                files: vec![script.into()],
                 allowed: true,
                 diagnostics: Vec::new(),
             },
-        };
+        }
+    }
+
+    #[test]
+    fn matching_is_silent_and_differences_are_actionable_and_encoded() {
+        let mut scope = generator_scope("generator", "gen.ts");
+        scope.target = "app/demo\nFORGED".into();
+        scope.report.rule_version = 1;
         assert!(lines(&scope, false).is_empty());
         scope.report.allowed = false;
-        scope
-            .report
-            .diagnostics
-            .push(shine_core::analysis::Diagnostic {
-                kind: DiagnosticKind::Difference,
-                code: "code_analysis_declaration_difference".into(),
-                file: "gen.ts".into(),
-                line: 2,
-                column: 3,
-                behavior: "network".into(),
-                identity: None,
-            });
+        scope.report.diagnostics.push(Diagnostic {
+            kind: DiagnosticKind::Difference,
+            code: "code_analysis_declaration_difference".into(),
+            file: "gen.ts".into(),
+            line: 2,
+            column: 3,
+            behavior: "network".into(),
+            identity: None,
+        });
         let rendered = lines(&scope, false);
         assert!(rendered.iter().all(|line| !line.contains('\n')));
         let text = rendered.join("\n");
@@ -275,28 +280,16 @@ mod tests {
 
     #[test]
     fn plan_groups_identical_advisories_but_keeps_entry_specific_evidence() {
-        use shine_core::analysis::Report;
-        let first = Scope {
-            target: "app/demo".into(),
-            entry: "generator:first".into(),
-            script: Some("gen.ts".into()),
-            report: Report {
-                analyzer_version: shine_core::analysis::ANALYZER_VERSION.into(),
-                schema_version: 1,
-                rule_version: shine_core::analysis::RULE_VERSION,
-                files: vec!["gen.ts".into()],
-                allowed: true,
-                diagnostics: vec![Diagnostic {
-                    kind: DiagnosticKind::CoverageGap,
-                    code: "code_analysis_call_unknown".into(),
-                    file: "gen.ts".into(),
-                    line: 2,
-                    column: 3,
-                    behavior: "code".into(),
-                    identity: None,
-                }],
-            },
-        };
+        let mut first = generator_scope("generator:first", "gen.ts");
+        first.report.diagnostics.push(Diagnostic {
+            kind: DiagnosticKind::CoverageGap,
+            code: "code_analysis_call_unknown".into(),
+            file: "gen.ts".into(),
+            line: 2,
+            column: 3,
+            behavior: "code".into(),
+            identity: None,
+        });
         let mut second = first.clone();
         second.entry = "generator:second\nFORGED".into();
         let mut distinct = first.clone();
@@ -324,7 +317,6 @@ mod tests {
 
     #[test]
     fn compact_gaps_keep_counts_kinds_errors_and_full_report() {
-        use shine_core::analysis::{Diagnostic, Report};
         let diagnostic = |kind, code: &str, behavior: &str, line| Diagnostic {
             kind,
             code: code.into(),
@@ -334,28 +326,18 @@ mod tests {
             behavior: behavior.into(),
             identity: Some("opaque-identity".into()),
         };
-        let mut scope = Scope {
-            target: "app/demo".into(),
-            entry: "generator:first".into(),
-            script: Some("gen\nFORGED.ts".into()),
-            report: Report {
-                analyzer_version: shine_core::analysis::ANALYZER_VERSION.into(),
-                schema_version: 1,
-                rule_version: shine_core::analysis::RULE_VERSION,
-                files: vec!["gen\nFORGED.ts".into()],
-                allowed: false,
-                diagnostics: (1..=4)
-                    .map(|line| {
-                        diagnostic(
-                            DiagnosticKind::CoverageGap,
-                            "code_analysis_dynamic_target",
-                            "network\nFORGED",
-                            line,
-                        )
-                    })
-                    .collect(),
-            },
-        };
+        let mut scope = generator_scope("generator:first", "gen\nFORGED.ts");
+        scope.report.allowed = false;
+        scope.report.diagnostics = (1..=4)
+            .map(|line| {
+                diagnostic(
+                    DiagnosticKind::CoverageGap,
+                    "code_analysis_dynamic_target",
+                    "network\nFORGED",
+                    line,
+                )
+            })
+            .collect();
         scope.report.diagnostics.extend([
             diagnostic(
                 DiagnosticKind::CoverageGap,

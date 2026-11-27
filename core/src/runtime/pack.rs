@@ -546,14 +546,17 @@ mod tests {
         host
     }
 
+    async fn pack_demo(host: &InMemoryHost, root: &str) -> PresetPackArtifactV3 {
+        pack_preset_path(host, Path::new(root), Path::new("app/demo")).await
+    }
+
     #[tokio::test]
     async fn bundle_is_independent_of_checkout_root() {
-        let left =
-            pack_preset_path(&source("/one"), Path::new("/one"), Path::new("app/demo")).await;
+        let left = pack_demo(&source("/one"), "/one").await;
         let checkout = source("/two");
         checkout.put_file("/two/app/demo/.Git/hooks/pre-commit", b"#!/bin/sh".to_vec());
         checkout.put_file("/two/app/demo/sub/.git", b"gitdir: elsewhere".to_vec());
-        let right = pack_preset_path(&checkout, Path::new("/two"), Path::new("app/demo")).await;
+        let right = pack_demo(&checkout, "/two").await;
         assert!(left.report.valid);
         assert_eq!(left.bytes, right.bytes);
         assert_eq!(left.report.bundle_sha256, right.report.bundle_sha256);
@@ -576,7 +579,7 @@ mod tests {
                 .to_vec(),
         );
         host.put_file("/repo/app/demo/hook.sh", b"#!/bin/sh\n".to_vec());
-        let artifact = pack_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+        let artifact = pack_demo(&host, "/repo").await;
         assert!(artifact.report.valid);
         assert!(artifact.report.unrestricted_opaque_code);
         assert!(artifact.report.unisolated_code);
@@ -603,7 +606,7 @@ mod tests {
             "/repo/app/demo/node_modules/pkg/index.js",
             b"code\n".to_vec(),
         );
-        let artifact = pack_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+        let artifact = pack_demo(&host, "/repo").await;
         assert!(!artifact.report.valid);
         assert_eq!(artifact.report.diagnostics, vec!["node_modules_forbidden"]);
     }
@@ -613,7 +616,7 @@ mod tests {
         let host = source("/repo");
         host.put_file("/repo/app/demo/private.key", b"secret\n".to_vec());
         host.put_file("/repo/app/demo/helper.sh", b"#!/bin/sh\n".to_vec());
-        let artifact = pack_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+        let artifact = pack_demo(&host, "/repo").await;
         assert!(!artifact.report.valid);
         assert_eq!(
             artifact.report.diagnostics,
@@ -622,34 +625,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn descriptive_strings_do_not_declare_executable_code() {
-        let host = source("/repo");
-        host.put_file(
-            "/repo/app/demo/shine.toml",
-            b"description = 'helper.sh'\ndest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\ndescription = 'Config'\n".to_vec(),
-        );
-        host.put_file("/repo/app/demo/helper.sh", b"#!/bin/sh\n".to_vec());
-
-        let artifact = pack_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
-
-        assert!(!artifact.report.valid);
-        assert_eq!(
-            artifact.report.diagnostics,
-            vec!["undeclared_executable_code"]
-        );
-    }
-
-    #[tokio::test]
-    async fn typed_source_fields_declare_executable_code() {
-        let host = source("/repo");
-        host.put_file(
-            "/repo/app/demo/shine.toml",
-            b"description = 'Demo'\ndest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'helper.sh'\ndescription = 'Helper'\n".to_vec(),
-        );
-        host.put_file("/repo/app/demo/helper.sh", b"#!/bin/sh\n".to_vec());
-
-        let artifact = pack_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
-
-        assert!(artifact.report.valid);
+    async fn executable_declaration_requires_a_typed_source_field() {
+        for (description, source_file, file_description, declared) in [
+            ("helper.sh", "config.toml", "Config", false),
+            ("Demo", "helper.sh", "Helper", true),
+        ] {
+            let host = source("/repo");
+            let metadata = format!(
+                "description = '{description}'\ndest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = '{source_file}'\ndescription = '{file_description}'\n"
+            );
+            host.put_file("/repo/app/demo/shine.toml", metadata.into_bytes());
+            host.put_file("/repo/app/demo/helper.sh", b"#!/bin/sh\n".to_vec());
+            let report = pack_demo(&host, "/repo").await.report;
+            assert_eq!(report.valid, declared, "{report:?}");
+            if !declared {
+                assert_eq!(report.diagnostics, ["undeclared_executable_code"]);
+            }
+        }
     }
 }

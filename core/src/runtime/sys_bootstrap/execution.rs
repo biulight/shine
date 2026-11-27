@@ -432,9 +432,12 @@ mod tests {
     };
 
     fn runtime() -> CoreRuntime<InMemoryHost> {
-        let root = PathBuf::from("/shine-sys-bootstrap-test");
+        installer_runtime(InMemoryHost::new(), Path::new("/shine-sys-bootstrap-test"))
+    }
+
+    fn installer_runtime<H>(host: H, root: &Path) -> CoreRuntime<H> {
         CoreRuntime::new(
-            InMemoryHost::new(),
+            host,
             RuntimeContext::isolated(
                 root.join("home"),
                 root.join("state"),
@@ -446,20 +449,26 @@ mod tests {
         )
     }
 
-    #[tokio::test]
-    async fn color_fallback_is_opt_in_and_preserved_through_sudo() {
-        let runtime = runtime().with_installer_color(true);
+    async fn run_example_apt(
+        runtime: &CoreRuntime<InMemoryHost>,
+        admin: bool,
+    ) -> Result<ExecutionResult> {
         runtime
             .run_package(
                 "ubuntu",
                 SysPackageProvider::Apt,
                 "example",
-                true,
+                admin,
                 "example",
                 &mut crate::runtime::NullObserver,
             )
             .await
-            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn color_fallback_is_opt_in_and_preserved_through_sudo() {
+        let runtime = runtime().with_installer_color(true);
+        run_example_apt(&runtime, true).await.unwrap();
         let requests = runtime.host().process_requests();
         assert_eq!(
             requests[0].env.get("CARGO_TERM_COLOR").map(String::as_str),
@@ -581,17 +590,7 @@ mod tests {
         let temp =
             std::env::temp_dir().join(format!("shine-live-installer-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
-        let runtime = CoreRuntime::new(
-            RealHost,
-            RuntimeContext::isolated(
-                temp.join("home"),
-                temp.join("state"),
-                temp.join("presets"),
-                temp.join("bin"),
-                RuntimePlatform::Linux,
-            ),
-            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
-        );
+        let runtime = installer_runtime(RealHost, &temp);
         let mut observer = Observer {
             marker: temp.join("continue"),
             events: Vec::new(),
@@ -626,17 +625,7 @@ mod tests {
                 "deadline reached",
             ))
             .context("waiting for installer")));
-        let report = runtime
-            .run_package(
-                "ubuntu",
-                SysPackageProvider::Apt,
-                "example",
-                false,
-                "example",
-                &mut crate::runtime::NullObserver,
-            )
-            .await
-            .unwrap();
+        let report = run_example_apt(&runtime, false).await.unwrap();
         assert!(!report.success);
         assert_eq!(
             report.failure_detail,
@@ -656,15 +645,7 @@ mod tests {
         ] {
             let runtime = runtime();
             runtime.host().queue_process_output(Err(error));
-            let error = runtime
-                .run_package(
-                    "ubuntu",
-                    SysPackageProvider::Apt,
-                    "example",
-                    false,
-                    "example",
-                    &mut crate::runtime::NullObserver,
-                )
+            let error = run_example_apt(&runtime, false)
                 .await
                 .err()
                 .expect("non-timeout errors must propagate");
@@ -681,17 +662,7 @@ mod tests {
             std::env::temp_dir().join(format!("shine-verbose-installer-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let root = temp.as_path();
-        let runtime = CoreRuntime::new(
-            RealHost,
-            RuntimeContext::isolated(
-                root.join("home"),
-                root.join("state"),
-                root.join("presets"),
-                root.join("bin"),
-                RuntimePlatform::Linux,
-            ),
-            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
-        );
+        let runtime = installer_runtime(RealHost, root);
         let manifest: SysManifest = toml::from_str(
             "version = 2\n[[items]]\nid = 'fixture'\nlabel = 'Fixture'\ndetect = { kind = 'path', path = '~/.fixture' }\ninstall = { kind = 'script', path = 'install.sh' }\n"
         ).unwrap();

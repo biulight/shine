@@ -416,17 +416,6 @@ mod tests {
     }
 
     #[test]
-    fn snippet_fish_uses_fish_add_path() {
-        let home = PathBuf::from("/home/user");
-        let bin = home.join("bin");
-        let snippet = managed_profile_snippet(ShellType::Fish, &bin, &home, &[]);
-        assert!(
-            snippet.contains("fish_add_path"),
-            "fish should use fish_add_path: {snippet}"
-        );
-    }
-
-    #[test]
     fn snippet_bash_zsh_uses_if_guard() {
         let home = PathBuf::from("/home/user");
         let bin = home.join("bin");
@@ -467,6 +456,7 @@ mod tests {
         );
 
         let fish = managed_profile_snippet(ShellType::Fish, &bin, &home, &[]);
+        assert!(fish.contains("fish_add_path"), "{fish}");
         assert!(
             !fish.contains("COMPLETE=fish shine"),
             "fish completion should not be changed: {fish}"
@@ -483,14 +473,15 @@ mod tests {
         let cmds = vec!["setproxy".to_string(), "usetproxy".to_string()];
         for shell in [ShellType::Bash, ShellType::Zsh] {
             let snippet = managed_profile_snippet(shell, &bin, &home, &cmds);
-            assert!(
-                snippet.contains("setproxy() { source"),
-                "{shell:?} should have setproxy wrapper: {snippet}"
-            );
-            assert!(
-                snippet.contains("usetproxy() { source"),
-                "{shell:?} should have usetproxy wrapper: {snippet}"
-            );
+            for command in &cmds {
+                let wrapper = format!("{command}() {{ source");
+                assert!(
+                    snippet
+                        .lines()
+                        .any(|line| line.trim_start().starts_with(&wrapper)),
+                    "{shell:?} missing {wrapper:?}: {snippet}"
+                );
+            }
         }
         let fish_snippet = managed_profile_snippet(ShellType::Fish, &bin, &home, &cmds);
         assert!(
@@ -498,25 +489,20 @@ mod tests {
             "fish should have setproxy function: {fish_snippet}"
         );
         let powershell_snippet = managed_profile_snippet(ShellType::PowerShell, &bin, &home, &cmds);
-        assert!(
-            powershell_snippet.contains("$env:Path"),
-            "PowerShell should update env Path: {powershell_snippet}"
-        );
-        assert!(
-            powershell_snippet.contains("function setproxy"),
-            "PowerShell should have setproxy function: {powershell_snippet}"
-        );
-        assert!(
-            powershell_snippet.contains("Join-Path $shineBin"),
-            "PowerShell wrapper should resolve through shine bin: {powershell_snippet}"
-        );
-        assert!(
-            powershell_snippet.contains("$shineBin = Join-Path $HOME '.shine/bin'"),
-            "PowerShell should expand $HOME when assigning shine bin: {powershell_snippet}"
-        );
+        for expected in [
+            "$env:Path",
+            "function setproxy",
+            "Join-Path $shineBin",
+            "$shineBin = Join-Path $HOME '.shine/bin'",
+        ] {
+            assert!(
+                powershell_snippet.contains(expected),
+                "missing {expected:?}: {powershell_snippet}"
+            );
+        }
         assert!(
             !powershell_snippet.contains("$shineBin = '$HOME"),
-            "PowerShell should not keep $HOME as a literal path: {powershell_snippet}"
+            "{powershell_snippet}"
         );
     }
 
@@ -542,17 +528,20 @@ mod tests {
     }
 
     #[test]
-    fn remove_sentinel_block_strips_block_and_blank_line() {
-        let content = "before\n\n# >>> shine >>>\nexport PATH\n# <<< shine <<<\nafter\n";
-        let cleaned = remove_shell_sentinel(content);
-        assert_eq!(cleaned, "before\nafter\n");
-    }
-
-    #[test]
-    fn remove_sentinel_block_no_op_when_absent() {
-        let content = "no sentinel here\n";
-        let cleaned = remove_shell_sentinel(content);
-        assert_eq!(cleaned, content);
+    fn removing_sentinel_preserves_surrounding_text_and_line_endings() {
+        for (input, expected) in [
+            (
+                "before\n\n# >>> shine >>>\nexport PATH\n# <<< shine <<<\nafter\n",
+                "before\nafter\n",
+            ),
+            (
+                "keep\r\n\r\n# >>> shine >>>\r\nsource x\r\n# <<< shine <<<\r\nafter\r\n",
+                "keep\r\n\r\nafter\r\n",
+            ),
+            ("no sentinel here\n", "no sentinel here\n"),
+        ] {
+            assert_eq!(remove_shell_sentinel(input), expected, "{input:?}");
+        }
     }
 
     #[cfg(unix)]
@@ -616,11 +605,5 @@ mod tests {
             assert_eq!(output.stdout, b"profile-ok");
             std::fs::remove_dir_all(root).unwrap();
         }
-    }
-
-    #[test]
-    fn bytewise_removal_preserves_crlf_and_preceding_blank_line_contract() {
-        let input = "keep\r\n\r\n# >>> shine >>>\r\nsource x\r\n# <<< shine <<<\r\nafter\r\n";
-        assert_eq!(remove_shell_sentinel(input), "keep\r\n\r\nafter\r\n");
     }
 }

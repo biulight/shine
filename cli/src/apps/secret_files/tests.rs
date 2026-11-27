@@ -17,6 +17,16 @@ struct Fake {
     fail_applied_journal: AtomicBool,
     edit_during_decrypt: Option<PathBuf>,
 }
+impl Fake {
+    fn journal(&self) -> Option<Zeroizing<Vec<u8>>> {
+        self.state("app-secret-operation.json").unwrap()
+    }
+
+    fn receipt(&self) -> Option<Zeroizing<Vec<u8>>> {
+        self.state("app-secret-manifest.json").unwrap()
+    }
+}
+
 impl SecretFileObservation for Fake {
     fn observe(&self, p: &Path) -> Result<Option<SecretObservation>> {
         self.io.observe(p)
@@ -124,8 +134,8 @@ impl RuntimeInteraction for Interaction {
     }
 }
 
-fn runtime(root: &Path, provider: Arc<Fake>, value: &str, auto: bool) -> CoreRuntime<RealHost> {
-    let metadata = format!(
+fn secret_metadata(auto: bool) -> String {
+    format!(
         r#"metadata_schema_version=3
 dest='~/service'
 [[files]]
@@ -137,7 +147,19 @@ mode='production'
 auto_decrypt={auto}
 {unix_mode}"#,
         unix_mode = if cfg!(unix) { "unix_mode='0400'\n" } else { "" }
-    );
+    )
+}
+
+fn runtime(root: &Path, provider: Arc<Fake>, value: &str, auto: bool) -> CoreRuntime<RealHost> {
+    runtime_with_metadata(root, provider, value, &secret_metadata(auto))
+}
+
+fn runtime_with_metadata(
+    root: &Path,
+    provider: Arc<Fake>,
+    value: &str,
+    metadata: &str,
+) -> CoreRuntime<RealHost> {
     let workspace = r#"version=3
 [env]
 default_mode='production'
@@ -146,7 +168,7 @@ source='encrypted/password.enc'
 target='secrets/password'
 "#;
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-        .file("app/demo/shine.toml", metadata.into_bytes())
+        .file("app/demo/shine.toml", metadata.as_bytes().to_vec())
         .file("app/demo/compose.yml", b"services: {}".to_vec())
         .file(
             "app/demo/shine.workspace.toml",
@@ -313,16 +335,13 @@ async fn missing_applied_identity_blocks_creation_and_update_recovery() {
                 fs::rename(replacement, &target).unwrap();
             }
             let before = provider.observe(&target).unwrap();
-            let journal = provider.state("app-secret-operation.json").unwrap();
-            let receipt = provider.state("app-secret-manifest.json").unwrap();
+            let journal = provider.journal();
+            let receipt = provider.receipt();
             let plan = runtime.plan_app_operation_recovery().await.unwrap();
             assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
             assert_eq!(provider.observe(&target).unwrap(), before);
-            assert_eq!(
-                provider.state("app-secret-operation.json").unwrap(),
-                journal
-            );
-            assert_eq!(provider.state("app-secret-manifest.json").unwrap(), receipt);
+            assert_eq!(provider.journal(), journal);
+            assert_eq!(provider.receipt(), receipt);
             let rollback = root.join("service/secrets/password.shine.secret.rollback");
             if update {
                 assert_eq!(fs::read(rollback).unwrap(), b"old");
@@ -338,43 +357,24 @@ async fn missing_applied_identity_blocks_creation_and_update_recovery() {
 #[tokio::test]
 async fn service_owner_missing_parents_fail_before_decryption_or_writes() {
     let (root, provider) = setup().await;
-    let original = runtime(&root, provider.clone(), "password", true);
     let uid = unsafe { libc::geteuid() }.saturating_add(1);
-    let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
-    for (path, bytes) in original.presets().files() {
-        let bytes = if path == "app/demo/shine.toml" {
-            format!("{}\nunix_uid={uid}\n", String::from_utf8_lossy(bytes)).into_bytes()
-        } else {
-            bytes.to_vec()
-        };
-        builder = builder.file(path, bytes);
-    }
-    let snapshot = builder.build();
+    let metadata = format!("{}\nunix_uid={uid}\n", secret_metadata(true));
+    let original = runtime_with_metadata(&root, provider.clone(), "password", &metadata);
     for (running_as_admin, expected_error) in [
         (false, "administrator permission was not granted"),
         (true, "pre-create secret parent directories"),
     ] {
         let mut context = original.context().clone();
         context.running_as_admin = running_as_admin;
-        let runtime = CoreRuntime::new(RealHost, context, snapshot.clone())
+        let runtime = CoreRuntime::new(RealHost, context, original.presets().clone())
             .with_secret_file_provider(provider.clone());
         let error = install(&runtime, false).await.unwrap_err();
         assert!(error.to_string().contains(expected_error), "{error:#}");
     }
     assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
     assert!(!root.join("service").exists());
-    assert!(
-        provider
-            .state("app-secret-operation.json")
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        provider
-            .state("app-secret-manifest.json")
-            .unwrap()
-            .is_none()
-    );
+    assert!(provider.journal().is_none());
+    assert!(provider.receipt().is_none());
     assert!(!root.join(".shine/app-secret-fingerprint.key").exists());
     fs::remove_dir_all(root).unwrap();
 }
@@ -516,7 +516,7 @@ async fn full_app_cleanup_keeps_schema_guard_for_modified_secret() {
     #[cfg(unix)]
     fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(&target, b"user edit").unwrap();
-    let receipt = provider.state("app-secret-manifest.json").unwrap();
+    let receipt = provider.receipt();
     let mut req = request(LifecycleOperation::Uninstall);
     req.target = None;
     req.purge = true;
@@ -557,7 +557,7 @@ async fn full_app_cleanup_keeps_schema_guard_for_modified_secret() {
         let guard = root.join(".shine/app-manifest.toml");
         if !force {
             assert_eq!(fs::read(&target).unwrap(), b"user edit");
-            assert_eq!(provider.state("app-secret-manifest.json").unwrap(), receipt);
+            assert_eq!(provider.receipt(), receipt);
             assert!(
                 guard.exists(),
                 "missing v2 guard for retained secret receipt"
@@ -618,14 +618,7 @@ async fn category_uninstall_rechecks_approval_and_keeps_guard_for_sibling_secret
         fs::read(root.join("service/secrets/password")).unwrap(),
         b"original"
     );
-    assert_eq!(
-        provider
-            .state("app-secret-manifest.json")
-            .unwrap()
-            .unwrap()
-            .as_slice(),
-        private
-    );
+    assert_eq!(provider.receipt().unwrap().as_slice(), private);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -656,12 +649,7 @@ async fn secret_adoption_conflict_and_decrypt_failure_do_not_write_configs() {
             .contains("rollback access denied")
     );
     assert_eq!(provider.calls.load(Ordering::SeqCst), calls);
-    assert!(
-        provider
-            .state("app-secret-operation.json")
-            .unwrap()
-            .is_none()
-    );
+    assert!(provider.journal().is_none());
     assert!(!root.join("service/compose.yml").exists());
     provider.fail_rollback_access.store(false, Ordering::SeqCst);
     install(&runtime, false).await.unwrap();
@@ -692,12 +680,7 @@ async fn removal_preflight_failure_preserves_the_secret_and_its_receipt() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("rollback access denied"));
-    assert!(
-        provider
-            .state("app-secret-operation.json")
-            .unwrap()
-            .is_none()
-    );
+    assert!(provider.journal().is_none());
     assert_eq!(runtime.secret_store().unwrap(), store);
     assert_eq!(fs::read(&target).unwrap(), b"password");
 
@@ -727,12 +710,7 @@ async fn secret_adoption_rejects_inherited_acl_even_when_content_matches() {
     assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
     assert_eq!(fs::read(&target).unwrap(), b"password");
     assert!(runtime.secret_store().unwrap().entries.is_empty());
-    assert!(
-        provider
-            .state("app-secret-operation.json")
-            .unwrap()
-            .is_none()
-    );
+    assert!(provider.journal().is_none());
     assert!(!root.join("service/compose.yml").exists());
 
     fs::remove_file(&target).unwrap();
@@ -777,24 +755,16 @@ async fn ordinary_install_failure_preserves_committed_secret_on_retry() {
         format!("{error:#}").contains("app preset cache"),
         "{error:#}"
     );
-    let receipt = provider.state("app-secret-manifest.json").unwrap().unwrap();
+    let receipt = provider.receipt().unwrap();
     let target = root.join("service/compose.yml");
     assert_eq!(fs::read(&secret).unwrap(), b"password");
     assert!(!target.exists());
-    assert!(
-        provider
-            .state("app-secret-operation.json")
-            .unwrap()
-            .is_none()
-    );
+    assert!(provider.journal().is_none());
 
     install(&retry, false).await.unwrap();
     assert_eq!(fs::read(target).unwrap(), b"services: {}");
     assert_eq!(fs::read(secret).unwrap(), b"password");
-    assert_eq!(
-        provider.state("app-secret-manifest.json").unwrap(),
-        Some(receipt)
-    );
+    assert_eq!(provider.receipt(), Some(receipt));
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
     fs::remove_dir_all(root).unwrap();
 }
@@ -919,23 +889,9 @@ async fn removed_secret_declaration_requires_explicit_prune() {
     let (root, provider) = setup().await;
     let original = runtime(&root, provider.clone(), "password", true);
     install(&original, false).await.unwrap();
-    let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
-    for (path, bytes) in original.presets().files() {
-        let bytes = if path == "app/demo/shine.toml" {
-            String::from_utf8(bytes.to_vec())
-                .unwrap()
-                .split("[[secret_files]]")
-                .next()
-                .unwrap()
-                .as_bytes()
-                .to_vec()
-        } else {
-            bytes.to_vec()
-        };
-        builder = builder.file(path, bytes);
-    }
-    let changed = CoreRuntime::new(RealHost, original.context().clone(), builder.build())
-        .with_secret_file_provider(provider.clone());
+    let metadata = secret_metadata(true);
+    let (ordinary, _) = metadata.split_once("[[secret_files]]").unwrap();
+    let changed = runtime_with_metadata(&root, provider.clone(), "password", ordinary);
     for prune in [false, true] {
         let mut request = request(LifecycleOperation::Upgrade);
         request.prune_stale = prune;
@@ -1029,17 +985,12 @@ async fn secret_and_ordinary_ownership_reject_case_alias_takeover() {
     for secret_first in [false, true] {
         let (root, provider) = setup().await;
         let secret = runtime(&root, provider.clone(), "password", true);
-        let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
-        for (path, bytes) in secret.presets().files() {
-            let bytes = if path == "app/demo/shine.toml" {
-                b"metadata_schema_version=2\ndest='~/service'\n[[files]]\nsource='compose.yml'\ntarget='SECRETS/password'\n".to_vec()
-            } else {
-                bytes.to_vec()
-            };
-            builder = builder.file(path, bytes);
-        }
-        let ordinary = CoreRuntime::new(RealHost, secret.context().clone(), builder.build())
-            .with_secret_file_provider(provider.clone());
+        let ordinary = runtime_with_metadata(
+            &root,
+            provider.clone(),
+            "password",
+            "metadata_schema_version=2\ndest='~/service'\n[[files]]\nsource='compose.yml'\ntarget='SECRETS/password'\n",
+        );
         let (first, next) = if secret_first {
             (&secret, &ordinary)
         } else {

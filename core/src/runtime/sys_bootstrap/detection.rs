@@ -132,13 +132,47 @@ mod tests {
         RuntimePlatform,
     };
 
+    fn detection_runtime<H>(host: H, home: &Path, platform: RuntimePlatform) -> CoreRuntime<H> {
+        CoreRuntime::new(
+            host,
+            RuntimeContext::isolated(
+                home.to_path_buf(),
+                home.join("state"),
+                home.join("presets"),
+                home.join("bin"),
+                platform,
+            ),
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        )
+    }
+
     #[cfg(unix)]
-    #[tokio::test]
-    async fn version_probe_is_bounded_and_detached_from_terminal() {
+    async fn run_version_probe(script: &str) -> (PathBuf, DetectionResult) {
         use crate::runtime::RealHost;
         use std::os::unix::fs::PermissionsExt;
         use std::time::Duration;
 
+        let root =
+            std::env::temp_dir().join(format!("shine-version-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let binary = root.join("probe");
+        std::fs::write(&binary, script).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runtime = detection_runtime(RealHost, &root, RuntimePlatform::Linux);
+        let result = tokio::time::timeout(
+            Duration::from_secs(8),
+            runtime.detect_command(binary.to_str().unwrap(), &["--version".into()]),
+        )
+        .await
+        .expect("version probe exceeded its deadline")
+        .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        (binary, result)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn version_probe_is_bounded_and_detached_from_terminal() {
         const FIXTURE: &str = "SHINE_VERSION_PROBE_PTY";
         if std::env::var_os(FIXTURE).is_some() {
             let original = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
@@ -149,24 +183,8 @@ mod tests {
                 .open("/dev/tty")
                 .expect("PTY fixture must have an accessible controlling terminal");
             drop(tty);
-            let root =
-                std::env::temp_dir().join(format!("shine-version-probe-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&root).unwrap();
-            let binary = root.as_path().join("probe");
-            let runtime = CoreRuntime::new(
-                RealHost,
-                RuntimeContext::isolated(
-                    root.as_path().into(),
-                    root.as_path().join("state"),
-                    root.as_path().join("presets"),
-                    root.as_path().join("bin"),
-                    RuntimePlatform::Linux,
-                ),
-                PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
-            );
             // Like Yazi, touch /dev/tty even with redirected stdin/stdout.
-            std::fs::write(
-                &binary,
+            let (_, result) = run_version_probe(
                 r#"#!/usr/bin/env python3
 import os, signal, termios
 signal.signal(signal.SIGTTOU, signal.SIG_DFL)
@@ -179,20 +197,11 @@ else:
     print('unexpected controlling terminal')
 "#,
             )
-            .unwrap();
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let result = tokio::time::timeout(
-                Duration::from_secs(8),
-                runtime.detect_command(binary.to_str().unwrap(), &["--version".into()]),
-            )
-            .await
-            .expect("version probe hung on terminal access")
-            .unwrap();
+            .await;
             assert!(
                 matches!(result, DetectionResult::Present(detail) if detail == "probe 1.0 detached")
             );
             assert_eq!(unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) }, original);
-            std::fs::remove_dir_all(&root).unwrap();
             return;
         }
         let output = tokio::task::spawn_blocking(|| {
@@ -237,37 +246,10 @@ sys.exit(os.waitstatus_to_exitcode(status))
     #[cfg(unix)]
     #[tokio::test]
     async fn stalled_version_probe_falls_back_to_existing_executable() {
-        use crate::runtime::RealHost;
-        use std::os::unix::fs::PermissionsExt;
-        use std::time::Duration;
-        let root =
-            std::env::temp_dir().join(format!("shine-version-probe-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let binary = root.as_path().join("probe");
-        std::fs::write(&binary, "#!/bin/sh\nsleep 30\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let runtime = CoreRuntime::new(
-            RealHost,
-            RuntimeContext::isolated(
-                root.as_path().into(),
-                root.as_path().join("state"),
-                root.as_path().join("presets"),
-                root.as_path().join("bin"),
-                RuntimePlatform::Linux,
-            ),
-            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
-        );
-        let result = tokio::time::timeout(
-            Duration::from_secs(8),
-            runtime.detect_command(binary.to_str().unwrap(), &["--version".into()]),
-        )
-        .await
-        .expect("version probe has no deadline")
-        .unwrap();
+        let (binary, result) = run_version_probe("#!/bin/sh\nsleep 30\n").await;
         assert!(
             matches!(result, DetectionResult::Present(detail) if detail == binary.display().to_string())
         );
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[tokio::test]
@@ -285,19 +267,7 @@ sys.exit(os.waitstatus_to_exitcode(status))
             ),
         ] {
             let home = std::env::temp_dir().join("shine-command-detection");
-            let context = RuntimeContext::isolated(
-                home.clone(),
-                home.join("state"),
-                home.join("presets"),
-                home.join("bin"),
-                platform,
-            );
-            let host = InMemoryHost::new();
-            let runtime = CoreRuntime::new(
-                host,
-                context,
-                PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
-            );
+            let runtime = detection_runtime(InMemoryHost::new(), &home, platform);
             let detection = SysDetection::Command {
                 command: command.trim_end_matches(".exe").into(),
                 version_args: vec!["--version".into()],

@@ -442,16 +442,20 @@ fn finish(categories: usize, mut diagnostics: Vec<PresetLintDiagnosticV1>) -> Pr
 mod tests {
     use super::*;
 
+    async fn lint_app(metadata: &str) -> PresetLintReportV1 {
+        let host = InMemoryHost::new();
+        host.put_file("/repo/app/demo/shine.toml", metadata.as_bytes().to_vec());
+        host.put_file("/repo/app/demo/config.toml", b"value = true\n".to_vec());
+        lint_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await
+    }
+
     #[tokio::test]
     async fn platform_limited_apps_skip_unavailable_platforms_and_keep_findings() {
         for metadata in [
             "dest = { macos = '~/.config/demo' }\n[[files]]\nsource = 'config.toml'\n",
             "dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\nplatforms = ['windows']\n",
         ] {
-            let host = InMemoryHost::new();
-            host.put_file("/repo/app/demo/shine.toml", metadata.as_bytes().to_vec());
-            host.put_file("/repo/app/demo/config.toml", b"value = true\n".to_vec());
-            let report = lint_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+            let report = lint_app(metadata).await;
             assert!(report.valid, "{:?}", report.diagnostics);
             assert_eq!(report.summary.categories, 1);
             assert_eq!(report.summary.warnings, 2);
@@ -482,32 +486,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clean_app_metadata_has_no_findings() {
-        let host = InMemoryHost::new();
-        host.put_file(
-            "/repo/app/demo/shine.toml",
-            b"description = 'Demo'\ndest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\ndescription = 'Demo config'\n"
-                .to_vec(),
-        );
-        host.put_file("/repo/app/demo/config.toml", b"value = true\n".to_vec());
-
-        let report = lint_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
-
-        assert!(report.valid, "{:?}", report.diagnostics);
-        assert!(report.clean, "{:?}", report.diagnostics);
+    async fn clean_app_metadata_has_no_findings_with_v1_or_unrestricted_v2_permissions() {
+        for permissions in [
+            "schema_version = 1",
+            "schema_version = 2\nopaque_code = 'unrestricted'",
+        ] {
+            let metadata = format!(
+                "description = 'Demo'\ndest = '~/.config/demo'\n[permissions]\n{permissions}\n[[files]]\nsource = 'config.toml'\ndescription = 'Demo config'\n"
+            );
+            let report = lint_app(&metadata).await;
+            assert!(report.valid, "{permissions}: {:?}", report.diagnostics);
+            assert!(report.clean, "{permissions}: {:?}", report.diagnostics);
+            assert_eq!(report.summary.warnings, 0);
+        }
     }
 
     #[tokio::test]
     async fn quality_and_permission_findings_are_stable_warnings() {
-        let host = InMemoryHost::new();
-        host.put_file(
-            "/repo/app/demo/shine.toml",
-            b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['read'], base = 'absolute', path = '/Users/alice/private.txt' }]\nnetwork = [{ scope = 'any' }]\n[[files]]\nsource = 'config.toml'\n"
-                .to_vec(),
-        );
-        host.put_file("/repo/app/demo/config.toml", b"value = true\n".to_vec());
-
-        let report = lint_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+        let report = lint_app(
+            "dest = '~/.config/demo'\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['read'], base = 'absolute', path = '/Users/alice/private.txt' }]\nnetwork = [{ scope = 'any' }]\n[[files]]\nsource = 'config.toml'\n",
+        ).await;
         let codes = report
             .diagnostics
             .iter()
@@ -520,22 +518,5 @@ mod tests {
         assert!(codes.contains(&"missing_category_description"));
         assert!(codes.contains(&"missing_resource_description"));
         assert!(codes.contains(&"private_absolute_path"));
-    }
-
-    #[tokio::test]
-    async fn unrestricted_opaque_code_is_accepted_without_an_unactionable_warning() {
-        let host = InMemoryHost::new();
-        host.put_file(
-            "/repo/app/demo/shine.toml",
-            b"description = 'Demo'\ndest = '~/.config/demo'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.toml'\ndescription = 'Demo config'\n"
-                .to_vec(),
-        );
-        host.put_file("/repo/app/demo/config.toml", b"value = true\n".to_vec());
-
-        let report = lint_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
-
-        assert!(report.valid, "{:?}", report.diagnostics);
-        assert!(report.clean, "{:?}", report.diagnostics);
-        assert_eq!(report.summary.warnings, 0);
     }
 }
