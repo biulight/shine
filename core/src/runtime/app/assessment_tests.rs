@@ -1,6 +1,7 @@
 //! Consumer regressions for content assessment, inspection and lifecycle reports.
 use super::lifecycle_tests::Interaction;
 use super::*;
+use crate::runtime::tests::ObservationOnlyHost;
 use crate::runtime::{
     AppApprovedUpgradeOptions, AppPlanRequest, FileSystemObservationHost, HostOperation,
     InMemoryHost, NullObserver, PlanningInputVersions, PresetSnapshot, PresetSourceKind,
@@ -244,6 +245,22 @@ async fn generator_failure_preserves_install_and_upgrade_report_semantics_and_re
     let destination = seed_installed(&runtime).await;
     let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
     let manifest = runtime.host().read(&manifest_path).await.unwrap();
+    let assert_preserved = async |file: &AppFileLifecycleReport, lifecycle: &LifecycleResultV1| {
+        assert_eq!(file.action, AppFileAction::GeneratorPreserved);
+        assert!(file.generator_error.is_some());
+        assert!(file.error.is_none());
+        assert!(
+            lifecycle
+                .outcomes
+                .iter()
+                .any(|outcome| outcome.diagnostic_codes == ["app_generator_unavailable"])
+        );
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"last-good"
+        );
+        assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), manifest);
+    };
     let mut request = AppPlanRequest {
         operation: LifecycleOperation::Install,
         target: Some("demo".into()),
@@ -265,23 +282,8 @@ async fn generator_failure_preserves_install_and_upgrade_report_semantics_and_re
         )
         .await
         .unwrap();
-    let file = &installed.files[0];
-    assert_eq!(file.status, LifecycleStatus::Preserved);
-    assert_eq!(file.action, AppFileAction::GeneratorPreserved);
-    assert!(file.generator_error.is_some());
-    assert!(file.error.is_none());
-    assert!(
-        installed
-            .lifecycle
-            .outcomes
-            .iter()
-            .any(|outcome| outcome.diagnostic_codes == ["app_generator_unavailable"])
-    );
-    assert_eq!(
-        runtime.host().read(&destination).await.unwrap(),
-        b"last-good"
-    );
-    assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), manifest);
+    assert_eq!(installed.files[0].status, LifecycleStatus::Preserved);
+    assert_preserved(&installed.files[0], &installed.lifecycle).await;
 
     request.operation = LifecycleOperation::Upgrade;
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -298,50 +300,8 @@ async fn generator_failure_preserves_install_and_upgrade_report_semantics_and_re
         .await
         .unwrap();
     assert_eq!(upgraded.failed, 1);
-    let file = &upgraded.files[0];
-    assert_eq!(file.status, LifecycleStatus::Failed);
-    assert_eq!(file.action, AppFileAction::GeneratorPreserved);
-    assert!(file.generator_error.is_some());
-    assert!(file.error.is_none());
-    assert!(
-        upgraded
-            .lifecycle
-            .outcomes
-            .iter()
-            .any(|outcome| outcome.diagnostic_codes == ["app_generator_unavailable"])
-    );
-    assert_eq!(
-        runtime.host().read(&destination).await.unwrap(),
-        b"last-good"
-    );
-    assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), manifest);
-}
-
-// Ordinary inspection can be constructed with no filesystem mutation or process port.
-struct AppObservationHost(InMemoryHost);
-type ReadFuture<'a, T> = std::pin::Pin<
-    Box<
-        dyn std::future::Future<Output = std::result::Result<T, crate::runtime::HostError>>
-            + Send
-            + 'a,
-    >,
->;
-impl FileSystemObservationHost for AppObservationHost {
-    fn canonicalize<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, PathBuf> {
-        self.0.canonicalize(path)
-    }
-    fn read<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, Vec<u8>> {
-        self.0.read(path)
-    }
-    fn metadata<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, crate::runtime::FileMetadata> {
-        self.0.metadata(path)
-    }
-    fn read_dir<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, Vec<PathBuf>> {
-        self.0.read_dir(path)
-    }
-    fn read_link<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, PathBuf> {
-        self.0.read_link(path)
-    }
+    assert_eq!(upgraded.files[0].status, LifecycleStatus::Failed);
+    assert_preserved(&upgraded.files[0], &upgraded.lifecycle).await;
 }
 
 #[tokio::test]
@@ -350,7 +310,7 @@ async fn ordinary_app_inspection_needs_only_observation_and_defers_generators() 
     let destination = seed_installed(&runtime).await;
     let before = runtime.host().operations().len();
     let reader = CoreRuntime::new(
-        AppObservationHost(runtime.host().clone()),
+        ObservationOnlyHost(runtime.host().clone()),
         runtime.context().clone(),
         runtime.presets().clone(),
     );

@@ -852,14 +852,22 @@ mod tests {
 
     fn destination_runtime(snapshot: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
         let home = std::env::temp_dir().join("shine-app-destination-test");
+        metadata_runtime(&home, RuntimePlatform::current(), snapshot)
+    }
+
+    fn metadata_runtime(
+        home: &Path,
+        platform: RuntimePlatform,
+        snapshot: PresetSnapshot,
+    ) -> CoreRuntime<InMemoryHost> {
         CoreRuntime::new(
             InMemoryHost::new(),
             RuntimeContext::isolated(
-                home.clone(),
+                home.to_path_buf(),
                 home.join(".shine"),
                 home.join("presets"),
                 home.join("bin"),
-                RuntimePlatform::current(),
+                platform,
             ),
             snapshot,
         )
@@ -1107,17 +1115,7 @@ target = 'same.toml'
             )
             .file("app/demo/config.toml", b"value = true\n".to_vec())
             .build();
-        let runtime = CoreRuntime::new(
-            InMemoryHost::new(),
-            RuntimeContext::isolated(
-                home.clone(),
-                home.join(".shine"),
-                home.join("presets"),
-                home.join("bin"),
-                RuntimePlatform::Linux,
-            ),
-            snapshot,
-        );
+        let runtime = metadata_runtime(&home, RuntimePlatform::Linux, snapshot);
         let categories = runtime.app_categories(Some("demo")).unwrap();
         assert_eq!(categories[0].files.len(), 1);
         assert_eq!(
@@ -1144,17 +1142,7 @@ target = 'same.toml'
                 b"dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
             )
             .build();
-        let runtime = CoreRuntime::new(
-            InMemoryHost::new(),
-            RuntimeContext::isolated(
-                home.clone(),
-                home.join(".shine"),
-                home.join("presets"),
-                home.join("bin"),
-                RuntimePlatform::Linux,
-            ),
-            snapshot,
-        );
+        let runtime = metadata_runtime(&home, RuntimePlatform::Linux, snapshot);
         let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
         assert_eq!(category.metadata_schema_version, 1);
         assert!(category.metadata_is_overlay);
@@ -1166,17 +1154,7 @@ target = 'same.toml'
             )
             .file("app/future/config.toml", b"future".to_vec())
             .build();
-        let runtime = CoreRuntime::new(
-            InMemoryHost::new(),
-            RuntimeContext::isolated(
-                home.clone(),
-                home.join(".shine"),
-                home.join("presets"),
-                home.join("bin"),
-                RuntimePlatform::Linux,
-            ),
-            future,
-        );
+        let runtime = metadata_runtime(&home, RuntimePlatform::Linux, future);
         assert!(
             runtime
                 .app_categories(Some("future"))

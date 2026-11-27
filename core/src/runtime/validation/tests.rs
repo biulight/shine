@@ -1,6 +1,15 @@
 use super::destinations::{is_portable_relative_path, validate_destination_path};
 use super::*;
 use crate::runtime::PresetSourceKind;
+use crate::runtime::tests::ObservationOnlyHost;
+
+fn demo_category(kind: &'static str) -> CategoryPath {
+    CategoryPath {
+        kind,
+        name: "demo".into(),
+        root: PathBuf::from(format!("{kind}/demo")),
+    }
+}
 
 #[test]
 fn destination_validation_is_independent_of_host_path_syntax() {
@@ -59,33 +68,22 @@ fn relative_validation_rejects_foreign_platform_roots() {
 
 #[test]
 fn permission_validation_uses_the_effective_overlay_manifest() {
-    let category = CategoryPath {
-        kind: "app",
-        name: "demo".to_string(),
-        root: PathBuf::from("app/demo"),
+    let category = demo_category("app");
+    let diagnostics_for = |overlay: &[u8]| {
+        let path = "app/demo/shine.toml";
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                path,
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n".to_vec(),
+            )
+            .overlay_file(path, overlay.to_vec())
+            .build();
+        permission_declaration_diagnostics(&snapshot, &category)
     };
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-        .file(
-            "app/demo/shine.toml",
-            b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n".to_vec(),
-        )
-        .overlay_file("app/demo/shine.toml", b"dest = '~/.config/demo'\n".to_vec())
-        .build();
 
-    let diagnostics = permission_declaration_diagnostics(&snapshot, &category);
-    assert!(diagnostics.is_empty());
-
-    let invalid = PresetSnapshot::builder(PresetSourceKind::External)
-        .file(
-            "app/demo/shine.toml",
-            b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n".to_vec(),
-        )
-        .overlay_file(
-            "app/demo/shine.toml",
-            b"dest = '~/.config/demo'\n[permissions]\nschema_version = 3\n".to_vec(),
-        )
-        .build();
-    let diagnostics = permission_declaration_diagnostics(&invalid, &category);
+    assert!(diagnostics_for(b"dest = '~/.config/demo'\n").is_empty());
+    let diagnostics =
+        diagnostics_for(b"dest = '~/.config/demo'\n[permissions]\nschema_version = 3\n");
     assert_eq!(diagnostics[0].code, "unsupported_permission_schema");
 }
 
@@ -109,13 +107,8 @@ fn permission_declarations_use_each_domain_target_placement() {
             .build();
 
     for kind in ["app", "shell", "sys"] {
-        let category = CategoryPath {
-            kind,
-            name: "demo".to_string(),
-            root: PathBuf::from(format!("{kind}/demo")),
-        };
         assert!(
-            permission_declaration_diagnostics(&snapshot, &category).is_empty(),
+            permission_declaration_diagnostics(&snapshot, &demo_category(kind)).is_empty(),
             "{kind} declaration should be accepted at its target-local placement"
         );
     }
@@ -136,14 +129,9 @@ fn shell_and_sys_permission_defaults_satisfy_target_declarations() {
             )
             .build();
 
-    for (kind, name) in [("shell", "demo"), ("sys", "demo")] {
-        let category = CategoryPath {
-            kind,
-            name: name.to_string(),
-            root: PathBuf::from(format!("{kind}/{name}")),
-        };
+    for kind in ["shell", "sys"] {
         assert!(
-            permission_declaration_diagnostics(&snapshot, &category).is_empty(),
+            permission_declaration_diagnostics(&snapshot, &demo_category(kind)).is_empty(),
             "{kind} defaults should satisfy item-local declaration validation"
         );
     }
@@ -151,11 +139,6 @@ fn shell_and_sys_permission_defaults_satisfy_target_declarations() {
 
 #[test]
 fn app_rejects_shell_and_sys_permission_defaults_placement() {
-    let category = CategoryPath {
-        kind: "app",
-        name: "demo".to_string(),
-        root: PathBuf::from("app/demo"),
-    };
     let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
             .file(
                 "app/demo/shine.toml",
@@ -164,60 +147,37 @@ fn app_rejects_shell_and_sys_permission_defaults_placement() {
             )
             .build();
 
-    let diagnostics = permission_declaration_diagnostics(&snapshot, &category);
+    let diagnostics = permission_declaration_diagnostics(&snapshot, &demo_category("app"));
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "invalid_permission_declaration"
             && diagnostic.message.contains("must use `[permissions]`")
     }));
 }
 
-// This wrapper deliberately has no mutation or process capability.
-struct ObservationOnly(InMemoryHost);
-type ReadFuture<'a, T> = std::pin::Pin<
-    Box<dyn std::future::Future<Output = Result<T, crate::runtime::HostError>> + Send + 'a>,
->;
-impl FileSystemObservationHost for ObservationOnly {
-    fn canonicalize<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, PathBuf> {
-        self.0.canonicalize(path)
-    }
-    fn read<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, Vec<u8>> {
-        self.0.read(path)
-    }
-    fn metadata<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, crate::runtime::FileMetadata> {
-        self.0.metadata(path)
-    }
-    fn read_dir<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, Vec<PathBuf>> {
-        self.0.read_dir(path)
-    }
-    fn read_link<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, PathBuf> {
-        self.0.read_link(path)
-    }
-}
-
 #[tokio::test]
 async fn repository_category_and_manifest_inputs_share_read_only_snapshot_validation() {
     let root = std::env::temp_dir().join("shine-validation-entrypoints");
-    let host = ObservationOnly(InMemoryHost::new());
-    host.0.put_file(
+    let host = InMemoryHost::new();
+    let reader = ObservationOnlyHost(host.clone());
+    host.put_file(
         root.join("app/demo/shine.toml"),
         b"dest = '~/.config/demo'\n[[files]]\nsource = 'config'\n".to_vec(),
     );
-    host.0
-        .put_file(root.join("app/demo/config"), b"data".to_vec());
-    host.0.put_file(
+    host.put_file(root.join("app/demo/config"), b"data".to_vec());
+    host.put_file(
         root.join("shell/tools/shine.toml"),
         b"[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\n".to_vec(),
     );
-    host.0.put_file_with_mode(
+    host.put_file_with_mode(
         root.join("shell/tools/tool.sh"),
         b"#!/bin/sh\n".to_vec(),
         0o100755,
     );
-    host.0.put_file(
+    host.put_file(
         root.join("app/demo/node_modules/broken/shine.toml"),
         b"not TOML".to_vec(),
     );
-    let repository = validate_preset_path(&host, &root, Path::new(".")).await;
+    let repository = validate_preset_path(&reader, &root, Path::new(".")).await;
     assert!(repository.valid, "{repository:#?}");
     assert_eq!(
         repository
@@ -228,10 +188,10 @@ async fn repository_category_and_manifest_inputs_share_read_only_snapshot_valida
         [("app", "demo"), ("shell", "tools")]
     );
     for input in ["app/demo", "app/demo/shine.toml"] {
-        let report = validate_preset_path(&host, &root, Path::new(input)).await;
+        let report = validate_preset_path(&reader, &root, Path::new(input)).await;
         assert!(report.valid, "{report:#?}");
         assert_eq!(report.categories, [repository.categories[0].clone()]);
-        let scope = load_preset_source_scope(&host, &root, Path::new(input))
+        let scope = load_preset_source_scope(&reader, &root, Path::new(input))
             .await
             .unwrap();
         assert!(
@@ -249,8 +209,7 @@ async fn repository_category_and_manifest_inputs_share_read_only_snapshot_valida
         );
     }
     assert!(
-        host.0
-            .operations()
+        host.operations()
             .iter()
             .all(|op| matches!(op, crate::runtime::HostOperation::Read(_)))
     );
@@ -259,7 +218,8 @@ async fn repository_category_and_manifest_inputs_share_read_only_snapshot_valida
 #[tokio::test]
 async fn validation_retains_permission_then_destination_then_first_platform_error_order() {
     let root = std::env::temp_dir().join("shine-validation-error-order");
-    let host = ObservationOnly(InMemoryHost::new());
+    let host = InMemoryHost::new();
+    let reader = ObservationOnlyHost(host.clone());
     let path = root.join("app/demo/shine.toml");
     for (manifest, expected, message) in [
         (
@@ -278,8 +238,8 @@ async fn validation_retains_permission_then_destination_then_first_platform_erro
             "for macos",
         ),
     ] {
-        host.0.put_file(&path, manifest.as_bytes().to_vec());
-        let report = validate_preset_path(&host, &root, &path).await;
+        host.put_file(&path, manifest.as_bytes().to_vec());
+        let report = validate_preset_path(&reader, &root, &path).await;
         assert_eq!(report.summary.errors, 1, "{report:#?}");
         let diagnostics = &report.categories[0].diagnostics;
         assert_eq!(diagnostics.len(), 1);
