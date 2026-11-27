@@ -2,6 +2,34 @@ use super::*;
 use crate::lifecycle_plan::tests::bootstrap_display_plan;
 use shine_core::plan::{CodeBoundaryV2, EnvironmentSensitivityV1};
 
+fn bootstrap_text(plan: &PlanV1, verbose: bool) -> String {
+    render_bootstrap_plan_lines(plan, "config", verbose)
+        .unwrap()
+        .join("\n")
+}
+
+fn filesystem(access: FilesystemAccessV1, path: &str) -> PermissionV1 {
+    PermissionV1::Filesystem {
+        access,
+        path: path.into(),
+    }
+}
+
+fn add_bootstrap_and_profile_boundaries(plan: &mut PlanV1) {
+    for target in ["sys/rust", "sys/fzf"] {
+        plan.code_boundaries.push(boundary(
+            target,
+            CodeEntryKindV2::SysBootstrapScript,
+            CodeTimingV2::ExecuteNow,
+        ));
+        plan.code_boundaries.push(boundary(
+            target,
+            CodeEntryKindV2::SysProfileCode,
+            CodeTimingV2::DeliverForLater,
+        ));
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn detected_ubuntu_items_skip_installers_but_keep_profile_and_trust_review() {
@@ -71,9 +99,7 @@ async fn detected_ubuntu_items_skip_installers_but_keep_profile_and_trust_review
         let before = serde_json::to_vec(&plan).unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         for verbose in [false, true] {
-            let output = render_bootstrap_plan_lines(&plan, "config", verbose)
-                .unwrap()
-                .join("\n");
+            let output = bootstrap_text(&plan, verbose);
             assert!(
                 !output.contains("Bootstrap code executes during this operation · all 12"),
                 "{output}"
@@ -179,9 +205,7 @@ async fn detected_external_script_still_requires_trust_and_explicit_code_consent
     });
     let blocked = frontend.review(request.clone()).await.unwrap();
     assert!(!blocked.report().plan.is_ready());
-    let output = render_bootstrap_plan_lines(&blocked.report().plan, "config", false)
-        .unwrap()
-        .join("\n");
+    let output = bootstrap_text(&blocked.report().plan, false);
     assert!(output.contains("External preset code is not trusted"));
     assert!(output.contains("installation blocked; trust requirements retained"));
     assert!(blocked.approve_for_automation().is_err());
@@ -194,9 +218,7 @@ async fn detected_external_script_still_requires_trust_and_explicit_code_consent
     assert_eq!(plan.steps[0].action, PlanActionV1::Update);
     let before = serde_json::to_vec(plan).unwrap();
     for verbose in [false, true] {
-        let output = render_bootstrap_plan_lines(plan, "config", verbose)
-            .unwrap()
-            .join("\n");
+        let output = bootstrap_text(plan, verbose);
         assert!(
             output.contains("installation skipped; trust requirements retained"),
             "{output}"
@@ -244,12 +266,7 @@ fn detected_installation_wording_requires_an_unambiguous_bootstrap_step() {
         // Full-review fallback must still distinguish retained trust from execution.
         let mut fallback = plan.clone();
         fallback.permission_scopes.clear();
-        assert!(
-            render_bootstrap_plan_lines(&fallback, "config", verbose)
-                .unwrap()
-                .join("\n")
-                .contains("installation skipped")
-        );
+        assert!(bootstrap_text(&fallback, verbose).contains("installation skipped"));
     }
     for exception in [
         "operation",
@@ -298,18 +315,7 @@ fn detected_items_retain_every_trust_state_in_compact_verbose_and_fallback_revie
     ] {
         let mut plan = bootstrap_display_plan();
         plan.steps[0].action = PlanActionV1::Update;
-        for target in ["sys/rust", "sys/fzf"] {
-            plan.code_boundaries.push(boundary(
-                target,
-                CodeEntryKindV2::SysBootstrapScript,
-                CodeTimingV2::ExecuteNow,
-            ));
-            plan.code_boundaries.push(boundary(
-                target,
-                CodeEntryKindV2::SysProfileCode,
-                CodeTimingV2::DeliverForLater,
-            ));
-        }
+        add_bootstrap_and_profile_boundaries(&mut plan);
         let install = &mut plan.code_boundaries[0];
         install.trust = trust;
         if trust != CodeTrustStateV2::Distribution {
@@ -329,9 +335,7 @@ fn detected_items_retain_every_trust_state_in_compact_verbose_and_fallback_revie
             let before = serde_json::to_vec(&reviewed).unwrap();
             let approval = PlanApprovalV1::for_reviewed_plan(&reviewed);
             for verbose in [false, true] {
-                let output = render_bootstrap_plan_lines(&reviewed, "config", verbose)
-                    .unwrap()
-                    .join("\n");
+                let output = bootstrap_text(&reviewed, verbose);
                 assert!(output.contains(label), "{trust:?}: {output}");
                 assert!(
                     output
@@ -371,9 +375,7 @@ fn numbered_bootstrap_review_has_the_complete_compact_layout() {
     let before = serde_json::to_value(&plan).unwrap();
     let fingerprint = plan.fingerprint().unwrap();
     assert_eq!(
-        render_bootstrap_plan_lines(&plan, "config", false)
-            .unwrap()
-            .join("\n"),
+        bootstrap_text(&plan, false),
         r"Security Plan · sys-bootstrap
   2 bootstrap items · 1 profile configuration
 
@@ -404,26 +406,11 @@ fn numbered_bootstrap_review_has_the_complete_compact_layout() {
 fn compact_bootstrap_retains_extra_permissions_and_attributed_diagnostics() {
     let mut plan = bootstrap_display_plan();
     for permission in [
-        PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Execute,
-            path: "preset:install/first.sh".into(),
-        },
-        PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Execute,
-            path: "preset:install/second.sh".into(),
-        },
-        PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Write,
-            path: "home:important\nFORGED".into(),
-        },
-        PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Read,
-            path: "home:read-target".into(),
-        },
-        PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Remove,
-            path: "home:remove-target".into(),
-        },
+        filesystem(FilesystemAccessV1::Execute, "preset:install/first.sh"),
+        filesystem(FilesystemAccessV1::Execute, "preset:install/second.sh"),
+        filesystem(FilesystemAccessV1::Write, "home:important\nFORGED"),
+        filesystem(FilesystemAccessV1::Read, "home:read-target"),
+        filesystem(FilesystemAccessV1::Remove, "home:remove-target"),
         PermissionV1::Network {
             scope: NetworkScopeV1::Host("example.test".into()),
         },
@@ -454,10 +441,7 @@ fn compact_bootstrap_retains_extra_permissions_and_attributed_diagnostics() {
     add_permission(
         &mut plan,
         3,
-        PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Execute,
-            path: "preset:shared.sh".into(),
-        },
+        filesystem(FilesystemAccessV1::Execute, "preset:shared.sh"),
     );
     for step in &mut plan.steps[..2] {
         step.diagnostic_codes
@@ -465,9 +449,7 @@ fn compact_bootstrap_retains_extra_permissions_and_attributed_diagnostics() {
         step.diagnostic_codes.push("future_notice\nFORGED".into());
     }
     let before = serde_json::to_value(&plan).unwrap();
-    let rendered = render_bootstrap_plan_lines(&plan, "config", false)
-        .unwrap()
-        .join("\n");
+    let rendered = bootstrap_text(&plan, false);
     for expected in [
         "Administrator access required: fzf, Profile configuration, Shared changes",
         "preset:install/first.sh, preset:install/second.sh",
@@ -518,18 +500,7 @@ fn boundary(target: &str, kind: CodeEntryKindV2, timing: CodeTimingV2) -> CodeBo
 fn bootstrap_code_groups_preserve_timing_membership_and_every_trust_exception() {
     let mut plan = bootstrap_display_plan();
     plan.steps[1].action = PlanActionV1::Execute;
-    for target in ["sys/rust", "sys/fzf"] {
-        plan.code_boundaries.push(boundary(
-            target,
-            CodeEntryKindV2::SysBootstrapScript,
-            CodeTimingV2::ExecuteNow,
-        ));
-        plan.code_boundaries.push(boundary(
-            target,
-            CodeEntryKindV2::SysProfileCode,
-            CodeTimingV2::DeliverForLater,
-        ));
-    }
+    add_bootstrap_and_profile_boundaries(&mut plan);
     let before = serde_json::to_value(&plan).unwrap();
     let grouped = bootstrap_code_boundaries(&plan).join("\n");
     assert_eq!(
@@ -592,10 +563,10 @@ fn bootstrap_table_wraps_without_truncating_or_injecting_terminal_controls() {
     add_permission(
         &mut plan,
         0,
-        PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Execute,
-            path: "preset:install/very-long-script-name.sh".into(),
-        },
+        filesystem(
+            FilesystemAccessV1::Execute,
+            "preset:install/very-long-script-name.sh",
+        ),
     );
     let wide = bootstrap_table(&plan, None).join("\n");
     assert!(wide.contains("long-command\\nFORGED\\u{1b}[2J"));
@@ -607,20 +578,16 @@ fn bootstrap_table_wraps_without_truncating_or_injecting_terminal_controls() {
             .iter()
             .all(|line| console::measure_text_width(line) <= 48)
     );
-    assert_eq!(
-        narrow
-            .iter()
-            .filter(|line| line.starts_with("    01  "))
-            .count(),
-        1
-    );
-    assert_eq!(
-        narrow
-            .iter()
-            .filter(|line| line.starts_with("    02  "))
-            .count(),
-        1
-    );
+    for prefix in ["    01  ", "    02  "] {
+        assert_eq!(
+            narrow
+                .iter()
+                .filter(|line| line.starts_with(prefix))
+                .count(),
+            1,
+            "{prefix:?}"
+        );
+    }
     for value in [
         "路径/é/very-long-script.sh",
         "long-command\\nFORGED\\u{1b}[2J",
@@ -688,9 +655,7 @@ fn exceptional_bootstrap_layouts_keep_expanded_review() {
             "profile-first" => plan.steps.swap(0, 2),
             _ => unreachable!(),
         }
-        let output = render_bootstrap_plan_lines(&plan, "config", false)
-            .unwrap()
-            .join("\n");
+        let output = bootstrap_text(&plan, false);
         assert!(!output.contains("#   Item"), "{exception}: {output}");
         assert!(output.contains("curl"));
         assert!(output.contains("apt-get"));
@@ -720,20 +685,10 @@ fn bootstrap_inline_paths_distinguish_one_comma_bearing_path_from_two_paths() {
     add_permission(
         &mut one,
         2,
-        PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Write,
-            path: "home:.bashrc, ~/.zshrc".into(),
-        },
+        filesystem(FilesystemAccessV1::Write, "home:.bashrc, ~/.zshrc"),
     );
     for path in ["home:.bashrc", "home:.zshrc"] {
-        add_permission(
-            &mut two,
-            2,
-            PermissionV1::Filesystem {
-                access: FilesystemAccessV1::Write,
-                path: path.into(),
-            },
-        );
+        add_permission(&mut two, 2, filesystem(FilesystemAccessV1::Write, path));
     }
     let one_rendered = render_bootstrap_plan_lines(&one, "config", false).unwrap();
     let two_rendered = render_bootstrap_plan_lines(&two, "config", false).unwrap();
@@ -750,20 +705,13 @@ fn bootstrap_inline_paths_distinguish_one_comma_bearing_path_from_two_paths() {
     add_permission(
         &mut one,
         0,
-        PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Execute,
-            path: "preset:install/a.sh, preset:install/b.sh".into(),
-        },
+        filesystem(
+            FilesystemAccessV1::Execute,
+            "preset:install/a.sh, preset:install/b.sh",
+        ),
     );
     for path in ["preset:install/a.sh", "preset:install/b.sh"] {
-        add_permission(
-            &mut two,
-            0,
-            PermissionV1::Filesystem {
-                access: FilesystemAccessV1::Execute,
-                path: path.into(),
-            },
-        );
+        add_permission(&mut two, 0, filesystem(FilesystemAccessV1::Execute, path));
     }
     assert!(
         bootstrap_table(&one, None)
@@ -805,9 +753,7 @@ fn bootstrap_rendering_preserves_full_approval_and_external_consent() {
         proxy_env: Default::default(),
     };
     for verbose in [false, true] {
-        let output = render_bootstrap_plan_lines(&plan, "config", verbose)
-            .unwrap()
-            .join("\n");
+        let output = bootstrap_text(&plan, verbose);
         assert!(output.contains("requires your confirmation for this operation only"));
         assert_eq!(
             confirmation_prompt(&[(request.clone(), plan.clone())]),

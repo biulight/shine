@@ -1084,15 +1084,7 @@ mod tests {
         assert!(validate_install_command("gh", true).is_ok());
         assert!(validate_install_command("tool.v2", true).is_ok());
         assert!(validate_install_command("gh.exe", false).is_ok());
-        assert!(
-            tokio::fs::read_dir(&dir)
-                .await
-                .unwrap()
-                .next_entry()
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
@@ -1106,16 +1098,20 @@ mod tests {
                 .unwrap_err();
             assert!(error.to_string().contains("cannot proxy Shine itself"));
         }
-        assert!(
-            tokio::fs::read_dir(&dir)
-                .await
-                .unwrap()
-                .next_entry()
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
         tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    async fn install_windows_demo(config: &Config, target: &Path) -> Result<()> {
+        install_proxy_files(config, "demo", &[], target, config.config_path(), true).await
+    }
+
+    async fn proxy_state_bytes(config: &Config) -> (Vec<u8>, Vec<u8>) {
+        let rules = tokio::fs::read(config.config_path()).await.unwrap();
+        let receipt = tokio::fs::read(manifest_path(config.shine_dir()))
+            .await
+            .unwrap();
+        (rules, receipt)
     }
 
     async fn uninstall_fixture(dir: &Path) -> Config {
@@ -1142,26 +1138,14 @@ mod tests {
             tokio::fs::write(&foreign, b"user replacement")
                 .await
                 .unwrap();
-            let config_before = tokio::fs::read(config.config_path()).await.unwrap();
-            let manifest_before = tokio::fs::read(manifest_path(config.shine_dir()))
-                .await
-                .unwrap();
+            let state_before = proxy_state_bytes(&config).await;
             let mut launchers = Vec::new();
             for candidate in ["demo", "demo.cmd", "demo.ps1"] {
                 let path = config.bin_dir().join(candidate);
                 launchers.push((path.clone(), tokio::fs::read(path).await.unwrap()));
             }
             assert!(uninstall_for_platform(&config, "demo", true).await.is_err());
-            assert_eq!(
-                tokio::fs::read(config.config_path()).await.unwrap(),
-                config_before
-            );
-            assert_eq!(
-                tokio::fs::read(manifest_path(config.shine_dir()))
-                    .await
-                    .unwrap(),
-                manifest_before
-            );
+            assert_eq!(proxy_state_bytes(&config).await, state_before);
             for (path, bytes) in launchers {
                 assert_eq!(tokio::fs::read(path).await.unwrap(), bytes);
             }
@@ -1327,8 +1311,7 @@ mod tests {
     async fn proxy_uninstall_preserves_replacement_while_waiting_for_config_lock() {
         let dir = crate::test_support::make_temp_dir("shine-proxy-uninstall-race").await;
         let config = uninstall_fixture(&dir).await;
-        let before = tokio::fs::read(config.config_path()).await.unwrap();
-        let receipt = tokio::fs::read(manifest_path(&dir)).await.unwrap();
+        let state_before = proxy_state_bytes(&config).await;
         let guard = crate::config::env_write::lock_target(config.config_path())
             .await
             .unwrap();
@@ -1349,8 +1332,7 @@ mod tests {
             tokio::fs::read(&replaced).await.unwrap(),
             b"independently installed replacement"
         );
-        assert_eq!(tokio::fs::read(config.config_path()).await.unwrap(), before);
-        assert_eq!(tokio::fs::read(manifest_path(&dir)).await.unwrap(), receipt);
+        assert_eq!(proxy_state_bytes(&config).await, state_before);
         assert!(config.bin_dir().join("demo").exists());
         assert!(config.bin_dir().join("demo.cmd").exists());
         tokio::fs::remove_dir_all(dir).await.unwrap();
@@ -1602,9 +1584,7 @@ mod tests {
         let state = dir.join("state with 'quotes' and %NAME%");
         let target = dir.join("real tool");
         let config = Config::new_for_test(&state);
-        install_proxy_files(&config, "demo", &[], &target, config.config_path(), true)
-            .await
-            .unwrap();
+        install_windows_demo(&config, &target).await.unwrap();
         let sh = tokio::fs::read_to_string(config.bin_dir().join("demo"))
             .await
             .unwrap();
@@ -1735,16 +1715,9 @@ mod tests {
             let foreign = bin.join(occupied);
             tokio::fs::write(&foreign, b"user launcher").await.unwrap();
             assert!(
-                install_proxy_files(
-                    &config,
-                    "demo",
-                    &[],
-                    &dir.join("real-demo"),
-                    config.config_path(),
-                    true
-                )
-                .await
-                .is_err()
+                install_windows_demo(&config, &dir.join("real-demo"))
+                    .await
+                    .is_err()
             );
             assert_eq!(tokio::fs::read(&foreign).await.unwrap(), b"user launcher");
             assert!(!config.config_path().exists());
@@ -1755,58 +1728,25 @@ mod tests {
         }
         let config = Config::new_for_test(&dir.join("owned"));
         let bin = config.bin_dir();
-        install_proxy_files(
-            &config,
-            "demo",
-            &[],
-            &dir.join("first"),
-            config.config_path(),
-            true,
-        )
-        .await
-        .unwrap();
-        let before = tokio::fs::read(bin.join("demo")).await.unwrap();
-        let rules_before = tokio::fs::read(config.config_path()).await.unwrap();
-        let receipt_before = tokio::fs::read(manifest_path(config.shine_dir()))
+        install_windows_demo(&config, &dir.join("first"))
             .await
             .unwrap();
+        let before = tokio::fs::read(bin.join("demo")).await.unwrap();
+        let state_before = proxy_state_bytes(&config).await;
         tokio::fs::write(bin.join("demo.ps1"), b"user replacement")
             .await
             .unwrap();
         assert!(
-            install_proxy_files(
-                &config,
-                "demo",
-                &[],
-                &dir.join("second"),
-                config.config_path(),
-                true
-            )
-            .await
-            .is_err()
+            install_windows_demo(&config, &dir.join("second"))
+                .await
+                .is_err()
         );
         assert_eq!(tokio::fs::read(bin.join("demo")).await.unwrap(), before);
-        assert_eq!(
-            tokio::fs::read(config.config_path()).await.unwrap(),
-            rules_before
-        );
-        assert_eq!(
-            tokio::fs::read(manifest_path(config.shine_dir()))
-                .await
-                .unwrap(),
-            receipt_before
-        );
+        assert_eq!(proxy_state_bytes(&config).await, state_before);
         tokio::fs::remove_file(bin.join("demo.ps1")).await.unwrap();
-        install_proxy_files(
-            &config,
-            "demo",
-            &[],
-            &dir.join("second"),
-            config.config_path(),
-            true,
-        )
-        .await
-        .unwrap();
+        install_windows_demo(&config, &dir.join("second"))
+            .await
+            .unwrap();
         for name in ["demo", "demo.cmd", "demo.ps1"] {
             assert!(
                 tokio::fs::read_to_string(bin.join(name))
@@ -1829,16 +1769,9 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            install_proxy_files(
-                &config,
-                "demo",
-                &[],
-                &dir.join("real"),
-                config.config_path(),
-                true
-            )
-            .await
-            .is_err()
+            install_windows_demo(&config, &dir.join("real"))
+                .await
+                .is_err()
         );
         assert_eq!(
             tokio::fs::read_link(config.bin_dir().join("demo.cmd"))

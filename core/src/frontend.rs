@@ -821,15 +821,16 @@ mod tests {
         assert_observation_only(service.runtime().host(), since);
     }
 
-    #[tokio::test]
-    async fn frontend_inspection_preserves_user_modified_and_missing_states() {
-        let host = InMemoryHost::new();
-        let destination = home_dir().join(".config/available/config.toml");
-        let content = b"value = true\n";
+    async fn seed_installed_copy(
+        host: &InMemoryHost,
+        source: &str,
+        destination: &std::path::Path,
+        content: &[u8],
+    ) {
         AppManifest {
             entries: vec![AppEntry {
-                source: "app/available/config.toml".into(),
-                destination: destination.clone(),
+                source: source.into(),
+                destination: destination.to_owned(),
                 backup: None,
                 content_hash: crate::install::manifest::hash_content(content),
                 install_strategy: AppInstallStrategy::Copy,
@@ -838,10 +839,23 @@ mod tests {
             }],
             ..AppManifest::default()
         }
-        .save(&host, &home_dir().join(".shine"))
+        .save(host, &home_dir().join(".shine"))
         .await
         .unwrap();
-        host.put_file(&destination, content.to_vec());
+        host.put_file(destination, content.to_vec());
+    }
+
+    #[tokio::test]
+    async fn frontend_inspection_preserves_user_modified_and_missing_states() {
+        let host = InMemoryHost::new();
+        let destination = home_dir().join(".config/available/config.toml");
+        seed_installed_copy(
+            &host,
+            "app/available/config.toml",
+            &destination,
+            b"value = true\n",
+        )
+        .await;
         let service = FrontendService::new(runtime(host, snapshot()));
         let current = service.inspect_apps(Vec::new()).await.unwrap();
         assert_eq!(current.report.items[0].state, InspectionStateV1::Current);
@@ -932,22 +946,7 @@ auto = false
             .build();
         let host = InMemoryHost::new();
         let destination = home_dir().join(".config/generated/config.txt");
-        host.put_file(&destination, b"old".to_vec());
-        AppManifest {
-            entries: vec![AppEntry {
-                source: "app/generated/config.txt".into(),
-                destination,
-                backup: None,
-                content_hash: crate::install::manifest::hash_content(b"old"),
-                install_strategy: AppInstallStrategy::Copy,
-                uses_env: false,
-                requires_admin: false,
-            }],
-            ..AppManifest::default()
-        }
-        .save(&host, &home_dir().join(".shine"))
-        .await
-        .unwrap();
+        seed_installed_copy(&host, "app/generated/config.txt", &destination, b"old").await;
         let since = host.operations().len();
         let mut runtime = runtime(host, presets);
         runtime
@@ -1047,38 +1046,52 @@ package = "tool"
         assert_observation_only(service.runtime().host(), since);
     }
 
+    const JOURNALS: [(CapabilityKindV1, &str); 3] = [
+        (
+            CapabilityKindV1::App,
+            crate::runtime::APP_OPERATION_JOURNAL_FILE,
+        ),
+        (
+            CapabilityKindV1::Shell,
+            crate::runtime::SHELL_OPERATION_JOURNAL_FILE,
+        ),
+        (
+            CapabilityKindV1::Sys,
+            crate::runtime::SYS_OPERATION_JOURNAL_FILE,
+        ),
+    ];
+
+    async fn rejected_journal(
+        service: &FrontendService<InMemoryHost>,
+        kind: CapabilityKindV1,
+        file: &str,
+        bytes: &[u8],
+    ) -> FrontendServiceError {
+        let host = service.runtime().host();
+        let path = service.runtime().context().shine_dir.join(file);
+        host.put_file(&path, bytes.to_vec());
+        let since = host.operations().len();
+        let error = service.operation_state(kind).await.unwrap_err();
+        assert_eq!(host.read(&path).await.unwrap(), bytes);
+        assert_observation_only(host, since);
+        error
+    }
+
     #[tokio::test]
     async fn frontend_operation_idle_and_invalid_journals_are_safe_and_read_only() {
-        use crate::runtime::{
-            APP_OPERATION_JOURNAL_FILE, SHELL_OPERATION_JOURNAL_FILE, SYS_OPERATION_JOURNAL_FILE,
-        };
         let service = FrontendService::new(runtime(InMemoryHost::new(), snapshot()));
-        for (kind, file) in [
-            (CapabilityKindV1::App, APP_OPERATION_JOURNAL_FILE),
-            (CapabilityKindV1::Shell, SHELL_OPERATION_JOURNAL_FILE),
-            (CapabilityKindV1::Sys, SYS_OPERATION_JOURNAL_FILE),
-        ] {
+        for (kind, file) in JOURNALS {
             let idle = service.operation_state(kind).await.unwrap();
             assert_eq!(idle.state, OperationStateV1::Idle);
             assert!(idle.journal.is_none() && idle.recovery_plan.is_none());
-            let path = service.runtime().context().shine_dir.join(file);
             let bytes = b"invalid journal with /private/path and SECRET=value";
-            service.runtime().host().put_file(&path, bytes.to_vec());
-            let since = service.runtime().host().operations().len();
-            let error = service.operation_state(kind).await.unwrap_err();
+            let error = rejected_journal(&service, kind, file, bytes).await;
             assert_eq!(
                 serde_json::to_value(error.diagnostic()).unwrap(),
                 serde_json::json!({
                     "code": "frontend_operation_state_failed", "severity": "error"
                 })
             );
-            assert_eq!(
-                crate::runtime::FileSystemObservationHost::read(service.runtime().host(), &path)
-                    .await
-                    .unwrap(),
-                bytes
-            );
-            assert_observation_only(service.runtime().host(), since);
         }
     }
 
@@ -1095,20 +1108,7 @@ package = "tool"
             plan_fingerprint: plan.fingerprint().unwrap(),
             approved_permissions: plan.permissions.required,
         };
-        for (kind, file) in [
-            (
-                CapabilityKindV1::App,
-                crate::runtime::APP_OPERATION_JOURNAL_FILE,
-            ),
-            (
-                CapabilityKindV1::Shell,
-                crate::runtime::SHELL_OPERATION_JOURNAL_FILE,
-            ),
-            (
-                CapabilityKindV1::Sys,
-                crate::runtime::SYS_OPERATION_JOURNAL_FILE,
-            ),
-        ] {
+        for (kind, file) in JOURNALS {
             let mut journal = serde_json::json!({"schema_version": 999,
                 "action_ir": crate::action::ActionIrV1::new("private-operation", Vec::new()), "approval": approval});
             match kind {
@@ -1125,23 +1125,13 @@ package = "tool"
                 }
             }
             let bytes = toml::to_string(&journal).unwrap().into_bytes();
-            let path = service.runtime().context().shine_dir.join(file);
-            service.runtime().host().put_file(&path, bytes.clone());
-            let since = service.runtime().host().operations().len();
-            let error = service.operation_state(kind).await.unwrap_err();
+            let error = rejected_journal(&service, kind, file, &bytes).await;
             assert!(
                 !serde_json::to_string(error.diagnostic())
                     .unwrap()
                     .contains("private-operation")
             );
             assert!(error.into_source().to_string().contains("999"));
-            assert_eq!(
-                crate::runtime::FileSystemObservationHost::read(service.runtime().host(), &path)
-                    .await
-                    .unwrap(),
-                bytes
-            );
-            assert_observation_only(service.runtime().host(), since);
         }
     }
 
@@ -1227,6 +1217,18 @@ package = "tool"
         );
         assert_eq!(safe[7].status, Some(FrontendEventStatusV1::Failed));
     }
+    fn assert_operation_confirmation(review: &HumanReview) {
+        let plan = &review.report().plan;
+        assert!(plan.is_ready(), "{plan:?}");
+        assert!(
+            plan.code_boundaries
+                .iter()
+                .any(|boundary| boundary.trust
+                    == crate::plan::CodeTrustStateV2::OperationConfirmation),
+            "{plan:?}"
+        );
+    }
+
     fn code_review_request() -> ReviewRequest {
         ReviewRequest::Shell(crate::runtime::ShellPlanRequest {
             operation: crate::lifecycle::LifecycleOperation::Install,
@@ -1299,20 +1301,7 @@ package = "tool"
             .review_with_code_confirmation(code_review_request())
             .await
             .unwrap();
-        assert!(
-            review.report().plan.is_ready(),
-            "{:?}",
-            review.report().plan
-        );
-        assert!(
-            review
-                .report()
-                .plan
-                .code_boundaries
-                .iter()
-                .any(|boundary| boundary.trust
-                    == crate::plan::CodeTrustStateV2::OperationConfirmation)
-        );
+        assert_operation_confirmation(&review);
         assert!(review.approve_for_automation().is_err());
         let review = trusted
             .review_with_code_confirmation(code_review_request())
@@ -1418,20 +1407,7 @@ package = "tool"
                 .review_with_code_confirmation(request)
                 .await
                 .unwrap();
-            assert!(
-                review.report().plan.is_ready(),
-                "{:?}",
-                review.report().plan
-            );
-            assert!(
-                review
-                    .report()
-                    .plan
-                    .code_boundaries
-                    .iter()
-                    .any(|boundary| boundary.trust
-                        == crate::plan::CodeTrustStateV2::OperationConfirmation)
-            );
+            assert_operation_confirmation(&review);
         }
     }
 }
