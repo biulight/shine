@@ -54,22 +54,17 @@ mod tests {
 
     #[test]
     fn relative_identities_keep_their_existing_shape() {
-        assert_eq!(
-            logical_path(Path::new("app/docker/daemon.json")),
-            "app/docker/daemon.json"
-        );
-        assert_eq!(logical_path(Path::new("./config")), "./config");
-        assert_eq!(logical_path(Path::new("../config")), "../config");
+        for path in ["app/docker/daemon.json", "./config", "../config"] {
+            assert_eq!(logical_path(Path::new(path)), path);
+        }
     }
 
     #[cfg(unix)]
     #[test]
     fn unix_root_is_not_joined_as_an_extra_component() {
-        assert_eq!(logical_path(Path::new("/")), "/");
-        assert_eq!(
-            logical_path(Path::new("/etc/docker/daemon.json")),
-            "/etc/docker/daemon.json"
-        );
+        for path in ["/", "/etc/docker/daemon.json"] {
+            assert_eq!(logical_path(Path::new(path)), path);
+        }
         let context = RuntimeContext::isolated(
             "/home/test".into(),
             "/home/test/.shine".into(),
@@ -77,22 +72,20 @@ mod tests {
             "/home/test/.shine/bin".into(),
             super::super::RuntimePlatform::Linux,
         );
-        assert_eq!(
-            review_path(&context, Path::new("/etc/docker/daemon.json")),
-            "absolute:/etc/docker/daemon.json"
-        );
-        assert_eq!(
-            review_path(&context, Path::new("/home/test/.shine")),
-            "shine:."
-        );
-        assert_eq!(
-            review_path(&context, Path::new("/home/test/.shine/app-manifest.toml")),
-            "shine:app-manifest.toml"
-        );
-        assert_eq!(
-            review_path(&context, Path::new("/home/test/.config/app")),
-            "home:.config/app"
-        );
+        for (path, expected) in [
+            (
+                "/etc/docker/daemon.json",
+                "absolute:/etc/docker/daemon.json",
+            ),
+            ("/home/test/.shine", "shine:."),
+            (
+                "/home/test/.shine/app-manifest.toml",
+                "shine:app-manifest.toml",
+            ),
+            ("/home/test/.config/app", "home:.config/app"),
+        ] {
+            assert_eq!(review_path(&context, Path::new(path)), expected, "{path}");
+        }
     }
 
     #[cfg(windows)]

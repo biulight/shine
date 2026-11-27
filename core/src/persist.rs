@@ -282,37 +282,42 @@ pub async fn save_toml_atomic<T: serde::Serialize>(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn atomic_write_private_new_preserves_the_concurrent_winner_and_cleans_staging() {
-        let root = make_temp_dir("shine-private-new").await;
-        let path = root.join("nested/secret.env");
-        let (first, second) = tokio::join!(
-            atomic_write_private_new(&path, b"first secret"),
-            atomic_write_private_new(&path, b"second secret"),
-        );
+    async fn assert_concurrent_winner(
+        path: &Path,
+        publish: impl AsyncFn(&Path, &[u8]) -> Result<()>,
+    ) -> &'static [u8] {
+        let (first, second) = tokio::join!(publish(path, b"first"), publish(path, b"second"));
         let (expected, error) = match (first, second) {
-            (Ok(()), Err(error)) => (b"first secret".as_slice(), error),
-            (Err(error), Ok(())) => (b"second secret".as_slice(), error),
-            result => panic!("exactly one private publication must succeed: {result:?}"),
+            (Ok(()), Err(error)) => (b"first".as_slice(), error),
+            (Err(error), Ok(())) => (b"second".as_slice(), error),
+            result => panic!("exactly one publication must succeed: {result:?}"),
         };
         assert_eq!(
             error.downcast_ref::<std::io::Error>().unwrap().kind(),
             std::io::ErrorKind::AlreadyExists
         );
-        assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
+        assert_eq!(tokio::fs::read(path).await.unwrap(), expected);
+        expected
+    }
+
+    #[cfg(unix)]
+    async fn assert_owner_only(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = tokio::fs::metadata(path)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[tokio::test]
+    async fn atomic_write_private_new_preserves_the_concurrent_winner_and_cleans_staging() {
+        let root = make_temp_dir("shine-private-new").await;
+        let path = root.join("nested/secret.env");
+        let expected = assert_concurrent_winner(&path, atomic_write_private_new).await;
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                tokio::fs::metadata(&path)
-                    .await
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o600
-            );
-        }
+        assert_owner_only(&path).await;
         assert!(
             atomic_write_private_new(&path, b"replacement")
                 .await
@@ -337,20 +342,7 @@ mod tests {
     async fn atomic_write_new_never_replaces_a_concurrent_or_existing_file() {
         let root = std::env::temp_dir().join(format!("shine-new-write-{}", uuid::Uuid::new_v4()));
         let path = root.join("nested/output");
-        let (first, second) = tokio::join!(
-            atomic_write_new(&path, b"first"),
-            atomic_write_new(&path, b"second"),
-        );
-        let (expected, error) = match (first, second) {
-            (Ok(()), Err(error)) => (b"first".as_slice(), error),
-            (Err(error), Ok(())) => (b"second".as_slice(), error),
-            result => panic!("exactly one publication must succeed: {result:?}"),
-        };
-        assert_eq!(
-            error.downcast_ref::<std::io::Error>().unwrap().kind(),
-            std::io::ErrorKind::AlreadyExists
-        );
-        assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
+        let expected = assert_concurrent_winner(&path, atomic_write_new).await;
         assert!(atomic_write_new(&path, b"replacement").await.is_err());
         assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
         assert_eq!(
@@ -409,30 +401,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn atomic_write_replaces_existing_file() {
+    async fn atomic_write_creates_then_replaces_without_leaving_temp_files() {
         let dir = make_temp_dir("shine-persist").await;
         let path = dir.join("file.txt");
-        tokio::fs::write(&path, b"old").await.unwrap();
-
-        atomic_write(&path, b"new").await.unwrap();
-
-        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"new");
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn atomic_write_leaves_no_temp_file_behind_on_success() {
-        let dir = make_temp_dir("shine-persist").await;
-        let path = dir.join("file.txt");
-
-        atomic_write(&path, b"content").await.unwrap();
-
-        let mut entries = tokio::fs::read_dir(&dir).await.unwrap();
-        let mut names = Vec::new();
-        while let Some(entry) = entries.next_entry().await.unwrap() {
-            names.push(entry.file_name());
+        for contents in [b"old".as_slice(), b"new"] {
+            atomic_write(&path, contents).await.unwrap();
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), contents);
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         }
-        assert_eq!(names, vec![std::ffi::OsString::from("file.txt")]);
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -453,12 +429,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(tokio::fs::read(&path).await.unwrap(), b"TOKEN=secret\n");
-        let mode = tokio::fs::metadata(&path)
-            .await
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
+        assert_owner_only(&path).await;
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 

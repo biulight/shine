@@ -484,6 +484,16 @@ mod tests {
     use super::*;
     use crate::runtime::HostOperation;
 
+    async fn linux_plan(source: &InMemoryHost, target: &str) -> PresetAuthoringPlanReportV1 {
+        plan_preset_path(
+            source,
+            Path::new("/repo"),
+            Path::new(target),
+            RuntimePlatform::Linux,
+        )
+        .await
+    }
+
     fn proxy_source() -> InMemoryHost {
         let source = InMemoryHost::new();
         for (name, bytes) in [
@@ -570,22 +580,10 @@ mod tests {
                     .all(|op| matches!(op, HostOperation::Read(_)))
             );
             let json = serde_json::to_string(&supplied).unwrap();
-            let expected_source = if platform == RuntimePlatform::Windows {
-                "set_proxy.ps1"
-            } else {
-                "set_proxy.sh"
-            };
-            let excluded_source = if platform == RuntimePlatform::Windows {
-                "set_proxy.sh"
-            } else {
-                "set_proxy.ps1"
-            };
-            assert!(json.contains(expected_source), "{json}");
-            assert!(!json.contains(excluded_source), "{json}");
-            assert_eq!(
-                json.contains("Microsoft.PowerShell_profile.ps1"),
-                platform == RuntimePlatform::Windows
-            );
+            let windows = platform == RuntimePlatform::Windows;
+            assert_eq!(json.contains("set_proxy.ps1"), windows, "{json}");
+            assert_eq!(json.contains("set_proxy.sh"), !windows, "{json}");
+            assert_eq!(json.contains("Microsoft.PowerShell_profile.ps1"), windows);
             for report in [&blocked, &supplied] {
                 let json = serde_json::to_string(report).unwrap();
                 for forbidden in [
@@ -622,20 +620,8 @@ mod tests {
     #[tokio::test]
     async fn app_authoring_plan_is_deterministic_and_has_no_private_path() {
         let source = app_source();
-        let first = plan_preset_path(
-            &source,
-            Path::new("/repo"),
-            Path::new("app/demo"),
-            RuntimePlatform::Linux,
-        )
-        .await;
-        let second = plan_preset_path(
-            &source,
-            Path::new("/repo"),
-            Path::new("app/demo/shine.toml"),
-            RuntimePlatform::Linux,
-        )
-        .await;
+        let first = linux_plan(&source, "app/demo").await;
+        let second = linux_plan(&source, "app/demo/shine.toml").await;
 
         assert!(first.valid);
         assert!(first.ready);
@@ -673,13 +659,7 @@ mod tests {
                 .to_vec(),
         );
 
-        let report = plan_preset_path(
-            &source,
-            Path::new("/repo"),
-            Path::new("app/demo"),
-            RuntimePlatform::Linux,
-        )
-        .await;
+        let report = linux_plan(&source, "app/demo").await;
 
         assert!(!report.valid);
         assert_eq!(report.diagnostics[0].code, "preset_validation_failed");
@@ -690,13 +670,7 @@ mod tests {
 
     #[tokio::test]
     async fn repository_scope_is_rejected_without_planning_categories() {
-        let report = plan_preset_path(
-            &app_source(),
-            Path::new("/repo"),
-            Path::new("."),
-            RuntimePlatform::Linux,
-        )
-        .await;
+        let report = linux_plan(&app_source(), ".").await;
 
         assert!(!report.valid);
         assert_eq!(report.diagnostics[0].code, "single_category_required");
@@ -736,13 +710,7 @@ commands = ["sh"]
         source.put_file("/repo/sys/demo/managed.txt", b"managed\n".to_vec());
         source.put_file("/repo/sys/demo/install.sh", b"#!/bin/sh\n".to_vec());
 
-        let report = plan_preset_path(
-            &source,
-            Path::new("/repo"),
-            Path::new("sys/demo"),
-            RuntimePlatform::Linux,
-        )
-        .await;
+        let report = linux_plan(&source, "sys/demo").await;
 
         assert!(report.valid, "{:?}", report.diagnostics);
         assert_eq!(report.plans.len(), 2);

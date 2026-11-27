@@ -1026,31 +1026,29 @@ mod lifecycle_tests {
 
     #[test]
     fn generator_failure_diagnostics_allow_only_safe_fixed_details() {
-        assert_eq!(
-            generator_failure_detail(b"shine-generator-diagnostic-v1:http-status:403\n"),
-            Some("remote server returned HTTP 403".to_string())
-        );
-        assert_eq!(
-            generator_failure_detail(b"shine-generator-diagnostic-v1:request-timeout\n"),
-            Some("remote request timed out".to_string())
-        );
-        assert_eq!(
-            generator_failure_detail(b"shine-generator-diagnostic-v1:no-compatible-nodes\n"),
-            Some("response contained no compatible proxy nodes".to_string())
-        );
-        assert_eq!(
-            generator_failure_detail(b"shine-generator-diagnostic-v1:invalid-surge-cache\n"),
-            Some("local Surge cache has no valid proxies defined in [Proxy]".to_string())
-        );
-        assert_eq!(
-            generator_failure_detail(
-                b"shine-generator-diagnostic-v1:surge-configuration-response\n"
+        for (code, expected) in [
+            ("http-status:403", "remote server returned HTTP 403"),
+            ("request-timeout", "remote request timed out"),
+            (
+                "no-compatible-nodes",
+                "response contained no compatible proxy nodes",
             ),
-            Some(
-                "remote server returned a complete Surge configuration; use a URI/Base64 subscription URL"
-                    .to_string()
-            )
-        );
+            (
+                "invalid-surge-cache",
+                "local Surge cache has no valid proxies defined in [Proxy]",
+            ),
+            (
+                "surge-configuration-response",
+                "remote server returned a complete Surge configuration; use a URI/Base64 subscription URL",
+            ),
+        ] {
+            let stderr = format!("shine-generator-diagnostic-v1:{code}\n");
+            assert_eq!(
+                generator_failure_detail(stderr.as_bytes()).as_deref(),
+                Some(expected),
+                "{code}"
+            );
+        }
         assert_eq!(
             generator_failure_message(
                 "surge",
@@ -1063,21 +1061,18 @@ mod lifecycle_tests {
 
     #[test]
     fn generator_failure_diagnostics_reject_untrusted_stderr() {
-        assert_eq!(generator_failure_detail(b"provider token=secret\n"), None);
-        assert_eq!(
-            generator_failure_detail(
-                b"shine-generator-diagnostic-v1:http-status:403\ntoken=secret\n"
-            ),
-            None
-        );
-        assert_eq!(
-            generator_failure_detail(b"shine-generator-diagnostic-v1:http-status:999\n"),
-            None
-        );
-        assert_eq!(
-            generator_failure_detail(b"shine-generator-diagnostic-v1:token=secret\n"),
-            None
-        );
+        for stderr in [
+            "provider token=secret\n",
+            "shine-generator-diagnostic-v1:http-status:403\ntoken=secret\n",
+            "shine-generator-diagnostic-v1:http-status:999\n",
+            "shine-generator-diagnostic-v1:token=secret\n",
+        ] {
+            assert_eq!(
+                generator_failure_detail(stderr.as_bytes()),
+                None,
+                "{stderr:?}"
+            );
+        }
     }
 
     fn runtime() -> CoreRuntime<InMemoryHost> {
@@ -1154,17 +1149,13 @@ mod lifecycle_tests {
                 ..Default::default()
             }));
         let mut observer = NullObserver;
-        let success = runtime
-            .run_app_hooks(
-                AppHookRequest {
-                    categories: categories.clone(),
-                    changed: BTreeSet::from(["demo".to_string()]),
-                    phase: AppHookPhase::PostUpgrade,
-                    show_success: false,
-                },
-                &mut observer,
-            )
-            .await;
+        let request = AppHookRequest {
+            categories,
+            changed: BTreeSet::from(["demo".to_string()]),
+            phase: AppHookPhase::PostUpgrade,
+            show_success: false,
+        };
+        let success = runtime.run_app_hooks(request.clone(), &mut observer).await;
         assert_eq!(success.outcomes[0].status, LifecycleStatus::Changed);
         assert!(runtime.host().operations().iter().any(|operation| matches!(
             operation,
@@ -1179,17 +1170,7 @@ mod lifecycle_tests {
                 stderr: b"controller unavailable".to_vec(),
                 ..Default::default()
             }));
-        let failed = runtime
-            .run_app_hooks(
-                AppHookRequest {
-                    categories,
-                    changed: BTreeSet::from(["demo".to_string()]),
-                    phase: AppHookPhase::PostUpgrade,
-                    show_success: false,
-                },
-                &mut observer,
-            )
-            .await;
+        let failed = runtime.run_app_hooks(request, &mut observer).await;
         assert_eq!(failed.outcomes[0].status, LifecycleStatus::Failed);
         assert_eq!(failed.outcomes[0].diagnostic_codes, ["app_hook_failed"]);
     }
@@ -1226,29 +1207,18 @@ mod lifecycle_tests {
         let home_dir = runtime.context().home_dir.clone();
         let mut observer = NullObserver;
         let mut interaction = Interaction;
+        let request = AppLifecycleRequest {
+            target: Some("demo".into()),
+            dry_run: false,
+            force: false,
+        };
         let installed = runtime
-            .install_apps(
-                AppLifecycleRequest {
-                    target: Some("demo".into()),
-                    dry_run: false,
-                    force: false,
-                },
-                &mut observer,
-                &mut interaction,
-            )
+            .install_apps(request.clone(), &mut observer, &mut interaction)
             .await
             .unwrap();
         assert_eq!(installed.lifecycle.summary().changed, 1);
         let unchanged = runtime
-            .install_apps(
-                AppLifecycleRequest {
-                    target: Some("demo".into()),
-                    dry_run: false,
-                    force: false,
-                },
-                &mut observer,
-                &mut interaction,
-            )
+            .install_apps(request, &mut observer, &mut interaction)
             .await
             .unwrap();
         assert_eq!(unchanged.lifecycle.summary().unchanged, 1);

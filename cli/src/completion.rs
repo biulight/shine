@@ -654,17 +654,22 @@ mod tests {
         std::env::temp_dir().join(format!("shine-completion-{name}-{}", uuid::Uuid::new_v4()))
     }
 
-    fn complete_values(args: &[&str], arg_index: usize) -> BTreeSet<String> {
-        clap_complete::engine::complete(
+    fn candidate_values(candidates: Vec<CompletionCandidate>) -> BTreeSet<String> {
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn complete_values(args: &[&str]) -> BTreeSet<String> {
+        let candidates = clap_complete::engine::complete(
             &mut command(),
             args.iter().map(OsString::from).collect(),
-            arg_index,
+            args.len() - 1,
             None,
         )
-        .unwrap()
-        .into_iter()
-        .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
-        .collect()
+        .unwrap();
+        candidate_values(candidates)
     }
 
     #[test]
@@ -674,7 +679,7 @@ mod tests {
             vec!["shine", "app", "uninstall", "--"],
             vec!["shine", "shell", "uninstall", "--"],
         ] {
-            let values = complete_values(&args, args.len() - 1);
+            let values = complete_values(&args);
             assert!(values.contains("--dry-run"), "{values:?}");
             assert!(!values.contains("--purge"), "{values:?}");
         }
@@ -701,30 +706,26 @@ mod tests {
         assert!(shell.contains("proxy"), "shell candidates: {shell:?}");
         assert!(app.contains("starship"), "app candidates: {app:?}");
         assert!(sys.contains("split-dns"), "sys candidates: {sys:?}");
-        let shell_info = shell_info_candidates()
-            .into_iter()
-            .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
-            .collect::<BTreeSet<_>>();
+        let shell_info = candidate_values(shell_info_candidates());
         assert!(shell_info.contains("setproxy"));
         assert!(shell_info.contains("proxy/setproxy"));
-        let build = complete_values(&["shine", "app", "artifact", "apply", ""], 4);
+        let build = complete_values(&["shine", "app", "artifact", "apply", ""]);
         assert_eq!(build.contains("surge"), cfg!(target_os = "macos"));
         assert!(!build.contains("starship"));
         assert_eq!(
-            complete_values(&["shine", "app", "refresh", ""], 3).contains("surge"),
+            complete_values(&["shine", "app", "refresh", ""]).contains("surge"),
             cfg!(target_os = "macos")
         );
-        assert!(complete_values(&["shine", "info", ""], 2).contains("sys/split-dns"));
-        assert!(complete_values(&["shine", "info", ""], 2).contains("app/starship"));
-        assert!(complete_values(&["shine", "install", ""], 2).contains("shell/proxy"));
+        let info = complete_values(&["shine", "info", ""]);
+        assert!(info.contains("sys/split-dns"));
+        assert!(info.contains("app/starship"));
+        let install = complete_values(&["shine", "install", ""]);
+        assert!(install.contains("shell/proxy"));
+        assert!(install.contains("shell/utils/shine-env-export"));
         assert!(
-            complete_values(&["shine", "install", ""], 2).contains("shell/utils/shine-env-export")
+            complete_values(&["shine", "shell", "install", ""]).contains("utils/shine-env-export")
         );
-        assert!(
-            complete_values(&["shine", "shell", "install", ""], 3)
-                .contains("utils/shine-env-export")
-        );
-        let preset_copy = complete_values(&["shine", "preset", "copy", ""], 3);
+        let preset_copy = complete_values(&["shine", "preset", "copy", ""]);
         assert!(preset_copy.contains("app/surge"));
         assert!(preset_copy.contains("shell/proxy"));
         assert!(preset_copy.contains("sys/macos"));
@@ -742,47 +743,46 @@ mod tests {
     fn config_dir_candidates_read_external_presets_without_creating_config() {
         let _guard = env_lock();
         let dir = temp_dir("config-dir");
-        std::fs::create_dir_all(dir.join("presets/shell/.GiT")).unwrap();
-        std::fs::create_dir_all(dir.join("presets/shell/custom-shell")).unwrap();
-        std::fs::create_dir_all(dir.join("presets/app/custom-app")).unwrap();
-        std::fs::create_dir_all(dir.join("presets/sys/custom-os")).unwrap();
-        std::fs::write(
-            dir.join("presets/sys/custom-os/shine.toml"),
-            "[[items]]\nid = \"custom-sys\"\nlabel = \"Custom sys\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("presets/shell/custom-shell/shine.toml"),
-            "[[files]]\nsource = \"tool.sh\"\ntarget = \"custom-tool\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("presets/shell/custom-shell/tool.sh"),
-            "#!/bin/sh\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("tasks.toml"),
-            "[tasks.ship]\ncommand = [\"cargo\", \"publish\"]\n",
-        )
-        .unwrap();
+        for category in [
+            "shell/.GiT",
+            "shell/custom-shell",
+            "app/custom-app",
+            "sys/custom-os",
+        ] {
+            std::fs::create_dir_all(dir.join("presets").join(category)).unwrap();
+        }
+        for (file, contents) in [
+            (
+                "presets/sys/custom-os/shine.toml",
+                "[[items]]\nid = \"custom-sys\"\nlabel = \"Custom sys\"\n",
+            ),
+            (
+                "presets/shell/custom-shell/shine.toml",
+                "[[files]]\nsource = \"tool.sh\"\ntarget = \"custom-tool\"\n",
+            ),
+            ("presets/shell/custom-shell/tool.sh", "#!/bin/sh\n"),
+            (
+                "tasks.toml",
+                "[tasks.ship]\ncommand = [\"cargo\", \"publish\"]\n",
+            ),
+        ] {
+            std::fs::write(dir.join(file), contents).unwrap();
+        }
         unsafe {
             std::env::set_var("SHINE_CONFIG_DIR", &dir);
             std::env::remove_var("SHINE_PRESETS");
         }
 
-        assert!(!category_names("shell").contains(".GiT"));
-        assert!(category_names("shell").contains("custom-shell"));
+        let shell = category_names("shell");
+        assert!(!shell.contains(".GiT"));
+        assert!(shell.contains("custom-shell"));
         assert!(category_names("app").contains("custom-app"));
         assert!(sys_item_names().contains("custom-sys"));
-        let shell_info = shell_info_candidates()
-            .into_iter()
-            .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
-            .collect::<BTreeSet<_>>();
+        let shell_info = candidate_values(shell_info_candidates());
         assert!(shell_info.contains("custom-tool"));
         assert!(shell_info.contains("custom-shell/custom-tool"));
-        assert!(complete_values(&["shine", "run", ""], 2).contains("ship"));
-        let sys_apply = complete_values(&["shine", "sys", "apply", ""], 3);
+        assert!(complete_values(&["shine", "run", ""]).contains("ship"));
+        let sys_apply = complete_values(&["shine", "sys", "apply", ""]);
         assert!(sys_apply.contains("custom-sys"));
         assert!(!sys_apply.contains("split-dns"));
         assert!(
@@ -848,7 +848,7 @@ mod tests {
                 vec!["base-item", "extra-item"],
             ),
         ] {
-            let values = complete_values(&args, args.len() - 1);
+            let values = complete_values(&args);
             for value in expected {
                 assert!(values.contains(value), "{args:?}: {values:?}");
             }
@@ -869,6 +869,17 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    fn write_overlay_config(config_dir: &Path, overlay: &Path) {
+        std::fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                "presets_overlay_dir = \"{}\"\n",
+                overlay.to_string_lossy().replace('\\', "\\\\")
+            ),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn overlay_candidates_extend_embedded_presets() {
         let _guard = env_lock();
@@ -876,14 +887,7 @@ mod tests {
         let overlay = temp_dir("overlay");
         std::fs::create_dir_all(home.join(".shine")).unwrap();
         std::fs::create_dir_all(overlay.join("shell/personal")).unwrap();
-        std::fs::write(
-            home.join(".shine/config.toml"),
-            format!(
-                "presets_overlay_dir = \"{}\"\n",
-                overlay.to_string_lossy().replace('\\', "\\\\")
-            ),
-        )
-        .unwrap();
+        write_overlay_config(&home.join(".shine"), &overlay);
 
         unsafe {
             std::env::set_var("HOME", &home);
@@ -919,19 +923,8 @@ mod tests {
             )
             .unwrap();
         }
-        for (config_dir, overlay_dir) in [
-            (home.join(".shine"), &overlay),
-            (other.clone(), &other_overlay),
-        ] {
-            std::fs::write(
-                config_dir.join("config.toml"),
-                format!(
-                    "presets_overlay_dir = \"{}\"\n",
-                    overlay_dir.to_string_lossy().replace('\\', "\\\\")
-                ),
-            )
-            .unwrap();
-        }
+        write_overlay_config(&home.join(".shine"), &overlay);
+        write_overlay_config(&other, &other_overlay);
         unsafe {
             std::env::set_var("HOME", &home);
             std::env::set_var("SHINE_CONFIG_DIR", &other);

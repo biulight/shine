@@ -24,6 +24,12 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+function writeYamlFixture(name: string, contents: string, dir = tempDir()): string {
+  const file = join(dir, name);
+  writeFileSync(file, contents);
+  return file;
+}
+
 function profilesFixture(file = "merge.yaml"): string {
   return `current: remote-id
 items:
@@ -45,8 +51,7 @@ items:
 describe("resolveBoundFiles", () => {
   test("resolves every enhancement bound to the active subscription", () => {
     const dir = tempDir();
-    const profiles = join(dir, "profiles.yaml");
-    writeFileSync(profiles, profilesFixture());
+    const profiles = writeYamlFixture("profiles.yaml", profilesFixture(), dir);
 
     expect(resolveBoundFiles(profiles)).toEqual({
       merge: join(dir, "profiles", "merge.yaml"),
@@ -57,25 +62,19 @@ describe("resolveBoundFiles", () => {
   });
 
   test("does not fall back to global enhancements when a binding is absent", () => {
-    const dir = tempDir();
-    const profiles = join(dir, "profiles.yaml");
-    writeFileSync(profiles, profilesFixture().replace("      rules: rules-id\n", ""));
+    const profiles = writeYamlFixture("profiles.yaml", profilesFixture().replace("      rules: rules-id\n", ""));
     expect(resolveBoundFiles(profiles)).toBeNull();
   });
 
   test("rejects a bound filename outside the profiles directory", () => {
-    const dir = tempDir();
-    const profiles = join(dir, "profiles.yaml");
-    writeFileSync(profiles, profilesFixture("../profiles.yaml"));
+    const profiles = writeYamlFixture("profiles.yaml", profilesFixture("../profiles.yaml"));
     expect(resolveBoundFiles(profiles)).toBeNull();
   });
 });
 
 test("renderPayload splits the composite source into CVR 2.x editor documents", () => {
-  const dir = tempDir();
-  const source = join(dir, "merge.yaml");
-  writeFileSync(
-    source,
+  const source = writeYamlFixture(
+    "merge.yaml",
     `proxies:
   - { name: LAN-SOCKS, type: socks5, server: 127.0.0.1, port: 1080 }
 proxy-groups:
@@ -102,10 +101,8 @@ prepend-rules:
 });
 
 test("renderPayload derives arbitrary provider names from the composite source", () => {
-  const dir = tempDir();
-  const source = join(dir, "merge.yaml");
-  writeFileSync(
-    source,
+  const source = writeYamlFixture(
+    "merge.yaml",
     `rule-providers:
   renamed-provider: { type: file, path: ./renamed.list }
   office / lab: { type: http, url: https://example.test/office.list }
@@ -116,10 +113,8 @@ test("renderPayload derives arbitrary provider names from the composite source",
 });
 
 test("HTTP mode remains remote and does not reference built-in local files", () => {
-  const dir = tempDir();
-  const source = join(dir, "merge.yaml");
-  writeFileSync(
-    source,
+  const source = writeYamlFixture(
+    "merge.yaml",
     `rule-providers:
   lan:
     type: http
@@ -148,22 +143,17 @@ test("HTTP mode remains remote and does not reference built-in local files", () 
 
 test("renderPayload treats missing, null, or empty rule-providers as empty", () => {
   const dir = tempDir();
-  const missing = join(dir, "missing.yaml");
-  const nullMapping = join(dir, "null.yaml");
-  const emptyMapping = join(dir, "empty.yaml");
-  writeFileSync(missing, "dns: {}\n");
-  writeFileSync(nullMapping, "rule-providers: null\n");
-  writeFileSync(emptyMapping, "rule-providers: {}\n");
-
-  expect(renderPayload(missing).providers).toEqual([]);
-  expect(renderPayload(nullMapping).providers).toEqual([]);
-  expect(renderPayload(emptyMapping).providers).toEqual([]);
+  for (const [file, contents] of [
+    ["missing.yaml", "dns: {}\n"],
+    ["null.yaml", "rule-providers: null\n"],
+    ["empty.yaml", "rule-providers: {}\n"],
+  ] as const) {
+    expect(renderPayload(writeYamlFixture(file, contents, dir)).providers).toEqual([]);
+  }
 });
 
 test.each(["[]", "provider-name"])("renderPayload rejects non-mapping rule-providers: %s", (value) => {
-  const dir = tempDir();
-  const source = join(dir, "merge.yaml");
-  writeFileSync(source, `rule-providers: ${value}\n`);
+  const source = writeYamlFixture("merge.yaml", `rule-providers: ${value}\n`);
 
   expect(() => renderPayload(source)).toThrow("'rule-providers' must be a YAML mapping");
 });
@@ -226,7 +216,7 @@ test("closeConnections reports a controller rejection", async () => {
   expect(result).toBe("failed");
 });
 
-test("installPayload is idempotent and marks every managed copy", () => {
+function bindingFixture(merge: string) {
   const dir = tempDir();
   const targetDir = join(dir, "profiles");
   mkdirSync(targetDir);
@@ -234,7 +224,11 @@ test("installPayload is idempotent and marks every managed copy", () => {
     ["merge", "rules", "proxies", "groups"].map((kind) => [kind, join(targetDir, `${kind}.yaml`)]),
   ) as BoundFiles;
   const editor = "prepend: []\nappend: []\ndelete: []\n";
-  const payload = { merge: "{}\n", rules: editor, proxies: editor, groups: editor };
+  return { targets, payload: { merge, rules: editor, proxies: editor, groups: editor } };
+}
+
+test("installPayload is idempotent and marks every managed copy", () => {
+  const { targets, payload } = bindingFixture("{}\n");
 
   expect(installPayload(payload, targets)).toBe("changed");
   for (const [kind, target] of Object.entries(targets)) {
@@ -248,14 +242,7 @@ test("installPayload is idempotent and marks every managed copy", () => {
 });
 
 test("syncPayload refreshes current providers and closes existing connections", async () => {
-  const dir = tempDir();
-  const targetDir = join(dir, "profiles");
-  mkdirSync(targetDir);
-  const targets = Object.fromEntries(
-    ["merge", "rules", "proxies", "groups"].map((kind) => [kind, join(targetDir, `${kind}.yaml`)]),
-  ) as BoundFiles;
-  const editor = "prepend: []\nappend: []\ndelete: []\n";
-  const payload = { merge: "rule-providers: {}\n", rules: editor, proxies: editor, groups: editor };
+  const { targets, payload } = bindingFixture("rule-providers: {}\n");
   expect(installPayload(payload, targets)).toBe("changed");
   const requests: string[] = [];
 
@@ -279,18 +266,12 @@ test("syncPayload refreshes current providers and closes existing connections", 
 });
 
 test("syncPayload writes changed bindings without contacting unloaded providers", async () => {
-  const dir = tempDir();
-  const targetDir = join(dir, "profiles");
-  mkdirSync(targetDir);
-  const targets = Object.fromEntries(
-    ["merge", "rules", "proxies", "groups"].map((kind) => [kind, join(targetDir, `${kind}.yaml`)]),
-  ) as BoundFiles;
-  const editor = "prepend: []\nappend: []\ndelete: []\n";
+  const { targets, payload } = bindingFixture("rule-providers: {}\n");
   let requests = 0;
 
   expect(
     await syncPayload(
-      { merge: "rule-providers: {}\n", rules: editor, proxies: editor, groups: editor },
+      payload,
       ["new-provider"],
       targets,
       async () => {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, onTestFinished, test } from "bun:test";
 import { link, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -12,7 +12,6 @@ import {
   type ImageFailure,
 } from "./image-tools.ts";
 
-const temporaryDirectories: string[] = [];
 const PNG_1X1 = Uint8Array.from(
   Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -22,20 +21,9 @@ const PNG_1X1 = Uint8Array.from(
 
 async function temporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "shine-image-tools-"));
-  temporaryDirectories.push(directory);
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
-
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories.splice(0).map((directory) =>
-      rm(directory, {
-        recursive: true,
-        force: true,
-      }),
-    ),
-  );
-});
 
 describe("image tool options", () => {
   test("uses configured defaults and lets command arguments override them", () => {
@@ -115,6 +103,15 @@ describe("input discovery and output planning", () => {
   });
 });
 
+async function writeImagePair(directory: string, jpegName: string) {
+  const input = join(directory, "photo.png");
+  const other = join(directory, jpegName);
+  const original = await new Bun.Image(PNG_1X1).jpeg({ quality: 95 }).bytes();
+  await writeFile(input, PNG_1X1);
+  await writeFile(other, original);
+  return { input, other, original };
+}
+
 describe("image processing", () => {
   test("keeps same-format skips for case-aliased source names", async () => {
     const directory = await temporaryDirectory();
@@ -135,11 +132,7 @@ describe("image processing", () => {
 
   test("preserves every input when a forced conversion targets a case alias", async () => {
     const directory = await temporaryDirectory();
-    const input = join(directory, "photo.png");
-    const other = join(directory, "PHOTO.JPG");
-    const original = await new Bun.Image(PNG_1X1).jpeg({ quality: 95 }).bytes();
-    await writeFile(input, PNG_1X1);
-    await writeFile(other, original);
+    const { input, other, original } = await writeImagePair(directory, "PHOTO.JPG");
     expect(await runImageTool("convert", ["--format", "jpg", "--quality", "10", "--force", input, other])).toBe(1);
     expect(await readFile(input)).toEqual(Buffer.from(PNG_1X1));
     expect(await readFile(other)).toEqual(Buffer.from(original));
@@ -159,11 +152,7 @@ describe("image processing", () => {
 
   test("preserves inputs when output reaches a hard-link alias", async () => {
     const directory = await temporaryDirectory();
-    const input = join(directory, "photo.png");
-    const other = join(directory, "original.jpg");
-    const original = await new Bun.Image(PNG_1X1).jpeg({ quality: 95 }).bytes();
-    await writeFile(input, PNG_1X1);
-    await writeFile(other, original);
+    const { input, other, original } = await writeImagePair(directory, "original.jpg");
     await link(other, join(directory, "photo.jpg"));
     expect(await runImageTool("convert", ["--format", "jpg", "--force", input, other])).toBe(1);
     expect(await readFile(join(directory, "photo.jpg"))).toEqual(Buffer.from(original));
@@ -173,13 +162,9 @@ describe("image processing", () => {
   test.skipIf(process.platform === "win32")("rejects outputs through a directory alias of an input", async () => {
     const directory = await temporaryDirectory();
     const alias = `${directory}-alias`;
-    temporaryDirectories.push(alias);
+    onTestFinished(() => rm(alias, { force: true }));
     await symlink(directory, alias);
-    const input = join(directory, "photo.png");
-    const other = join(directory, "photo.jpg");
-    const original = await new Bun.Image(PNG_1X1).jpeg({ quality: 95 }).bytes();
-    await writeFile(input, PNG_1X1);
-    await writeFile(other, original);
+    const { input, other, original } = await writeImagePair(directory, "photo.jpg");
     expect(await runImageTool("convert", ["--format", "jpg", "--output-dir", alias, "--force", input, other])).toBe(1);
     expect(await readFile(other)).toEqual(Buffer.from(original));
   });
@@ -190,40 +175,16 @@ describe("image processing", () => {
     const input = join(directory, "pixel.png");
     await writeFile(input, PNG_1X1);
 
-    expect(
-      await runImageTool("convert", [
-        "--format",
-        "webp",
-        "--output-dir",
-        output,
-        input,
-      ]),
-    ).toBe(0);
+    const options = ["--format", "webp", "--output-dir", output];
+    expect(await runImageTool("convert", [...options, input])).toBe(0);
     const converted = join(output, "pixel.webp");
     expect((await new Bun.Image(converted).metadata()).format).toBe("webp");
     const firstBytes = await readFile(converted);
 
-    expect(
-      await runImageTool("convert", [
-        "--format",
-        "webp",
-        "--output-dir",
-        output,
-        input,
-      ]),
-    ).toBe(1);
+    expect(await runImageTool("convert", [...options, input])).toBe(1);
     expect(await readFile(converted)).toEqual(firstBytes);
 
-    expect(
-      await runImageTool("convert", [
-        "--format",
-        "webp",
-        "--output-dir",
-        output,
-        "--force",
-        input,
-      ]),
-    ).toBe(0);
+    expect(await runImageTool("convert", [...options, "--force", input])).toBe(0);
   });
 
   test("skips resizing an image already inside the configured bounds", async () => {

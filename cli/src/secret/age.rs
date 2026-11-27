@@ -399,6 +399,11 @@ async fn encrypt_age(plaintext: &[u8], recipients: &[&str]) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
+    const LEGACY_RECIPIENT: &str =
+        "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
+    const TAGGED_RECIPIENT: &str =
+        "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
+
     #[tokio::test]
     async fn empty_secret_fails_before_external_commands() {
         let err = decrypt_base64_age_secret("", &[PathBuf::from("/does/not/matter")])
@@ -427,15 +432,13 @@ mod tests {
 
     #[test]
     fn converts_secure_enclave_recipient_to_native_tag() {
-        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
-        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
-        let converted = secure_enclave_recipient_to_tag(legacy).unwrap();
-        assert_eq!(converted, tagged);
+        let converted = secure_enclave_recipient_to_tag(LEGACY_RECIPIENT).unwrap();
+        assert_eq!(converted, TAGGED_RECIPIENT);
         assert_eq!(
-            secure_enclave_recipient_to_tag(&legacy.to_uppercase()).unwrap(),
-            tagged
+            secure_enclave_recipient_to_tag(&LEGACY_RECIPIENT.to_uppercase()).unwrap(),
+            TAGGED_RECIPIENT
         );
-        let (_, legacy_data) = bech32::decode(legacy).unwrap();
+        let (_, legacy_data) = bech32::decode(LEGACY_RECIPIENT).unwrap();
         let (_, tagged_data) = bech32::decode(&converted).unwrap();
         assert_eq!(legacy_data, tagged_data);
     }
@@ -454,15 +457,13 @@ mod tests {
 
     #[test]
     fn rejects_invalid_secure_enclave_recipient() {
-        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
-        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
-        let mut bad_checksum = legacy.to_string();
+        let mut bad_checksum = LEGACY_RECIPIENT.to_string();
         bad_checksum.pop();
         bad_checksum.push('q');
 
         assert!(secure_enclave_recipient_to_tag("age1se1invalid").is_err());
         assert!(secure_enclave_recipient_to_tag(&bad_checksum).is_err());
-        assert!(secure_enclave_recipient_to_tag(tagged).is_err());
+        assert!(secure_enclave_recipient_to_tag(TAGGED_RECIPIENT).is_err());
         let wrong_variant =
             bech32::encode::<bech32::Bech32m>(Hrp::parse("age1se").unwrap(), &[2; 33]).unwrap();
         assert!(secure_enclave_recipient_to_tag(&wrong_variant).is_err());
@@ -474,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_known_recipient_plugins_have_actionable_errors() {
+    fn missing_recipient_and_identity_plugins_have_actionable_errors() {
         let _guard = crate::test_support::env_lock();
         // SAFETY: env_lock serializes process-environment mutation tests.
         unsafe {
@@ -489,18 +490,6 @@ mod tests {
 
         assert!(se.to_string().contains("shine state migrate --dry-run"));
         assert!(phone.to_string().contains("every computer that seals"));
-    }
-
-    #[test]
-    fn missing_legacy_identity_plugin_has_migration_guidance() {
-        let _guard = crate::test_support::env_lock();
-        // SAFETY: env_lock serializes process-environment mutation tests.
-        unsafe {
-            std::env::set_var(
-                "PATH",
-                std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()),
-            )
-        };
 
         let err = ensure_identity_plugin("age-plugin-se").unwrap_err();
 
@@ -530,50 +519,39 @@ mod tests {
 
     #[test]
     fn phone_terminal_output_is_explicit_or_required_by_qr() {
-        assert_eq!(phone_terminal_output_requested(None, None), !cfg!(windows));
-        assert_eq!(
-            phone_terminal_output_requested(Some(OsStr::new("auto")), None),
-            !cfg!(windows)
-        );
-        assert!(!phone_terminal_output_requested(
-            Some(OsStr::new("adb")),
-            Some(OsStr::new("0")),
-        ));
-        assert!(phone_terminal_output_requested(
-            Some(OsStr::new("qr")),
-            None,
-        ));
-        assert!(phone_terminal_output_requested(
-            Some(OsStr::new("wifi")),
-            Some(OsStr::new("true")),
-        ));
+        for (transport, messages, expected) in [
+            (None, None, !cfg!(windows)),
+            (Some("auto"), None, !cfg!(windows)),
+            (Some("adb"), Some("0"), false),
+            (Some("qr"), None, true),
+            (Some("wifi"), Some("true"), true),
+        ] {
+            assert_eq!(
+                phone_terminal_output_requested(
+                    transport.map(OsStr::new),
+                    messages.map(OsStr::new)
+                ),
+                expected,
+                "transport={transport:?}, messages={messages:?}"
+            );
+        }
     }
 
     #[tokio::test]
-    async fn empty_recipients_fails_before_external_commands() {
-        let err = encrypt_age_secret_to_base64(b"secret", &[])
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("recipients is empty"), "{err:#}");
-    }
-
-    #[tokio::test]
-    async fn blank_recipient_fails_before_external_commands() {
-        let err = encrypt_age_secret_to_base64(b"secret", &["  ".to_string()])
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("recipient is empty"), "{err:#}");
-    }
-
-    #[tokio::test]
-    async fn whitespace_in_recipient_fails_before_external_commands() {
-        let err = encrypt_age_secret_to_base64(b"secret", &["age1 abc".to_string()])
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("must not contain whitespace"),
-            "{err:#}"
-        );
+    async fn rejects_invalid_recipients_before_external_commands() {
+        for (recipients, expected) in [
+            (vec![], "recipients is empty"),
+            (vec!["  ".to_string()], "recipient is empty"),
+            (vec!["age1 abc".to_string()], "must not contain whitespace"),
+        ] {
+            let err = encrypt_age_secret_to_base64(b"secret", &recipients)
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{recipients:?}: {err:#}"
+            );
+        }
     }
 
     #[tokio::test]

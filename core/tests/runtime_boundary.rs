@@ -1,6 +1,6 @@
 use shine_core::runtime::{
     CoreRuntime, InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext, RuntimePlatform,
-    validate_preset_path,
+    ShellType, validate_preset_path,
 };
 use std::path::Path;
 
@@ -64,30 +64,34 @@ fn cli_domain_adapters_do_not_retain_legacy_mutation_or_metadata_fallbacks() {
         }
     }
 
-    let bin_links = std::fs::read_to_string(repository_root.join("cli/src/bin_links.rs")).unwrap();
-    assert!(!bin_links.contains("launcher::*"));
-    for forbidden in [
-        "link_executables_with_names",
-        "unlink_managed_command",
-        "unlink_managed",
-    ] {
-        assert!(
-            !bin_links.contains(forbidden),
-            "CLI Shell adapter re-exports mutation fallback `{forbidden}`"
-        );
-    }
+    assert_source_excludes(
+        &repository_root.join("cli/src/bin_links.rs"),
+        &[
+            "launcher::*",
+            "link_executables_with_names",
+            "unlink_managed_command",
+            "unlink_managed",
+        ],
+    );
+    assert_source_excludes(
+        &repository_root.join("cli/src/install_core/file_ops.rs"),
+        &[
+            "install_bytes_admin",
+            "uninstall_entry_admin",
+            " install_bytes,",
+            " uninstall_entry,",
+        ],
+    );
+}
 
-    let app_file_ops =
-        std::fs::read_to_string(repository_root.join("cli/src/install_core/file_ops.rs")).unwrap();
-    for forbidden in [
-        "install_bytes_admin",
-        "uninstall_entry_admin",
-        " install_bytes,",
-        " uninstall_entry,",
-    ] {
+fn assert_source_excludes(path: &Path, forbidden: &[&str]) {
+    let source =
+        std::fs::read_to_string(path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+    for &pattern in forbidden {
         assert!(
-            !app_file_ops.contains(forbidden),
-            "CLI App mutation fallback remains: `{forbidden}`"
+            !source.contains(pattern),
+            "{} contains forbidden `{pattern}`",
+            path.display()
         );
     }
 }
@@ -96,23 +100,12 @@ fn cli_domain_adapters_do_not_retain_legacy_mutation_or_metadata_fallbacks() {
 fn core_domain_sources_do_not_bypass_captured_hosts() {
     let core_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repository_root = core_root.parent().unwrap();
-    let cli_assembly =
-        std::fs::read_to_string(repository_root.join("cli/src/core_runtime.rs")).unwrap();
-    for forbidden in ["fn collect_tree", "std::fs::read_dir", "std::fs::read("] {
-        assert!(
-            !cli_assembly.contains(forbidden),
-            "CLI duplicates host-backed preset discovery with `{forbidden}`"
-        );
-    }
-
-    let bootstrap = std::fs::read_to_string(core_root.join("src/runtime/bootstrap.rs")).unwrap();
-    for forbidden in ["std::fs::", "std::env::"] {
-        assert!(
-            !bootstrap.contains(forbidden),
-            "shared runtime bootstrap bypasses its host with `{forbidden}`"
-        );
-    }
-
+    let runtime = core_root.join("src/runtime");
+    assert_source_excludes(
+        &repository_root.join("cli/src/core_runtime.rs"),
+        &["fn collect_tree", "std::fs::read_dir", "std::fs::read("],
+    );
+    assert_source_excludes(&runtime.join("bootstrap.rs"), &["std::fs::", "std::env::"]);
     for module in [
         "validation.rs",
         "validation/source.rs",
@@ -120,43 +113,39 @@ fn core_domain_sources_do_not_bypass_captured_hosts() {
         "validation/destinations.rs",
         "validation/sys.rs",
     ] {
-        let validation =
-            std::fs::read_to_string(core_root.join("src/runtime").join(module)).unwrap();
-        for forbidden in ["std::fs::", "std::env::current_dir"] {
-            assert!(
-                !validation.contains(forbidden),
-                "Core {module} bypasses its host with `{forbidden}`"
-            );
-        }
+        assert_source_excludes(
+            &runtime.join(module),
+            &["std::fs::", "std::env::current_dir"],
+        );
     }
-
-    let sys_bootstrap =
-        std::fs::read_to_string(core_root.join("src/runtime/sys_bootstrap.rs")).unwrap();
-    assert!(
-        !sys_bootstrap.contains("script.is_file()"),
-        "Sys preflight reads the ambient preset tree"
+    assert_source_excludes(&runtime.join("sys_bootstrap.rs"), &["script.is_file()"]);
+    assert_source_excludes(
+        &runtime.join("mod.rs"),
+        &[
+            "link_executables_with_names",
+            "link_is_current,",
+            "unlink_managed,",
+            "unlink_managed_command,",
+        ],
     );
+    assert_source_excludes(
+        &core_root.join("src/install/mod.rs"),
+        &[" install_bytes,", " uninstall_entry,"],
+    );
+}
 
-    let exports = std::fs::read_to_string(core_root.join("src/runtime/mod.rs")).unwrap();
-    for forbidden in [
-        "link_executables_with_names",
-        "link_is_current,",
-        "unlink_managed,",
-        "unlink_managed_command,",
-    ] {
-        assert!(
-            !exports.contains(forbidden),
-            "Core exports a no-host Shell mutation fallback: `{forbidden}`"
-        );
-    }
-
-    let install_exports = std::fs::read_to_string(core_root.join("src/install/mod.rs")).unwrap();
-    for forbidden in [" install_bytes,", " uninstall_entry,"] {
-        assert!(
-            !install_exports.contains(forbidden),
-            "Core exports a no-host App mutation fallback: `{forbidden}`"
-        );
-    }
+fn bash_context(name: &str) -> RuntimeContext {
+    let root = std::env::temp_dir().join(name);
+    let mut context = RuntimeContext::isolated(
+        root.join("home"),
+        root.join("state"),
+        root.join("presets"),
+        root.join("bin"),
+        RuntimePlatform::Linux,
+    );
+    // Match the simulated platform and .sh fixtures regardless of the host OS.
+    context.shell = ShellType::Bash;
+    context
 }
 
 #[tokio::test]
@@ -239,15 +228,7 @@ async fn security_planners_require_only_observation_capabilities() {
         runtime.plan_sys_operation_recovery().await.unwrap_err();
     }
     let host = InMemoryHost::new();
-    let root = std::env::temp_dir().join("shine-planner-boundary");
-    let mut context = RuntimeContext::isolated(
-        root.join("home"),
-        root.join("state"),
-        root.join("presets"),
-        root.join("bin"),
-        RuntimePlatform::Linux,
-    );
-    context.shell = ShellType::Bash;
+    let context = bash_context("shine-planner-boundary");
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
         .file("app/demo/shine.toml", b"metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec())
         .file("app/demo/config.toml", b"static data".to_vec())
@@ -282,7 +263,7 @@ install = { kind = 'script', path = 'install.sh' }
 #[tokio::test]
 async fn core_only_harness_uses_explicit_inputs_and_virtual_state() {
     use shine_core::frontend::{FrontendService, InspectionOperationV1, InspectionStateV1};
-    use shine_core::runtime::{HostOperation, InspectionFileStatus, ShellType};
+    use shine_core::runtime::{HostOperation, InspectionFileStatus};
 
     let host = InMemoryHost::new();
     let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
@@ -292,16 +273,7 @@ async fn core_only_harness_uses_explicit_inputs_and_virtual_state() {
         )
         .file("shell/tools/tool.sh", b"#!/bin/sh\n".to_vec())
         .build();
-    let root = std::env::temp_dir().join("shine-runtime-boundary-harness");
-    let mut context = RuntimeContext::isolated(
-        root.join("home"),
-        root.join("state"),
-        root.join("presets"),
-        root.join("bin"),
-        RuntimePlatform::Linux,
-    );
-    // Match the simulated platform and .sh fixture, regardless of the host OS.
-    context.shell = ShellType::Bash;
+    let context = bash_context("shine-runtime-boundary-harness");
     let runtime = CoreRuntime::new(host.clone(), context, snapshot);
 
     assert!(runtime.validate().valid);
