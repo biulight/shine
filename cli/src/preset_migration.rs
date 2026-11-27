@@ -275,7 +275,7 @@ mod tests {
             .overlay_root(root)
             .overlay_file(
                 "app/demo/shine.toml",
-                b"dest = '~/.demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+                LEGACY_APP_METADATA.to_vec(),
             )
             .overlay_file("app/demo/config.toml", Vec::new())
             .build();
@@ -362,43 +362,32 @@ mod tests {
     }
 
     #[test]
-    fn missing_optional_capability_statements_need_no_migration() {
-        let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::External)
-            .base_root("/presets")
-            .file(
-                "shell/chrome/shine.toml",
-                b"[[files]]\nsource = 'open.sh'\ntarget = 'open-chrome'\n".to_vec(),
-            )
-            .file("shell/chrome/open.sh", Vec::new())
-            .build();
-        let plan = plan_preset_migration(&snapshot, "active", None, None);
-
-        let summary = compatibility_text(&plan);
-        let detailed = migration_text(&plan, &snapshot, true);
-
-        assert!(summary.is_empty());
-        assert!(!compatibility_required(&plan));
-        assert!(detailed.contains("0 blockers · 0 automatic changes · 0 advisories"));
-    }
-
-    #[test]
-    fn shell_without_capability_tables_needs_no_remediation() {
-        let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::External)
-            .base_root("/preset root")
-            .file(
-                "shell/chrome/shine.toml",
-                b"[[files]]\nsource = 'open.sh'\ntarget = 'open-chrome'\n\n[[files]]\nsource = 'close.sh'\ntarget = 'close-chrome'\n".to_vec(),
-            )
-            .file("shell/chrome/open.sh", Vec::new())
-            .file("shell/chrome/close.sh", Vec::new())
-            .build();
-        let plan = plan_preset_migration(&snapshot, "active", None, None);
-
-        let output = migration_text(&plan, &snapshot, true);
-
-        assert!(output.contains("0 blockers · 0 automatic changes · 0 advisories"));
-        assert!(!output.contains("shine preset validate"));
-        assert!(!output.contains("shine trust"));
+    fn shell_commands_without_optional_capability_statements_need_no_remediation() {
+        for (root, commands) in [
+            ("/presets", &["open"][..]),
+            ("/preset root", &["open", "close"][..]),
+        ] {
+            let mut snapshot = PresetSnapshot::builder(PresetSourceKind::External).base_root(root);
+            let mut metadata = String::new();
+            for command in commands {
+                writeln!(
+                    metadata,
+                    "[[files]]\nsource = '{command}.sh'\ntarget = '{command}-chrome'"
+                )
+                .unwrap();
+                snapshot = snapshot.file(format!("shell/chrome/{command}.sh"), Vec::new());
+            }
+            let snapshot = snapshot
+                .file("shell/chrome/shine.toml", metadata.into_bytes())
+                .build();
+            let plan = plan_preset_migration(&snapshot, "active", None, None);
+            let output = migration_text(&plan, &snapshot, true);
+            assert!(compatibility_text(&plan).is_empty());
+            assert!(!compatibility_required(&plan));
+            assert!(output.contains("0 blockers · 0 automatic changes · 0 advisories"));
+            assert!(!output.contains("shine preset validate"));
+            assert!(!output.contains("shine trust"));
+        }
     }
 
     #[test]
@@ -508,6 +497,21 @@ mod tests {
         }
     }
 
+    const LEGACY_APP_METADATA: &[u8] = b"dest = '~/.demo'\n[[files]]\nsource = 'config.toml'\n";
+
+    async fn write_legacy_app(presets: &Path) -> PathBuf {
+        let category = presets.join("app/demo");
+        tokio::fs::create_dir_all(&category).await.unwrap();
+        let metadata = category.join("shine.toml");
+        tokio::fs::write(&metadata, LEGACY_APP_METADATA)
+            .await
+            .unwrap();
+        tokio::fs::write(category.join("config.toml"), b"payload")
+            .await
+            .unwrap();
+        metadata
+    }
+
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // env_lock serializes process-global discovery state.
     async fn dry_run_is_read_only_and_apply_creates_private_backup_state() {
@@ -515,14 +519,7 @@ mod tests {
         let root = make_temp_dir("shine-preset-migrate").await;
         let state = root.join("state");
         let presets = root.join("source");
-        let category = presets.join("app/demo");
-        tokio::fs::create_dir_all(&category).await.unwrap();
-        let metadata = category.join("shine.toml");
-        let original = b"dest = '~/.demo'\n[[files]]\nsource = 'config.toml'\n";
-        tokio::fs::write(&metadata, original).await.unwrap();
-        tokio::fs::write(category.join("config.toml"), b"payload")
-            .await
-            .unwrap();
+        let metadata = write_legacy_app(&presets).await;
 
         // SAFETY: env_lock serializes process-global environment mutation.
         unsafe {
@@ -534,23 +531,26 @@ mod tests {
             .await
             .unwrap();
         assert!(dry);
-        assert_eq!(tokio::fs::read(&metadata).await.unwrap(), original);
+        assert_eq!(
+            tokio::fs::read(&metadata).await.unwrap(),
+            LEGACY_APP_METADATA
+        );
         assert!(!state.exists());
 
-        let json_without_yes =
-            handle_migrate(Some(&presets), false, false, PresetReportFormat::Json)
+        for (format, required) in [
+            (PresetReportFormat::Json, "--dry-run or --yes"),
+            (PresetReportFormat::Text, "explicit --yes"),
+        ] {
+            let error = handle_migrate(Some(&presets), false, false, format)
                 .await
                 .unwrap_err();
-        assert!(json_without_yes.to_string().contains("--dry-run or --yes"));
-        assert!(!state.exists());
-
-        let non_interactive =
-            handle_migrate(Some(&presets), false, false, PresetReportFormat::Text)
-                .await
-                .unwrap_err();
-        assert!(non_interactive.to_string().contains("explicit --yes"));
-        assert_eq!(tokio::fs::read(&metadata).await.unwrap(), original);
-        assert!(!state.exists());
+            assert!(error.to_string().contains(required), "{error}");
+            assert_eq!(
+                tokio::fs::read(&metadata).await.unwrap(),
+                LEGACY_APP_METADATA
+            );
+            assert!(!state.exists());
+        }
 
         let applied = handle_migrate(Some(&presets), false, true, PresetReportFormat::Text)
             .await
@@ -593,15 +593,8 @@ mod tests {
         let root = make_temp_dir("shine-migration-backup-failure").await;
         let state = root.join("state");
         let presets = root.join("source");
-        let category = presets.join("app/demo");
-        tokio::fs::create_dir_all(&category).await.unwrap();
+        let metadata = write_legacy_app(&presets).await;
         tokio::fs::create_dir_all(&state).await.unwrap();
-        let metadata = category.join("shine.toml");
-        let original = b"dest = '~/.demo'\n[[files]]\nsource = 'config.toml'\n";
-        tokio::fs::write(&metadata, original).await.unwrap();
-        tokio::fs::write(category.join("config.toml"), b"payload")
-            .await
-            .unwrap();
         // A real filesystem failure at backup creation must not reach apply.
         let backup_root = state.join("preset-migration-backups");
         tokio::fs::write(&backup_root, b"occupied").await.unwrap();
@@ -622,9 +615,14 @@ mod tests {
             error.downcast_ref::<std::io::Error>().is_some(),
             "{error:#}"
         );
-        assert_eq!(tokio::fs::read(&metadata).await.unwrap(), original);
         assert_eq!(
-            tokio::fs::read(category.join("config.toml")).await.unwrap(),
+            tokio::fs::read(&metadata).await.unwrap(),
+            LEGACY_APP_METADATA
+        );
+        assert_eq!(
+            tokio::fs::read(presets.join("app/demo/config.toml"))
+                .await
+                .unwrap(),
             b"payload"
         );
         assert_eq!(tokio::fs::read(&backup_root).await.unwrap(), b"occupied");
@@ -701,10 +699,7 @@ mod tests {
     fn report_drops_rejected_edits() {
         let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::External)
             .base_root("/presets")
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
+            .file("app/demo/shine.toml", LEGACY_APP_METADATA.to_vec())
             .file("app/demo/config.toml", Vec::new())
             .build();
         let mut plan = plan_preset_migration(&snapshot, "test", None, None);

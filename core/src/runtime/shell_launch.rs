@@ -123,6 +123,8 @@ mod tests {
         RuntimeContext, RuntimePlatform, ShellManifest, ShellManifestEntry,
     };
 
+    const TARGET: &str = "shell/demo/run";
+
     fn effects(host: &InMemoryHost) -> Vec<HostOperation> {
         host.operations()
             .into_iter()
@@ -183,14 +185,24 @@ mod tests {
         .unwrap();
     }
 
+    async fn assert_rejected_without_effects(
+        runtime: &CoreRuntime<InMemoryHost>,
+        target: &str,
+        case: impl std::fmt::Display,
+    ) {
+        let before = effects(runtime.host());
+        assert!(
+            runtime.prepare_live_bun_launch(target).await.is_err(),
+            "{case}: {target:?}"
+        );
+        assert_eq!(effects(runtime.host()), before, "{case}: {target:?}");
+    }
+
     #[tokio::test]
     async fn live_bun_prepare_uses_receipt_and_does_not_rewrite_identical_output() {
         let (runtime, entry) = fixture();
         save(&runtime, vec![entry.clone()]).await;
-        let launch = runtime
-            .prepare_live_bun_launch("shell/demo/run")
-            .await
-            .unwrap();
+        let launch = runtime.prepare_live_bun_launch(TARGET).await.unwrap();
         assert_eq!(launch.env, ["TOKEN=ALIAS"]);
         assert_eq!(launch.dependencies, BunDependencyMode::Disabled);
         assert_eq!(
@@ -203,27 +215,19 @@ mod tests {
         save(&runtime, vec![locked]).await;
         assert_eq!(
             runtime
-                .prepare_live_bun_launch("shell/demo/run")
+                .prepare_live_bun_launch(TARGET)
                 .await
                 .unwrap()
                 .dependencies,
             BunDependencyMode::Locked
         );
         let before = effects(runtime.host());
-        runtime
-            .prepare_live_bun_launch("shell/demo/run")
-            .await
-            .unwrap();
+        runtime.prepare_live_bun_launch(TARGET).await.unwrap();
         assert_eq!(effects(runtime.host()), before);
         runtime
             .host()
             .put_file(&entry.source_path, b"@@MISSING@@".to_vec());
-        assert!(
-            runtime
-                .prepare_live_bun_launch("shell/demo/run")
-                .await
-                .is_err()
-        );
+        assert!(runtime.prepare_live_bun_launch(TARGET).await.is_err());
         assert_eq!(
             runtime.host().read(&launch.script).await.unwrap(),
             b"current"
@@ -254,23 +258,10 @@ mod tests {
                 _ => unreachable!(),
             }
             save(&runtime, vec![invalid]).await;
-            let before = effects(runtime.host());
-            assert!(
-                runtime
-                    .prepare_live_bun_launch("shell/demo/run")
-                    .await
-                    .is_err(),
-                "case {case}"
-            );
-            assert_eq!(effects(runtime.host()), before, "case {case} wrote state");
+            assert_rejected_without_effects(&runtime, TARGET, case).await;
         }
         save(&runtime, vec![entry.clone(), entry.clone()]).await;
-        assert!(
-            runtime
-                .prepare_live_bun_launch("shell/demo/run")
-                .await
-                .is_err()
-        );
+        assert_rejected_without_effects(&runtime, TARGET, "duplicate receipt").await;
         save(&runtime, vec![entry]).await;
         for target in [
             "demo/run",
@@ -282,10 +273,7 @@ mod tests {
             "shell/demo/\\run",
             "shell/demo/\nrun",
         ] {
-            assert!(
-                runtime.prepare_live_bun_launch(target).await.is_err(),
-                "{target:?}"
-            );
+            assert_rejected_without_effects(&runtime, target, "invalid target").await;
         }
         runtime.host().put_file(
             runtime
@@ -294,16 +282,9 @@ mod tests {
                 .join(super::super::SHELL_OPERATION_JOURNAL_FILE),
             b"corrupt journal".to_vec(),
         );
-        let before = effects(runtime.host());
+        assert_rejected_without_effects(&runtime, TARGET, "corrupt journal").await;
         assert!(
-            runtime
-                .prepare_live_bun_launch("shell/demo/run")
-                .await
-                .is_err()
-        );
-        assert_eq!(effects(runtime.host()), before);
-        assert!(
-            before
+            effects(runtime.host())
                 .iter()
                 .all(|operation| !matches!(operation, HostOperation::Run { .. }))
         );
@@ -321,14 +302,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let before = effects(runtime.host());
-        assert!(
-            runtime
-                .prepare_live_bun_launch("shell/demo/run")
-                .await
-                .is_err()
-        );
-        assert_eq!(effects(runtime.host()), before);
+        assert_rejected_without_effects(&runtime, TARGET, "linked parent").await;
     }
 
     #[tokio::test]
@@ -350,17 +324,13 @@ mod tests {
             .file("shell/demo/shine.toml", metadata.to_vec())
             .file("shell/demo/run.ts", b"@@VALUE@@".to_vec())
             .build();
-        base.host().put_file(
-            context.presets_dir.join("shell/demo/shine.toml"),
-            metadata.to_vec(),
-        );
-        base.host().put_file(
-            context.presets_dir.join("shell/demo/run.ts"),
-            b"@@VALUE@@".to_vec(),
-        );
+        for (path, bytes) in snapshot.files() {
+            base.host()
+                .put_file(context.presets_dir.join(path), bytes.clone());
+        }
         let mut runtime = CoreRuntime::new(base.host().clone(), context, snapshot);
         runtime.context_mut_for_test().trust_grants = runtime
-            .external_code_requirements("shell/demo/run")
+            .external_code_requirements(TARGET)
             .await
             .unwrap()
             .requirements
@@ -426,12 +396,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(
-            runtime
-                .prepare_live_bun_launch("shell/demo/run")
-                .await
-                .is_err()
-        );
+        assert!(runtime.prepare_live_bun_launch(TARGET).await.is_err());
         let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
         assert!(recovery.is_ready(), "{recovery:?}");
         runtime
@@ -462,23 +427,22 @@ mod tests {
             manifest.entries[0].launcher_format.as_deref(),
             Some("live-bun-v2")
         );
-        let plan = runtime.plan_shells(request).await.unwrap();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
         assert!(
-            plan.steps.iter().all(|step| step.target != "shell/demo/run"
-                || step.action != crate::plan::PlanActionV1::Update),
+            plan.steps
+                .iter()
+                .all(|step| step.target != TARGET
+                    || step.action != crate::plan::PlanActionV1::Update),
             "{plan:?}"
         );
         let uninstall = ShellPlanRequest {
             operation: LifecycleOperation::Uninstall,
-            target: Some("demo/run".into()),
-            force: false,
-            purge: false,
-            input_versions: PlanningInputVersions::default(),
+            ..request
         };
         let plan = runtime.plan_shells(uninstall.clone()).await.unwrap();
         runtime
             .uninstall_shells_approved(
-                uninstall.clone(),
+                uninstall,
                 &PlanApprovalV1::for_reviewed_plan(&plan).unwrap(),
             )
             .await

@@ -823,20 +823,24 @@ mod tests {
     use shine_core::plan::{PermissionSetV1, PermissionV1, SnapshotDigestV1};
     use shine_core::trust::TrustCapabilityV1;
 
-    #[tokio::test]
-    async fn revoke_reads_current_grants_after_waiting_for_the_store_lock() {
-        let dir = crate::test_support::make_temp_dir("shine-trust-contention").await;
-        let config = Config::new_for_test(&dir);
-        let grant = TrustGrantV1::for_reviewed_requirement(&requirement(false));
+    async fn replace_grants(config: &Config, grants: Vec<TrustGrantV1>) {
         save_store(
-            &config,
+            config,
             &TrustStoreV1 {
-                grants: vec![grant.clone()],
+                grants,
                 ..Default::default()
             },
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn revoke_reads_current_grants_after_waiting_for_the_store_lock() {
+        let dir = crate::test_support::make_temp_dir("shine-trust-contention").await;
+        let config = Config::new_for_test(&dir);
+        let grant = TrustGrantV1::for_reviewed_requirement(&requirement(false));
+        replace_grants(&config, vec![grant.clone()]).await;
         let guard = RealHost
             .acquire_operation_lock(&dir.join("trust.lock"))
             .await
@@ -850,15 +854,7 @@ mod tests {
         );
         let mut later = grant.clone();
         later.target = "sys/later".into();
-        save_store(
-            &config,
-            &TrustStoreV1 {
-                grants: vec![later],
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        replace_grants(&config, vec![later]).await;
         drop(guard);
         revoke.await.unwrap();
         let store = load_store(&config).await.unwrap();
@@ -895,12 +891,18 @@ mod tests {
         let current = BTreeMap::from([(requirement.target.clone(), None)]);
         let groups = build_list_groups(std::slice::from_ref(&grant), &current);
         let requirements = std::slice::from_ref(&requirement);
+        let review = render_requirements(
+            &requirement.target,
+            requirements,
+            &[TrustDecisionV1::Missing],
+        );
+        assert!(review.contains("tool\\targument"), "{review:?}");
+        assert!(
+            review.contains("external:/source\\u{1b}[0m\\nFORGED"),
+            "{review:?}"
+        );
         for text in [
-            render_requirements(
-                &requirement.target,
-                requirements,
-                &[TrustDecisionV1::Missing],
-            ),
+            review,
             render_requirements("preset", requirements, &[TrustDecisionV1::Missing]),
             render_list(&groups, 1, 1, false),
             render_list(&groups, 1, 1, true),
@@ -912,16 +914,6 @@ mod tests {
             );
             assert!(text.contains("app/demo\\u{1b}[31m\\nFORGED"), "{text:?}");
         }
-        let review = render_requirements(
-            &requirement.target,
-            requirements,
-            &[TrustDecisionV1::Missing],
-        );
-        assert!(review.contains("tool\\targument"), "{review:?}");
-        assert!(
-            review.contains("external:/source\\u{1b}[0m\\nFORGED"),
-            "{review:?}"
-        );
         let hint = render_inspect_guidance(
             &requirement.target,
             requirements,
@@ -962,15 +954,7 @@ mod tests {
             .await
             .unwrap();
         let revoked = TrustGrantV1::for_reviewed_requirement(&requirement(false));
-        save_store(
-            &config,
-            &TrustStoreV1 {
-                grants: vec![revoked],
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        replace_grants(&config, vec![revoked]).await;
 
         let guard = RealHost
             .acquire_operation_lock(&dir.join("trust.lock"))
@@ -983,7 +967,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        save_store(&config, &TrustStoreV1::default()).await.unwrap();
+        replace_grants(&config, Vec::new()).await;
         drop(guard);
         grant.await.unwrap();
         let store = load_store(&config).await.unwrap();
@@ -1009,27 +993,18 @@ mod tests {
     }
 
     #[test]
-    fn inspect_guidance_points_untrusted_targets_to_grant() {
-        assert_eq!(
-            render_inspect_guidance(
-                "sys/package-only",
-                &[requirement(true)],
-                &[TrustDecisionV1::Missing]
-            ),
-            "Next\n  For persistent authorization, review the current code and source, then run:\n    shine trust grant sys/package-only"
-        );
-    }
-
-    #[test]
-    fn inspect_guidance_allows_missing_optional_statements() {
-        assert_eq!(
-            render_inspect_guidance(
-                "sys/package-only",
-                &[requirement(false)],
-                &[TrustDecisionV1::Missing]
-            ),
-            "Next\n  For persistent authorization, review the current code and source, then run:\n    shine trust grant sys/package-only"
-        );
+    fn inspect_guidance_points_untrusted_targets_to_grant_with_or_without_statements() {
+        for declared in [true, false] {
+            assert_eq!(
+                render_inspect_guidance(
+                    "sys/package-only",
+                    &[requirement(declared)],
+                    &[TrustDecisionV1::Missing]
+                ),
+                "Next\n  For persistent authorization, review the current code and source, then run:\n    shine trust grant sys/package-only",
+                "permissions_declared={declared}"
+            );
+        }
     }
 
     #[test]
@@ -1063,37 +1038,31 @@ mod tests {
         assert!(output.contains("development trusted [development_trusted]"));
     }
 
+    fn surge_requirement(
+        capability: TrustCapabilityV1,
+        permissions: &PermissionSetV1,
+    ) -> TrustRequirementV1 {
+        TrustRequirementV1 {
+            target: "app/surge".into(),
+            capability,
+            code_digest: SnapshotDigestV1::builder("surge-code").finish(),
+            permissions_declared: true,
+            permissions: permissions.clone(),
+            development_source: None,
+        }
+    }
+
     #[test]
     fn compact_list_groups_capabilities_by_shared_security_scope() {
         let permissions = PermissionSetV1::new([PermissionV1::Command {
             program: "bun".to_string(),
         }]);
         let requirements = [
-            TrustRequirementV1 {
-                target: "app/surge".to_string(),
-                capability: TrustCapabilityV1::AppArtifact,
-                code_digest: SnapshotDigestV1::builder("surge-code").finish(),
-                permissions_declared: true,
-                permissions: permissions.clone(),
-                development_source: None,
-            },
-            TrustRequirementV1 {
-                target: "app/surge".to_string(),
-                capability: TrustCapabilityV1::AppGenerator,
-                code_digest: SnapshotDigestV1::builder("surge-code").finish(),
-                permissions_declared: true,
-                permissions: permissions.clone(),
-                development_source: None,
-            },
-            TrustRequirementV1 {
-                target: "app/surge".to_string(),
-                capability: TrustCapabilityV1::AppHook,
-                code_digest: SnapshotDigestV1::builder("surge-code").finish(),
-                permissions_declared: true,
-                permissions,
-                development_source: None,
-            },
-        ];
+            TrustCapabilityV1::AppArtifact,
+            TrustCapabilityV1::AppGenerator,
+            TrustCapabilityV1::AppHook,
+        ]
+        .map(|capability| surge_requirement(capability, &permissions));
         let grants = requirements
             .iter()
             .map(TrustGrantV1::for_reviewed_requirement)
@@ -1157,24 +1126,8 @@ mod tests {
                 scope: shine_core::plan::NetworkScopeV1::Any,
             },
         ]);
-        let requirements = [
-            TrustRequirementV1 {
-                target: "app/surge".to_string(),
-                capability: TrustCapabilityV1::AppHook,
-                code_digest: SnapshotDigestV1::builder("surge-code").finish(),
-                permissions_declared: true,
-                permissions: permissions.clone(),
-                development_source: None,
-            },
-            TrustRequirementV1 {
-                target: "app/surge".to_string(),
-                capability: TrustCapabilityV1::AppGenerator,
-                code_digest: SnapshotDigestV1::builder("surge-code").finish(),
-                permissions_declared: true,
-                permissions,
-                development_source: None,
-            },
-        ];
+        let requirements = [TrustCapabilityV1::AppHook, TrustCapabilityV1::AppGenerator]
+            .map(|capability| surge_requirement(capability, &permissions));
 
         let output = render_requirements(
             "app/surge",

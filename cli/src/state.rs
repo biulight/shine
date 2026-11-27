@@ -417,8 +417,33 @@ mod tests {
     use super::*;
     use tokio::fs;
 
+    const LEGACY_RECIPIENT: &str =
+        "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
+    const TAGGED_RECIPIENT: &str =
+        "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
+
     async fn make_temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-state-migrate").await
+    }
+
+    async fn assert_schema_recorded(path: &Path) {
+        let content = fs::read_to_string(path).await.unwrap();
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        for key in ["schema_version", "last_cleared_schema_version"] {
+            assert_eq!(
+                parsed[key].as_integer(),
+                Some(CURRENT_RUNTIME_SCHEMA_VERSION.into()),
+                "{key}"
+            );
+        }
+    }
+
+    async fn assert_workspace_current(path: &Path, expected: &str) {
+        let changes = RecipientFile::Workspace.inspect(path).await.unwrap();
+        assert_eq!(changes.age_count, 0);
+        assert!(!changes.changed);
+        assert!(!RecipientFile::Workspace.apply(path).await.unwrap().changed);
+        assert_eq!(fs::read_to_string(path).await.unwrap(), expected);
     }
 
     #[tokio::test]
@@ -493,11 +518,7 @@ mod tests {
             "version=2\nenv={ encryption={} }\n",
         ] {
             fs::write(&path, contents).await.unwrap();
-            let changes = RecipientFile::Workspace.inspect(&path).await.unwrap();
-            assert_eq!(changes.age_count, 0);
-            assert!(!changes.changed);
-            assert!(!RecipientFile::Workspace.apply(&path).await.unwrap().changed);
-            assert_eq!(fs::read_to_string(&path).await.unwrap(), contents);
+            assert_workspace_current(&path, contents).await;
         }
         fs::remove_dir_all(dir).await.unwrap();
     }
@@ -526,7 +547,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrate_removes_update_cache_and_records_schema() {
+    async fn migrate_removes_only_update_cache_and_records_schema() {
         let dir = make_temp_dir().await;
         let mut config = Config::new_for_test(&dir);
         config.schema_version = 0;
@@ -534,19 +555,21 @@ mod tests {
             .await
             .unwrap();
 
+        let retained_dirs = ["rendered", "bin", "presets"];
+        for name in retained_dirs {
+            fs::create_dir_all(dir.join(name)).await.unwrap();
+        }
+        let manifest = dir.join("app-manifest.toml");
+        fs::write(&manifest, b"entries = []").await.unwrap();
+
         handle_migrate(&config, false).await.unwrap();
 
         assert!(!dir.join(UPDATE_CACHE_FILE).exists());
-        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
-        let parsed: toml::Table = toml::from_str(&content).unwrap();
-        assert_eq!(
-            parsed["schema_version"].as_integer(),
-            Some(CURRENT_RUNTIME_SCHEMA_VERSION.into())
-        );
-        assert_eq!(
-            parsed["last_cleared_schema_version"].as_integer(),
-            Some(CURRENT_RUNTIME_SCHEMA_VERSION.into())
-        );
+        for name in retained_dirs {
+            assert!(dir.join(name).is_dir(), "{name}");
+        }
+        assert_eq!(fs::read(manifest).await.unwrap(), b"entries = []");
+        assert_schema_recorded(config.config_path()).await;
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -585,12 +608,10 @@ mod tests {
     async fn workspace_migration_converts_legacy_recipient() {
         let dir = make_temp_dir().await;
         let workspace = dir.join("shine.workspace.toml");
-        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
-        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
         fs::write(
             &workspace,
             format!(
-                "version = 2\n[env.encryption]\n# deployment key\nrecipient = \"alice@example.com\"\nage_recipients = [\"{legacy}\"]\n"
+                "version = 2\n[env.encryption]\n# deployment key\nrecipient = \"alice@example.com\"\nage_recipients = [\"{LEGACY_RECIPIENT}\"]\n"
             ),
         )
         .await
@@ -602,7 +623,7 @@ mod tests {
         assert!(!content.contains("recipient ="));
         assert!(content.contains("# deployment key"));
         assert!(content.contains("gpg_recipients = [\"alice@example.com\"]"));
-        assert!(content.contains(tagged));
+        assert!(content.contains(TAGGED_RECIPIENT));
         assert!(content.contains("version = 2"));
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -611,18 +632,16 @@ mod tests {
     async fn workspace_migration_handles_inline_recipient_tables() {
         let dir = make_temp_dir().await;
         let workspace = dir.join("shine.workspace.toml");
-        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
-        let tagged = crate::secret::secure_enclave_recipient_to_tag(legacy).unwrap();
         for (env, has_gpg) in [
             (
                 format!(
-                    "[env]\nfiles=['env.toml']\nencryption={{ recipient='alice', age_recipients=['{legacy}'] }}"
+                    "[env]\nfiles=['env.toml']\nencryption={{ recipient='alice', age_recipients=['{LEGACY_RECIPIENT}'] }}"
                 ),
                 true,
             ),
             (
                 format!(
-                    "env={{ files=['env.toml'], encryption={{ age_recipients=['{legacy}'] }} }}"
+                    "env={{ files=['env.toml'], encryption={{ age_recipients=['{LEGACY_RECIPIENT}'] }} }}"
                 ),
                 false,
             ),
@@ -649,21 +668,11 @@ mod tests {
             }
             assert_eq!(
                 encryption["age_recipients"][0].as_str(),
-                Some(tagged.as_str())
+                Some(TAGGED_RECIPIENT)
             );
             assert_eq!(parsed["env"]["files"][0].as_str(), Some("env.toml"));
             assert!(content.contains("# keep"));
-            let changes = RecipientFile::Workspace.inspect(&workspace).await.unwrap();
-            assert_eq!(changes.age_count, 0);
-            assert!(!changes.changed);
-            assert!(
-                !RecipientFile::Workspace
-                    .apply(&workspace)
-                    .await
-                    .unwrap()
-                    .changed
-            );
-            assert_eq!(fs::read_to_string(&workspace).await.unwrap(), content);
+            assert_workspace_current(&workspace, &content).await;
         }
         let conflict = "version=2\n[env]\nencryption={recipient='old',gpg_recipients=['new']}\n";
         fs::write(&workspace, conflict).await.unwrap();
@@ -680,11 +689,9 @@ mod tests {
     async fn migration_converts_secure_enclave_recipients_in_place() {
         let dir = make_temp_dir().await;
         let config_path = dir.join("config.toml");
-        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
-        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
         fs::write(
             &config_path,
-            format!("# team recipients\nage_recipients = [\n  \"{legacy}\", # Touch ID\n  \"age1phone1example\",\n]\n"),
+            format!("# team recipients\nage_recipients = [\n  \"{LEGACY_RECIPIENT}\", # Touch ID\n  \"age1phone1example\",\n]\n"),
         )
         .await
         .unwrap();
@@ -692,10 +699,10 @@ mod tests {
         RecipientFile::Config.apply(&config_path).await.unwrap();
 
         let content = fs::read_to_string(&config_path).await.unwrap();
-        assert!(content.contains(tagged));
+        assert!(content.contains(TAGGED_RECIPIENT));
         assert!(content.contains("# Touch ID"));
         assert!(content.contains("age1phone1example"));
-        assert!(!content.contains(legacy));
+        assert!(!content.contains(LEGACY_RECIPIENT));
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -720,8 +727,8 @@ mod tests {
         let project_dir = dir.join("project");
         fs::create_dir_all(&project_dir).await.unwrap();
         let config = Config::new_for_test(&dir);
-        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
-        let global_original = format!("schema_version = 2\nage_recipients = [\"{legacy}\"]\n");
+        let global_original =
+            format!("schema_version = 2\nage_recipients = [\"{LEGACY_RECIPIENT}\"]\n");
         fs::write(config.config_path(), &global_original)
             .await
             .unwrap();
@@ -748,8 +755,7 @@ mod tests {
     async fn dry_run_does_not_convert_secure_enclave_recipients() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
-        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
-        let original = format!("schema_version = 2\nage_recipients = [\"{legacy}\"]\n");
+        let original = format!("schema_version = 2\nage_recipients = [\"{LEGACY_RECIPIENT}\"]\n");
         fs::write(config.config_path(), &original).await.unwrap();
 
         handle_migrate(&config, true).await.unwrap();
@@ -785,16 +791,7 @@ mod tests {
 
         handle_migrate(&config, false).await.unwrap();
 
-        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
-        let parsed: toml::Table = toml::from_str(&content).unwrap();
-        assert_eq!(
-            parsed["schema_version"].as_integer(),
-            Some(CURRENT_RUNTIME_SCHEMA_VERSION.into())
-        );
-        assert_eq!(
-            parsed["last_cleared_schema_version"].as_integer(),
-            Some(CURRENT_RUNTIME_SCHEMA_VERSION.into())
-        );
+        assert_schema_recorded(config.config_path()).await;
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -808,12 +805,10 @@ mod tests {
         let project_dir = dir.join("project");
         fs::create_dir_all(&project_dir).await.unwrap();
         let project_config = project_dir.join("shine.config.toml");
-        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
-        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
         fs::write(
             &project_config,
             format!(
-                "# project key\ngpg_key_id = \"project@example.com\"\nage_recipients = [\"{legacy}\"]\n"
+                "# project key\ngpg_key_id = \"project@example.com\"\nage_recipients = [\"{LEGACY_RECIPIENT}\"]\n"
             ),
         )
         .await
@@ -829,29 +824,7 @@ mod tests {
         assert!(!content.contains("gpg_key_id"));
         assert!(content.contains("# project key"));
         assert!(content.contains("gpg_recipients = [\"project@example.com\"]"));
-        assert!(content.contains(tagged));
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn migrate_does_not_remove_other_runtime_files() {
-        let dir = make_temp_dir().await;
-        let mut config = Config::new_for_test(&dir);
-        config.schema_version = 0;
-        fs::create_dir_all(dir.join("rendered")).await.unwrap();
-        fs::create_dir_all(dir.join("bin")).await.unwrap();
-        fs::create_dir_all(dir.join("presets")).await.unwrap();
-        fs::write(dir.join("app-manifest.toml"), b"entries = []")
-            .await
-            .unwrap();
-
-        handle_migrate(&config, false).await.unwrap();
-
-        assert!(dir.join("rendered").exists());
-        assert!(dir.join("bin").exists());
-        assert!(dir.join("presets").exists());
-        assert!(dir.join("app-manifest.toml").exists());
+        assert!(content.contains(TAGGED_RECIPIENT));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

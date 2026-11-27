@@ -338,15 +338,18 @@ mod tests {
     }
 
     #[test]
-    fn resolves_unique_shell_command_alias() {
+    fn resolves_shell_command_by_alias_and_full_target() {
         let candidates = build_candidates(&[], &[shell_file("proxy", "setproxy", "set_proxy.sh")]);
-        assert_eq!(
-            resolve_target("setproxy", &candidates).unwrap(),
-            vec![InfoRef::ShellFile {
-                category: "proxy".to_string(),
-                command: "setproxy".to_string()
-            }]
-        );
+        for target in ["setproxy", "shell/proxy/setproxy"] {
+            assert_eq!(
+                resolve_target(target, &candidates).unwrap(),
+                [InfoRef::ShellFile {
+                    category: "proxy".into(),
+                    command: "setproxy".into()
+                }],
+                "{target}"
+            );
+        }
     }
 
     #[test]
@@ -377,18 +380,6 @@ mod tests {
     }
 
     #[test]
-    fn resolves_full_shell_command_target() {
-        let candidates = build_candidates(&[], &[shell_file("proxy", "setproxy", "set_proxy.sh")]);
-        assert_eq!(
-            resolve_target("shell/proxy/setproxy", &candidates).unwrap(),
-            vec![InfoRef::ShellFile {
-                category: "proxy".to_string(),
-                command: "setproxy".to_string()
-            }]
-        );
-    }
-
-    #[test]
     fn reports_ambiguous_alias() {
         let app_files = vec![app_file("proxy", "config", "/tmp/proxy")];
         let shell_files = vec![shell_file("proxy", "setproxy", "set_proxy.sh")];
@@ -400,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_missing_target() {
+    fn missing_target_lists_available_categories_or_matching_suggestions() {
         let app_files = vec![
             app_file(
                 "docker-desktop",
@@ -415,55 +406,30 @@ mod tests {
             shell_file("utils", "copyfile", "copyfile.sh"),
         ];
         let candidates = build_candidates(&app_files, &shell_files);
-        let err = resolve_target("missing", &candidates).unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("installed item not found: missing"));
-        assert!(message.contains("Available installed targets:"));
-        assert!(message.contains("  App Configs"));
-        assert!(message.contains("    docker-desktop"));
-        assert!(message.contains("    docker-engine"));
-        assert!(message.contains("  Shell Presets"));
-        assert!(message.contains("    agent"));
-        assert!(message.contains("    proxy"));
-        assert!(message.contains("    utils"));
-        assert!(!message.contains("\n    app/docker-desktop"));
-        assert!(!message.contains("\n    shell/proxy"));
-        assert!(!message.contains("\n    docker-desktop/settings-store.jsonc"));
-        assert!(!message.contains("\n    proxy/setproxy"));
-        assert!(message.contains("Run `shine list` to see installed configs."));
-        assert!(message.contains(
-            "Use full targets like `app/docker-desktop/settings-store.jsonc` for exact file info."
-        ));
-    }
-
-    #[test]
-    fn reports_missing_target_with_suggestions() {
-        let app_files = vec![
-            app_file(
-                "docker-desktop",
-                "settings-store.jsonc",
-                "/tmp/settings-store.json",
+        for (target, listing) in [
+            (
+                "missing",
+                "Available installed targets:
+  App Configs
+    docker-desktop
+    docker-engine
+  Shell Presets
+    agent
+    proxy
+    utils",
             ),
-            app_file("docker-engine", "daemon.jsonc", "/tmp/daemon.json"),
-        ];
-        let shell_files = vec![shell_file("proxy", "setproxy", "set_proxy.sh")];
-        let candidates = build_candidates(&app_files, &shell_files);
-
-        let err = resolve_target("docker", &candidates).unwrap_err();
-        let message = err.to_string();
-
-        assert!(message.contains("installed item not found: docker"));
-        assert!(message.contains("Did you mean:"));
-        assert!(message.contains("  docker-desktop"));
-        assert!(message.contains("  docker-engine"));
-        assert!(!message.contains("\n  app/docker-desktop"));
-        assert!(!message.contains("\n  app/docker-engine"));
-        assert!(!message.contains("\n  docker-desktop/settings-store.jsonc"));
-        assert!(!message.contains("\n  docker-engine/daemon.jsonc"));
-        assert!(!message.contains("\n  proxy"));
-        assert!(message.contains("Run `shine list` to see installed configs."));
-        assert!(message.contains(
-            "Use full targets like `app/docker-desktop/settings-store.jsonc` for exact file info."
-        ));
+            (
+                "docker",
+                "Did you mean:
+  docker-desktop
+  docker-engine",
+            ),
+        ] {
+            let message = resolve_target(target, &candidates).unwrap_err().to_string();
+            let expected = format!(
+                "installed item not found: {target}\n\n{listing}\n\nRun `shine list` to see installed configs.\nUse full targets like `app/docker-desktop/settings-store.jsonc` for exact file info."
+            );
+            assert_eq!(message, expected);
+        }
     }
 }

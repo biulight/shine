@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::{
     HostOperation, InMemoryHost, NullObserver, PresetSnapshot, PresetSourceKind, RuntimeContext,
-    RuntimePlatform, ShellType,
+    RuntimePlatform, ShellType, SysBootstrapPlanRequest,
 };
 
 #[derive(Default)]
@@ -33,8 +33,32 @@ impl RuntimeInteraction for Interaction {
     }
 }
 
-fn metadata() -> String {
-    let mut text = "version = 2\ndefault_profile = 'recommended'\n".to_string();
+impl Interaction {
+    async fn select(
+        &mut self,
+        runtime: &CoreRuntime<InMemoryHost>,
+        requested: &[String],
+        preset: Option<&str>,
+        interactive: bool,
+    ) -> Result<ResolvedSelection> {
+        runtime
+            .resolve_sys_bootstrap_selection(
+                "ubuntu",
+                requested,
+                preset,
+                interactive,
+                self,
+                &mut NullObserver,
+            )
+            .await
+    }
+}
+
+fn metadata(has_default_profile: bool) -> String {
+    let mut text = String::from("version = 2\n");
+    if has_default_profile {
+        text.push_str("default_profile = 'recommended'\n");
+    }
     for (id, shells) in [
         ("plain", vec![]),
         ("zsh-only", vec!["['zsh']"]),
@@ -73,6 +97,16 @@ fn runtime(metadata: &str, shell: ShellType) -> CoreRuntime<InMemoryHost> {
     )
 }
 
+fn bash_request(item_ids: Vec<String>) -> SysBootstrapPlanRequest {
+    SysBootstrapPlanRequest {
+        os_id: "ubuntu".into(),
+        item_ids,
+        sys_shell: "bash".into(),
+        force_profile: false,
+        input_versions: Default::default(),
+    }
+}
+
 #[tokio::test]
 async fn automatic_selection_matches_declared_shells_and_preserves_order_and_source() {
     for (shell, expected) in [
@@ -82,22 +116,15 @@ async fn automatic_selection_matches_declared_shells_and_preserves_order_and_sou
         (ShellType::Fish, vec!["plain"]),
         (ShellType::Elvish, vec!["plain"]),
     ] {
-        let runtime = runtime(&metadata(), shell);
+        let runtime = runtime(&metadata(true), shell);
         // Presence and when_command do not decide visibility or automatic selection.
         runtime
             .host()
             .put_file(runtime.context().home_dir.join(".present"), vec![]);
         for preset in [None, Some("recommended")] {
             let mut interaction = Interaction::default();
-            let selected = runtime
-                .resolve_sys_bootstrap_selection(
-                    "ubuntu",
-                    &[],
-                    preset,
-                    false,
-                    &mut interaction,
-                    &mut NullObserver,
-                )
+            let selected = interaction
+                .select(&runtime, &[], preset, false)
                 .await
                 .unwrap();
             assert_eq!(selected.item_ids, expected);
@@ -136,24 +163,10 @@ async fn automatic_selection_matches_declared_shells_and_preserves_order_and_sou
 #[tokio::test]
 async fn interactive_candidates_and_both_default_sources_use_the_same_filter() {
     for named_default in [true, false] {
-        let metadata = if named_default {
-            metadata()
-        } else {
-            metadata().replace("default_profile = 'recommended'\n", "")
-        };
+        let metadata = metadata(named_default);
         let runtime = runtime(&metadata, ShellType::Bash);
         let mut interaction = Interaction::default();
-        let selected = runtime
-            .resolve_sys_bootstrap_selection(
-                "ubuntu",
-                &[],
-                None,
-                true,
-                &mut interaction,
-                &mut NullObserver,
-            )
-            .await
-            .unwrap();
+        let selected = interaction.select(&runtime, &[], None, true).await.unwrap();
         assert_eq!(interaction.choices, ["plain", "shared", "either"]);
         assert_eq!(
             interaction.defaults,
@@ -171,16 +184,14 @@ async fn interactive_candidates_and_both_default_sources_use_the_same_filter() {
 
 #[tokio::test]
 async fn explicit_mixed_items_are_not_filtered_and_invalid_requests_still_fail() {
-    let runtime = runtime(&metadata(), ShellType::Bash);
+    let runtime = runtime(&metadata(true), ShellType::Bash);
     let mut interaction = Interaction::default();
-    let selected = runtime
-        .resolve_sys_bootstrap_selection(
-            "ubuntu",
+    let selected = interaction
+        .select(
+            &runtime,
             &["zsh-only".into(), "plain".into(), "zsh-only".into()],
             None,
             false,
-            &mut interaction,
-            &mut NullObserver,
         )
         .await
         .unwrap();
@@ -191,15 +202,8 @@ async fn explicit_mixed_items_are_not_filtered_and_invalid_requests_still_fail()
         (vec![], Some("missing"), "unknown sys bootstrap profile"),
         (vec!["plain".into()], Some("zsh"), "cannot be combined"),
     ] {
-        let error = runtime
-            .resolve_sys_bootstrap_selection(
-                "ubuntu",
-                &ids,
-                preset,
-                false,
-                &mut interaction,
-                &mut NullObserver,
-            )
+        let error = interaction
+            .select(&runtime, &ids, preset, false)
             .await
             .unwrap_err();
         assert!(error.to_string().contains(expected), "{error:#}");
@@ -208,7 +212,7 @@ async fn explicit_mixed_items_are_not_filtered_and_invalid_requests_still_fail()
 
 #[tokio::test]
 async fn empty_filtered_selection_preserves_source_without_hiding_default_profile_errors() {
-    let text = metadata().replace("['either', 'zsh-only', 'plain', 'shared']", "['zsh-only']");
+    let text = metadata(true).replace("['either', 'zsh-only', 'plain', 'shared']", "['zsh-only']");
     let mut manifest = crate::runtime::parse_sys_manifest(&text).unwrap();
     // Retain a real init item, but none matching the target shell.
     manifest.items.retain(|item| item.id == "zsh-only");
@@ -266,24 +270,17 @@ async fn empty_filtered_selection_preserves_source_without_hiding_default_profil
 async fn shell_filter_cannot_hide_invalid_manifest_items_or_profile_references() {
     for (text, expected) in [
         (
-            metadata().replace("package = 'zsh-only'", "package = '--invalid'"),
+            metadata(true).replace("package = 'zsh-only'", "package = '--invalid'"),
             "invalid package identifier",
         ),
         (
-            metadata().replace("items = ['zsh-only']", "items = ['unknown']"),
+            metadata(true).replace("items = ['zsh-only']", "items = ['unknown']"),
             "unknown item `unknown`",
         ),
     ] {
         let runtime = runtime(&text, ShellType::Fish);
-        let error = runtime
-            .resolve_sys_bootstrap_selection(
-                "ubuntu",
-                &[],
-                None,
-                false,
-                &mut Interaction::default(),
-                &mut NullObserver,
-            )
+        let error = Interaction::default()
+            .select(&runtime, &[], None, false)
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains(expected), "{error:#}");
@@ -300,11 +297,11 @@ async fn shell_filter_cannot_hide_invalid_manifest_items_or_profile_references()
 #[tokio::test]
 async fn filtered_approved_bootstrap_preserves_unselected_enabled_integrations_and_receipts() {
     use crate::plan::PlanApprovalV1;
-    use crate::runtime::{FileSystemObservationHost, SysBootstrapPlanRequest, SysRunManifest};
+    use crate::runtime::{FileSystemObservationHost, SysRunManifest};
 
     let text = format!(
         "{}\n[profiles.small]\nitems = ['plain', 'zsh-only']\n",
-        metadata()
+        metadata(true)
     );
     let runtime = runtime(&text, ShellType::Bash);
     runtime
@@ -328,25 +325,12 @@ async fn filtered_approved_bootstrap_preserves_unselected_enabled_integrations_a
         runtime.context().shine_dir.join("sys-manifest.toml"),
         toml::to_string(&receipts).unwrap().into_bytes(),
     );
-    let selected = runtime
-        .resolve_sys_bootstrap_selection(
-            "ubuntu",
-            &[],
-            Some("small"),
-            false,
-            &mut Interaction::default(),
-            &mut NullObserver,
-        )
+    let selected = Interaction::default()
+        .select(&runtime, &[], Some("small"), false)
         .await
         .unwrap();
     assert_eq!(selected.item_ids, ["plain"]);
-    let request = SysBootstrapPlanRequest {
-        os_id: "ubuntu".into(),
-        item_ids: selected.item_ids,
-        sys_shell: "bash".into(),
-        force_profile: false,
-        input_versions: Default::default(),
-    };
+    let request = bash_request(selected.item_ids);
     let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
     let report = runtime
         .run_sys_bootstrap_approved(
@@ -393,39 +377,21 @@ async fn filtered_approved_bootstrap_preserves_unselected_enabled_integrations_a
 #[tokio::test]
 async fn approved_empty_selection_never_expands_a_default_profile() {
     use crate::plan::PlanApprovalV1;
-    use crate::runtime::SysBootstrapPlanRequest;
 
     for has_default in [true, false] {
-        let text = if has_default {
-            metadata()
-        } else {
-            metadata().replace("default_profile = 'recommended'\n", "")
-        };
+        let text = metadata(has_default);
         let runtime = runtime(&text, ShellType::Bash);
         runtime
             .host()
             .put_file(runtime.context().home_dir.join(".present"), vec![]);
         // The named selection is valid but becomes empty for Bash, while the default
         // profile (when present) still contains installable items.
-        let selection = runtime
-            .resolve_sys_bootstrap_selection(
-                "ubuntu",
-                &[],
-                Some("zsh"),
-                false,
-                &mut Interaction::default(),
-                &mut NullObserver,
-            )
+        let selection = Interaction::default()
+            .select(&runtime, &[], Some("zsh"), false)
             .await
             .unwrap();
         assert!(selection.item_ids.is_empty());
-        let request = SysBootstrapPlanRequest {
-            os_id: "ubuntu".into(),
-            item_ids: selection.item_ids,
-            sys_shell: "bash".into(),
-            force_profile: false,
-            input_versions: Default::default(),
-        };
+        let request = bash_request(selection.item_ids);
         let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
         assert!(plan.steps.is_empty());
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();

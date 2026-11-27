@@ -65,6 +65,28 @@ pub async fn handle_list(config: &Config) -> Result<()> {
 mod tests {
     use super::*;
 
+    use shine_core::runtime::{CoreRuntime, InMemoryHost, PresetSnapshot, PresetSourceKind};
+
+    fn updated_shell_snapshot(original: &PresetSnapshot) -> PresetSnapshot {
+        let mut snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded);
+        for (path, bytes) in original.files() {
+            snapshot = snapshot.file(path, bytes.clone());
+        }
+        snapshot
+            .file("shell/demo/run.ts", b"console.log('changed');\n".to_vec())
+            .build()
+    }
+
+    async fn inspected_rows(runtime: &CoreRuntime<InMemoryHost>) -> Vec<ShellRow> {
+        runtime
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(ShellRow::from)
+            .collect()
+    }
+
     #[tokio::test]
     async fn update_and_status_keep_the_captured_app_catalog_when_the_source_changes() {
         let root = crate::test_support::make_temp_dir("list-source-snapshot").await;
@@ -147,15 +169,8 @@ mod tests {
 
     #[tokio::test]
     async fn shell_rows_keep_identity_and_partial_status_when_display_fields_change() {
-        use shine_core::runtime::{CoreRuntime, PresetSnapshot, PresetSourceKind};
         let runtime = crate::test_support::installed_shell_runtime().await;
-        let mut rows = runtime
-            .inspect_shells()
-            .await
-            .unwrap()
-            .into_iter()
-            .map(ShellRow::from)
-            .collect::<Vec<_>>();
+        let mut rows = inspected_rows(&runtime).await;
         let run = rows
             .iter_mut()
             .find(|row| row.command_name == "run")
@@ -167,29 +182,12 @@ mod tests {
         assert_eq!(statuses[0].status, ShellRowStatus::Partial);
         assert_eq!(statuses[0].status_text, "partial install");
 
-        let mut snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded);
-        for (logical, bytes) in runtime.presets().files() {
-            snapshot = snapshot.file(
-                logical,
-                if logical == "shell/demo/run.ts" {
-                    b"console.log('changed');\n".to_vec()
-                } else {
-                    bytes.clone()
-                },
-            );
-        }
         let updated = CoreRuntime::new(
             runtime.host().clone(),
             runtime.context().clone(),
-            snapshot.build(),
+            updated_shell_snapshot(runtime.presets()),
         );
-        let mut rows = updated
-            .inspect_shells()
-            .await
-            .unwrap()
-            .into_iter()
-            .map(ShellRow::from)
-            .collect::<Vec<_>>();
+        let mut rows = inspected_rows(&updated).await;
         let run = rows
             .iter_mut()
             .find(|row| row.command_name == "run")
@@ -214,20 +212,13 @@ mod tests {
 
     #[tokio::test]
     async fn missing_preset_guidance_uses_receipt_identity_instead_of_display_label() {
-        use shine_core::runtime::{CoreRuntime, PresetSnapshot, PresetSourceKind};
         let runtime = crate::test_support::installed_shell_runtime().await;
         let missing = CoreRuntime::new(
             runtime.host().clone(),
             runtime.context().clone(),
             PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
         );
-        let mut rows = missing
-            .inspect_shells()
-            .await
-            .unwrap()
-            .into_iter()
-            .map(ShellRow::from)
-            .collect::<Vec<_>>();
+        let mut rows = inspected_rows(&missing).await;
         assert_eq!(rows.len(), 1);
         assert!(rows[0].preset_missing && rows[0].is_installed);
         rows[0].label = "friendly label".into();
@@ -426,8 +417,7 @@ mod tests {
     #[tokio::test]
     async fn simple_list_shell_visibility_uses_production_inventory() {
         use shine_core::runtime::{
-            CoreRuntime, FileSystemHost, FileSystemObservationHost, HostOperation, PresetSnapshot,
-            PresetSourceKind, command_path_for_name,
+            FileSystemHost, FileSystemObservationHost, HostOperation, command_path_for_name,
         };
         for (state, expected) in [
             ("current", true),
@@ -443,20 +433,7 @@ mod tests {
             let launcher = command_path_for_name(&installed.context().bin_dir, "run".as_ref());
             let mut snapshot = installed.presets().clone();
             match state {
-                "update" => {
-                    let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
-                    for (path, bytes) in snapshot.files() {
-                        builder = builder.file(
-                            path,
-                            if path == "shell/demo/run.ts" {
-                                b"console.log('new');\n".to_vec()
-                            } else {
-                                bytes.clone()
-                            },
-                        );
-                    }
-                    snapshot = builder.build();
-                }
+                "update" => snapshot = updated_shell_snapshot(&snapshot),
                 "foreign-launcher" => installed.host().put_file(&launcher, b"foreign".to_vec()),
                 "receipt-without-launcher" | "uninstalled" => {
                     installed.host().remove_file(&launcher).await.unwrap();
@@ -526,45 +503,22 @@ mod tests {
 
     #[test]
     fn frontend_inventory_projection_preserves_legacy_list_visibility() {
+        use shine_core::frontend::CapabilityInventoryItemV1;
+        let installed = |kind, target: &str, available| CapabilityInventoryItemV1 {
+            target: target.into(),
+            kind,
+            available,
+            installed: true,
+        };
         let report = InventoryReportV1 {
             schema_version: shine_core::frontend::INVENTORY_REPORT_SCHEMA_VERSION,
             items: vec![
-                shine_core::frontend::CapabilityInventoryItemV1 {
-                    target: "app/installed".to_string(),
-                    kind: CapabilityKindV1::App,
-                    available: true,
-                    installed: true,
-                },
-                shine_core::frontend::CapabilityInventoryItemV1 {
-                    target: "app/orphan".to_string(),
-                    kind: CapabilityKindV1::App,
-                    available: false,
-                    installed: true,
-                },
-                shine_core::frontend::CapabilityInventoryItemV1 {
-                    target: "shell/tools/one".to_string(),
-                    kind: CapabilityKindV1::Shell,
-                    available: true,
-                    installed: true,
-                },
-                shine_core::frontend::CapabilityInventoryItemV1 {
-                    target: "shell/tools/two".to_string(),
-                    kind: CapabilityKindV1::Shell,
-                    available: true,
-                    installed: true,
-                },
-                shine_core::frontend::CapabilityInventoryItemV1 {
-                    target: "shell/orphan/tool".to_string(),
-                    kind: CapabilityKindV1::Shell,
-                    available: false,
-                    installed: true,
-                },
-                shine_core::frontend::CapabilityInventoryItemV1 {
-                    target: "sys/managed".to_string(),
-                    kind: CapabilityKindV1::Sys,
-                    available: false,
-                    installed: true,
-                },
+                installed(CapabilityKindV1::App, "app/installed", true),
+                installed(CapabilityKindV1::App, "app/orphan", false),
+                installed(CapabilityKindV1::Shell, "shell/tools/one", true),
+                installed(CapabilityKindV1::Shell, "shell/tools/two", true),
+                installed(CapabilityKindV1::Shell, "shell/orphan/tool", false),
+                installed(CapabilityKindV1::Sys, "sys/managed", false),
             ],
             diagnostics: Vec::new(),
         };

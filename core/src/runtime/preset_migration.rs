@@ -697,6 +697,14 @@ mod tests {
     const LEGACY_APP_ENV: &str = "# keep\tcomment\ndescription = \"\"\"first\nsecond\"\"\"\ndest = '~/.demo'\n[artifact]\nscript = 'run.ts'\nenv = ['TOKEN=ALIAS']\n[permissions]\nschema_version = 1\nenvironment = [{name = 'TOKEN', sensitivity = 'secret'}]\n";
     const LEGACY_SHELL_ENV: &str = "# keep\tcomment\ndescription = \"\"\"first\nsecond\"\"\"\n[[files]]\nsource = 'run.ts'\nruntime = 'bun'\nenv = ['TOKEN=ALIAS']\n[files.permissions]\nschema_version = 1\nenvironment = [{name = 'TOKEN', sensitivity = 'secret'}]\n";
 
+    fn env_snapshot(kind: &str, metadata: &[u8]) -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root(std::env::temp_dir())
+            .file(format!("{kind}/demo/shine.toml"), metadata.to_vec())
+            .file(format!("{kind}/demo/run.ts"), Vec::new())
+            .build()
+    }
+
     #[test]
     fn metadata_migration_preserves_line_endings_final_newline_and_values() {
         for (kind, metadata) in [("app", LEGACY_APP_ENV), ("shell", LEGACY_SHELL_ENV)] {
@@ -708,12 +716,7 @@ mod tests {
                     } else {
                         original.strip_suffix(ending).unwrap().to_string()
                     };
-                    let logical = format!("{kind}/demo/shine.toml");
-                    let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-                        .base_root(std::env::temp_dir())
-                        .file(&logical, original.as_bytes().to_vec())
-                        .file(format!("{kind}/demo/run.ts"), Vec::new())
-                        .build();
+                    let snapshot = env_snapshot(kind, original.as_bytes());
                     let plan = plan_preset_migration(&snapshot, "test", None, None);
                     assert_eq!(plan.report.summary.blockers, 0);
                     assert_eq!(plan.edits.len(), 1);
@@ -744,11 +747,7 @@ mod tests {
                         Some(sha256(candidate))
                     );
                     assert_eq!(plan.edits[0].original, original.as_bytes());
-                    let migrated = PresetSnapshot::builder(PresetSourceKind::External)
-                        .base_root(std::env::temp_dir())
-                        .file(&logical, candidate.to_vec())
-                        .file(format!("{kind}/demo/run.ts"), Vec::new())
-                        .build();
+                    let migrated = env_snapshot(kind, candidate);
                     let repeated = plan_preset_migration(&migrated, "test", None, None);
                     assert_eq!(repeated.report.status, PresetMigrationStatusV1::Current);
                     assert!(repeated.edits.is_empty());
@@ -762,11 +761,7 @@ mod tests {
         for (kind, metadata) in [("app", LEGACY_APP_ENV), ("shell", LEGACY_SHELL_ENV)] {
             let original = metadata.replacen('\n', "\r\n", 1);
             let logical = format!("{kind}/demo/shine.toml");
-            let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-                .base_root(std::env::temp_dir())
-                .file(&logical, original.as_bytes().to_vec())
-                .file(format!("{kind}/demo/run.ts"), Vec::new())
-                .build();
+            let snapshot = env_snapshot(kind, original.as_bytes());
             let plan = plan_preset_migration(&snapshot, "test", None, None);
             assert_eq!(plan.report.status, PresetMigrationStatusV1::Blocked);
             assert_eq!(plan.report.summary.changes, 0);
@@ -864,6 +859,17 @@ mod tests {
         assert!(plan.report.diagnostics.is_empty());
     }
 
+    fn plan_app_hook(metadata: &[u8], asset: &str) -> PresetMigrationPlan {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/presets")
+            .file("app/demo/shine.toml", metadata.to_vec())
+            .file(format!("app/demo/{asset}"), Vec::new())
+            .build();
+        let plan = plan_preset_migration(&snapshot, "test", None, None);
+        assert_eq!(plan.report.summary.blockers, 0);
+        plan
+    }
+
     #[test]
     fn recursive_artifact_hook_is_removed_but_other_hooks_remain() {
         let metadata = br#"dest = '~/.demo'
@@ -872,16 +878,10 @@ post_upgrade = [{ command = 'shine', args = ['app', 'artifact', 'apply', 'other'
 [artifact]
 script = 'build.ts'
 "#;
-        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-            .base_root("/presets")
-            .file("app/demo/shine.toml", metadata.to_vec())
-            .file("app/demo/build.ts", Vec::new())
-            .build();
-        let plan = plan_preset_migration(&snapshot, "test", None, None);
-        let candidate = String::from_utf8(plan.edits[0].candidate.clone().unwrap()).unwrap();
+        let plan = plan_app_hook(metadata, "build.ts");
+        let candidate = std::str::from_utf8(plan.edits[0].candidate.as_deref().unwrap()).unwrap();
         assert!(!candidate.contains("'demo'"));
         assert!(candidate.contains("'other'"));
-        assert_eq!(plan.report.summary.blockers, 0);
     }
 
     #[test]
@@ -891,16 +891,9 @@ post_install = { command = 'shine', args = ['app', 'artifact', 'apply', 'demo'] 
 [[files]]
 source = 'config.toml'
 "#;
-        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-            .base_root("/presets")
-            .file("app/demo/shine.toml", metadata.to_vec())
-            .file("app/demo/config.toml", Vec::new())
-            .build();
-
-        let plan = plan_preset_migration(&snapshot, "test", None, None);
-        let candidate = String::from_utf8(plan.edits[0].candidate.clone().unwrap()).unwrap();
+        let plan = plan_app_hook(metadata, "config.toml");
+        let candidate = std::str::from_utf8(plan.edits[0].candidate.as_deref().unwrap()).unwrap();
         assert!(!candidate.contains("post_install"));
-        assert_eq!(plan.report.summary.blockers, 0);
         assert_eq!(
             plan.report.files[0].operations,
             [
@@ -910,31 +903,39 @@ source = 'config.toml'
         );
     }
 
-    #[test]
-    fn exact_legacy_builtin_metadata_rebases_and_overlay_can_be_removed() {
-        let logical = "app/demo/shine.toml";
-        let old = b"dest = '~/.demo'\n".to_vec();
-        let current =
-            b"metadata_schema_version = 2\ndest = '~/.demo'\n[permissions]\nschema_version = 1\n"
-                .to_vec();
+    fn plan_with_builtin_history(
+        snapshot: &PresetSnapshot,
+        logical: &str,
+        old: &[u8],
+        current: &[u8],
+    ) -> PresetMigrationPlan {
         let baseline = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(logical, current.clone())
+            .file(logical, current.to_vec())
             .build();
-        let hashes = BTreeMap::from([(logical.to_string(), BTreeSet::from([sha256(&old)]))]);
-
-        let external = PresetSnapshot::builder(PresetSourceKind::External)
-            .base_root("/external")
-            .file(logical, old.clone())
-            .build();
-        let update = plan_preset_migration(
-            &external,
+        let hashes = BTreeMap::from([(logical.to_owned(), BTreeSet::from([sha256(old)]))]);
+        plan_preset_migration(
+            snapshot,
             "test",
             None,
             Some(PresetMigrationBaseline {
                 current: &baseline,
                 legacy_metadata_sha256: &hashes,
             }),
-        );
+        )
+    }
+
+    #[test]
+    fn exact_legacy_builtin_metadata_rebases_and_overlay_can_be_removed() {
+        let logical = "app/demo/shine.toml";
+        let old = b"dest = '~/.demo'\n";
+        let current =
+            b"metadata_schema_version = 2\ndest = '~/.demo'\n[permissions]\nschema_version = 1\n";
+
+        let external = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/external")
+            .file(logical, old.to_vec())
+            .build();
+        let update = plan_with_builtin_history(&external, logical, old, current);
         assert_eq!(
             update.edits[0].candidate.as_deref(),
             Some(current.as_slice())
@@ -946,19 +947,11 @@ source = 'config.toml'
         assert!(!json.contains("dest ="));
 
         let overlay = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(logical, current)
+            .file(logical, current.to_vec())
             .overlay_root("/overlay")
-            .overlay_file(logical, old)
+            .overlay_file(logical, old.to_vec())
             .build();
-        let remove = plan_preset_migration(
-            &overlay,
-            "test",
-            None,
-            Some(PresetMigrationBaseline {
-                current: &baseline,
-                legacy_metadata_sha256: &hashes,
-            }),
-        );
+        let remove = plan_with_builtin_history(&overlay, logical, old, current);
         assert!(remove.edits[0].candidate.is_none());
         assert_eq!(
             remove.report.files[0].action,
@@ -969,26 +962,14 @@ source = 'config.toml'
     #[test]
     fn exact_legacy_sys_metadata_still_requires_manual_dispatcher_migration() {
         let logical = "sys/macos/shine.toml";
-        let old = b"version = 1\n".to_vec();
-        let current = b"version = 2\n".to_vec();
-        let baseline = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(logical, current)
-            .build();
-        let hashes = BTreeMap::from([(logical.to_string(), BTreeSet::from([sha256(&old)]))]);
+        let old = b"version = 1\n";
+        let current = b"version = 2\n";
         let external = PresetSnapshot::builder(PresetSourceKind::External)
             .base_root("/external")
-            .file(logical, old)
+            .file(logical, old.to_vec())
             .build();
 
-        let plan = plan_preset_migration(
-            &external,
-            "test",
-            None,
-            Some(PresetMigrationBaseline {
-                current: &baseline,
-                legacy_metadata_sha256: &hashes,
-            }),
-        );
+        let plan = plan_with_builtin_history(&external, logical, old, current);
 
         assert!(plan.edits.is_empty());
         assert!(

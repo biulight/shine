@@ -443,8 +443,7 @@ mod tests {
     use crate::runtime::{InMemoryHost, PresetSnapshot, RuntimeContext, RuntimePlatform};
     use std::path::PathBuf;
 
-    fn external_sys_runtime(manifest: &str) -> CoreRuntime<InMemoryHost> {
-        let home = PathBuf::from("/home/test");
+    fn external_context(home: PathBuf) -> RuntimeContext {
         let shine = home.join(".shine");
         let mut context = RuntimeContext::isolated(
             home,
@@ -454,6 +453,11 @@ mod tests {
             RuntimePlatform::Linux,
         );
         context.is_external_presets = true;
+        context
+    }
+
+    fn external_sys_runtime(manifest: &str) -> CoreRuntime<InMemoryHost> {
+        let context = external_context(PathBuf::from("/home/test"));
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
             .base_root("/presets")
             .file("sys/ubuntu/shine.toml", manifest.as_bytes().to_vec())
@@ -467,15 +471,7 @@ mod tests {
 
     fn external_shell_runtime() -> CoreRuntime<InMemoryHost> {
         let home = std::env::temp_dir().join("shine-external-shell-trust");
-        let shine = home.join(".shine");
-        let mut context = RuntimeContext::isolated(
-            home,
-            shine.clone(),
-            shine.join("presets"),
-            shine.join("bin"),
-            RuntimePlatform::Linux,
-        );
-        context.is_external_presets = true;
+        let mut context = external_context(home);
         context.shell = crate::runtime::ShellType::Bash;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
             .base_root("/presets")
@@ -488,21 +484,8 @@ mod tests {
         CoreRuntime::new(InMemoryHost::new(), context, snapshot)
     }
 
-    fn external_app_runtime(hook: &[u8]) -> CoreRuntime<InMemoryHost> {
-        external_app_runtime_with_helper(hook, b"helper before")
-    }
-
-    fn external_app_runtime_with_helper(hook: &[u8], helper: &[u8]) -> CoreRuntime<InMemoryHost> {
-        let home = PathBuf::from("/home/test");
-        let shine = home.join(".shine");
-        let mut context = RuntimeContext::isolated(
-            home,
-            shine.clone(),
-            shine.join("presets"),
-            shine.join("bin"),
-            RuntimePlatform::Linux,
-        );
-        context.is_external_presets = true;
+    fn external_app_runtime(hook: &[u8], helper: &[u8]) -> CoreRuntime<InMemoryHost> {
+        let context = external_context(PathBuf::from("/home/test"));
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
             .base_root("/presets")
             .file(
@@ -517,62 +500,40 @@ mod tests {
         CoreRuntime::new(InMemoryHost::new(), context, snapshot)
     }
 
-    #[tokio::test]
-    async fn extensionless_app_hook_is_bound_into_the_trust_digest() {
-        let before = external_app_runtime(b"#!/bin/sh\necho before\n")
+    async fn app_requirement(hook: &[u8], helper: &[u8]) -> TrustRequirementV1 {
+        let report = external_app_runtime(hook, helper)
             .external_code_requirements("app/demo")
             .await
             .unwrap();
-        let after = external_app_runtime(b"#!/bin/sh\necho after\n")
-            .external_code_requirements("app/demo")
-            .await
-            .unwrap();
+        let [requirement] = report
+            .requirements
+            .try_into()
+            .expect("one App hook requirement");
+        requirement
+    }
 
-        assert_eq!(before.requirements.len(), 1);
+    #[tokio::test]
+    async fn app_digest_covers_extensionless_hook_and_unknown_extension_helper() {
+        let hook = b"#!/bin/sh\necho before\n";
+        let helper = b"helper before";
+        let original = app_requirement(hook, helper).await;
+        let changed_hook = app_requirement(b"#!/bin/sh\necho after\n", helper).await;
+        let changed_helper = app_requirement(hook, b"helper after").await;
+        assert_ne!(original.code_digest, changed_hook.code_digest, "hook edit");
         assert_ne!(
-            before.requirements[0].code_digest,
-            after.requirements[0].code_digest
+            original.code_digest, changed_helper.code_digest,
+            "helper edit"
         );
     }
 
     #[tokio::test]
-    async fn unknown_extension_helper_is_bound_into_the_complete_category_digest() {
-        let before = external_app_runtime_with_helper(b"#!/bin/sh\necho ok\n", b"before")
-            .external_code_requirements("app/demo")
-            .await
-            .unwrap();
-        let after = external_app_runtime_with_helper(b"#!/bin/sh\necho ok\n", b"after")
-            .external_code_requirements("app/demo")
-            .await
-            .unwrap();
-
-        assert_ne!(
-            before.requirements[0].code_digest,
-            after.requirements[0].code_digest
-        );
-    }
-
-    #[tokio::test]
-    async fn development_source_binds_the_external_category_root() {
-        let report = external_app_runtime(b"#!/bin/sh\necho ok\n")
-            .external_code_requirements("app/demo")
-            .await
-            .unwrap();
-
-        let source = report.requirements[0].development_source.as_ref().unwrap();
+    async fn development_grant_binds_the_category_root_and_survives_code_edits() {
+        let helper = b"helper before";
+        let before = app_requirement(b"#!/bin/sh\necho before\n", helper).await;
+        let source = before.development_source.as_ref().unwrap();
         assert_eq!(source.labels, ["external:/presets/app/demo"]);
-    }
-
-    #[tokio::test]
-    async fn development_grant_survives_code_edits_from_the_same_category_root() {
-        let before = external_app_runtime(b"#!/bin/sh\necho before\n")
-            .external_code_requirements("app/demo")
-            .await
-            .unwrap();
-        let grant =
-            crate::trust::TrustGrantV1::for_development_requirement(&before.requirements[0])
-                .unwrap();
-        let mut after = external_app_runtime(b"#!/bin/sh\necho after\n");
+        let grant = crate::trust::TrustGrantV1::for_development_requirement(&before).unwrap();
+        let mut after = external_app_runtime(b"#!/bin/sh\necho after\n", helper);
         after.context_mut_for_test().trust_grants = vec![grant];
         let category = after.app_categories(Some("demo")).unwrap().remove(0);
 

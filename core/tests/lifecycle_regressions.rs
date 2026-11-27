@@ -1,7 +1,7 @@
 use shine_core::install::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
 use shine_core::plan::PlanApprovalV1;
 use shine_core::runtime::*;
-use std::{future::Future, pin::Pin};
+use std::{future::Future, path::Path, pin::Pin};
 
 struct Interaction;
 impl RuntimeInteraction for Interaction {
@@ -24,6 +24,16 @@ impl RuntimeInteraction for Interaction {
     }
 }
 
+fn isolated_context(root: &Path, home: &Path) -> RuntimeContext {
+    RuntimeContext::isolated(
+        home.to_owned(),
+        root.join("state"),
+        root.join("presets"),
+        root.join("bin"),
+        RuntimePlatform::current(),
+    )
+}
+
 fn install_request(target: &str, force: bool) -> AppPlanRequest {
     AppPlanRequest {
         operation: shine_core::lifecycle::LifecycleOperation::Install,
@@ -39,13 +49,7 @@ fn install_request(target: &str, force: bool) -> AppPlanRequest {
 async fn reinstall_preserves_modified_copy_json_and_generated_files_before_execution() {
     for (generated, json) in [(false, false), (false, true), (true, false)] {
         let root = std::env::temp_dir().join("shine-reinstall-preserve");
-        let mut context = RuntimeContext::isolated(
-            root.join("home"),
-            root.join("state"),
-            root.join("presets"),
-            root.join("bin"),
-            RuntimePlatform::current(),
-        );
+        let mut context = isolated_context(&root, &root.join("home"));
         context.env.insert("SOURCE".into(), "yes".into());
         let generator = if generated {
             "generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }\n"
@@ -151,13 +155,7 @@ async fn reinstall_preserves_modified_copy_json_and_generated_files_before_execu
 async fn app_install_waits_before_replanning_and_keeps_concurrent_receipts() {
     for changed_target in ["other", "demo"] {
         let root = std::env::temp_dir().join("shine-app-serialized-install");
-        let mut context = RuntimeContext::isolated(
-            root.join("home"),
-            root.join("state"),
-            root.join("presets"),
-            root.join("bin"),
-            RuntimePlatform::current(),
-        );
+        let mut context = isolated_context(&root, &root.join("home"));
         context.is_external_presets = true;
         let host = InMemoryHost::new();
         let mut manifest = AppManifest {
@@ -228,8 +226,6 @@ async fn app_install_waits_before_replanning_and_keeps_concurrent_receipts() {
 
 #[tokio::test]
 async fn static_app_resources_never_infer_code_from_their_names() {
-    use shine_core::lifecycle::LifecycleOperation;
-
     for filename in [
         "config.toml",
         "generator:config.toml",
@@ -246,23 +242,10 @@ async fn static_app_resources_never_infer_code_from_their_names() {
                 .file(format!("app/demo/{filename}"), b"static data".to_vec())
                 .build();
             let root = std::env::temp_dir().join("shine-static-entry-test");
-            let mut context = RuntimeContext::isolated(
-                root.join("home"),
-                root.join("state"),
-                root.join("presets"),
-                root.join("bin"),
-                RuntimePlatform::current(),
-            );
+            let mut context = isolated_context(&root, &root.join("home"));
             context.is_external_presets = source_kind == PresetSourceKind::External;
             let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
-            let request = AppPlanRequest {
-                operation: LifecycleOperation::Install,
-                target: Some("demo".into()),
-                force: false,
-                purge: false,
-                prune_stale: false,
-                input_versions: PlanningInputVersions::default(),
-            };
+            let request = install_request("demo", false);
             let plan = runtime.plan_apps(request.clone()).await.unwrap();
             assert!(plan.is_ready());
             assert!(
@@ -332,13 +315,7 @@ async fn metadata_diagnostic_identity_does_not_depend_on_category_names() {
 #[tokio::test]
 async fn refresh_requires_the_exact_generated_file_receipt_even_with_force() {
     let root = std::env::temp_dir().join("shine-refresh-ownership-test");
-    let mut context = RuntimeContext::isolated(
-        root.clone(),
-        root.join("state"),
-        root.join("presets"),
-        root.join("bin"),
-        RuntimePlatform::current(),
-    );
+    let mut context = isolated_context(&root, &root);
     context.env.insert("SOURCE".into(), "yes".into());
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
         .file("app/demo/shine.toml", br#"metadata_schema_version = 2
@@ -439,6 +416,12 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', se
 async fn shell_snapshots_preserve_captured_executables_and_repair_mode_only_changes() {
     use shine_core::lifecycle::LifecycleOperation;
     use std::os::unix::fs::PermissionsExt;
+    fn assert_helper_runs(path: &Path) {
+        let output = std::process::Command::new(path).output().unwrap();
+        assert!(output.status.success(), "{}", path.display());
+        assert_eq!(output.stdout, b"review-ok", "{}", path.display());
+    }
+
     for transformed in [false, true] {
         let root =
             std::env::temp_dir().join(format!("shine-shell-mode-test-{}", uuid::Uuid::new_v4()));
@@ -474,13 +457,7 @@ async fn shell_snapshots_preserve_captured_executables_and_repair_mode_only_chan
             std::fs::Permissions::from_mode(0o644),
         )
         .unwrap();
-        let mut context = RuntimeContext::isolated(
-            root.clone(),
-            root.join("state"),
-            presets,
-            root.join("bin"),
-            RuntimePlatform::current(),
-        );
+        let mut context = isolated_context(&root, &root);
         context.is_external_presets = true;
         context.external_shell_mode = ExternalShellMode::Snapshot;
         context.shell = ShellType::Bash;
@@ -511,9 +488,7 @@ async fn shell_snapshots_preserve_captured_executables_and_repair_mode_only_chan
             .unwrap();
         let installed = root.join("state/installed/shell/demo");
         for path in [root.join("bin/demo"), installed.join("helper")] {
-            let output = std::process::Command::new(path).output().unwrap();
-            assert!(output.status.success());
-            assert_eq!(output.stdout, b"review-ok");
+            assert_helper_runs(&path);
         }
         assert_eq!(
             std::fs::metadata(installed.join("data.txt"))
@@ -546,13 +521,7 @@ async fn shell_snapshots_preserve_captured_executables_and_repair_mode_only_chan
             .await
             .unwrap();
         assert!(runtime.shell_snapshot_current("demo").await.unwrap());
-        assert!(
-            std::process::Command::new(installed.join("helper"))
-                .output()
-                .unwrap()
-                .status
-                .success()
-        );
+        assert_helper_runs(&installed.join("helper"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
@@ -563,13 +532,7 @@ async fn sys_bootstrap_approved_snapshots_execute_helpers_and_clean_success_and_
     for failure in [false, true] {
         let root =
             std::env::temp_dir().join(format!("shine-sys-invocation-{}", uuid::Uuid::new_v4()));
-        let mut context = RuntimeContext::isolated(
-            root.clone(),
-            root.join("state"),
-            root.join("presets"),
-            root.join("bin"),
-            RuntimePlatform::current(),
-        );
+        let mut context = isolated_context(&root, &root);
         context.shell = ShellType::Bash;
         let tail = if failure {
             "exit 2"

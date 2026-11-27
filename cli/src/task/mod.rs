@@ -325,18 +325,15 @@ fn validate_task_name(name: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn config_in(dir: &std::path::Path) -> Config {
-        crate::test_support::test_config(dir)
-    }
-
-    async fn temp_dir() -> std::path::PathBuf {
-        crate::test_support::make_temp_dir("shine-task-test").await
+    async fn task_config() -> (PathBuf, Config) {
+        let dir = crate::test_support::make_temp_dir("shine-task-test").await;
+        let config = crate::test_support::test_config(&dir);
+        (dir, config)
     }
 
     #[tokio::test]
     async fn mutations_read_the_manifest_only_after_acquiring_the_lock() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
         let lock_path = config.shine_dir().join("tasks.lock");
         let guard = RealHost.acquire_operation_lock(&lock_path).await.unwrap();
         let save = handle_save(&config, "new", false, None, vec!["echo".into()]);
@@ -444,8 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_then_info_and_list_show_command() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
 
         handle_save(
             &config,
@@ -472,8 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_resolves_and_persists_fixed_cwd() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
         let project = config.home_dir.join("project");
         tokio::fs::create_dir_all(&project).await.unwrap();
 
@@ -498,8 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_resolves_relative_cwd_from_current_directory() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
         let expected = std::fs::canonicalize(".").unwrap();
 
         handle_save(
@@ -519,8 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn task_cwd_preserves_tilde_expansion_and_literal_absolute_components() {
-        let dir = temp_dir().await;
-        let mut config = config_in(&dir);
+        let (dir, mut config) = task_config().await;
         config.home_dir = dir.join("home");
         let project = config.home_dir.join("project");
         let literal = dir.join("~/project");
@@ -551,8 +544,7 @@ mod tests {
     #[tokio::test]
     async fn save_cwd_does_not_select_a_lossy_replacement_directory() {
         use std::os::unix::ffi::OsStrExt;
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
         let raw = dir.join(std::ffi::OsStr::from_bytes(b"project-\xff"));
         tokio::fs::create_dir(dir.join("project-\u{fffd}"))
             .await
@@ -583,8 +575,7 @@ mod tests {
     #[tokio::test]
     async fn task_cwd_expansion_retains_home_identity_without_affecting_absolute_paths() {
         use std::os::unix::ffi::OsStrExt;
-        let dir = temp_dir().await;
-        let mut config = config_in(&dir);
+        let (dir, mut config) = task_config().await;
         config.home_dir = dir.join(std::ffi::OsStr::from_bytes(b"home-\xff"));
         let other = dir.join("home-\u{fffd}/project");
         tokio::fs::create_dir_all(&other).await.unwrap();
@@ -603,8 +594,7 @@ mod tests {
     #[tokio::test]
     async fn save_rejects_non_utf8_canonical_cwd_before_manifest_mutation() {
         use std::os::unix::ffi::OsStrExt;
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
         let raw = dir.join(std::ffi::OsStr::from_bytes(b"project-\xff"));
         tokio::fs::create_dir(&raw).await.unwrap();
         let alias = dir.join("alias");
@@ -623,8 +613,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_rejects_missing_or_non_directory_cwd() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
         let file = dir.join(if cfg!(unix) {
             "not-a-directory\nFORGED\r\t\u{1b}"
         } else {
@@ -668,8 +657,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_rejects_duplicate_without_force_and_overwrites_with_force() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
 
         handle_save(
             &config,
@@ -681,26 +669,15 @@ mod tests {
         .await
         .unwrap();
 
-        let err = handle_save(
-            &config,
-            "t",
-            false,
-            None,
-            vec!["echo".to_string(), "two".to_string()],
-        )
-        .await
-        .unwrap_err();
+        let replacement = vec!["echo".into(), "two".into()];
+        let err = handle_save(&config, "t", false, None, replacement.clone())
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("Task already exists"));
 
-        handle_save(
-            &config,
-            "t",
-            true,
-            None,
-            vec!["echo".to_string(), "two".to_string()],
-        )
-        .await
-        .unwrap();
+        handle_save(&config, "t", true, None, replacement)
+            .await
+            .unwrap();
         let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
         assert_eq!(manifest.get("t").unwrap().command, ["echo", "two"]);
         assert_eq!(manifest.get("t").unwrap().cwd, None);
@@ -710,8 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_rejects_empty_command_and_invalid_name() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
 
         let err = handle_save(&config, "t", false, None, vec![])
             .await
@@ -728,8 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_removes_task_and_errors_when_missing() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
 
         handle_save(&config, "t", false, None, vec!["echo".to_string()])
             .await
@@ -744,8 +719,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_missing_task_reports_clear_error() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
 
         let err = handle_run(&config, "nope", &[]).await.unwrap_err();
         assert!(err.to_string().contains("Task not found: nope"));
@@ -757,26 +731,22 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_executes_saved_command_and_appends_extra() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
-
-        // `true` exits 0 regardless of extra args, so run_task_command returns Ok
-        // without calling process::exit.
-        handle_save(&config, "ok", false, None, vec!["true".to_string()])
+        let (dir, config) = task_config().await;
+        let marker = dir.join("extra marker");
+        handle_save(&config, "mark", false, None, vec!["touch".into()])
             .await
             .unwrap();
-        handle_run(&config, "ok", &["ignored".to_string()])
+        handle_run(&config, "mark", &[marker.to_str().unwrap().into()])
             .await
             .unwrap();
-
+        assert!(marker.is_file());
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn run_executes_in_saved_working_directory() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
         let project = dir.join("project");
         tokio::fs::create_dir_all(&project).await.unwrap();
 
@@ -791,15 +761,14 @@ mod tests {
         .unwrap();
         handle_run(&config, "mark", &[]).await.unwrap();
 
-        assert!(project.join("ran-here").exists());
+        assert!(project.join("ran-here").is_file());
         assert!(!dir.join("ran-here").exists());
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn run_reports_saved_working_directory_that_disappeared() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
         let project = dir.join("project");
         tokio::fs::create_dir_all(&project).await.unwrap();
 
@@ -836,8 +805,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_reports_command_not_found() {
-        let dir = temp_dir().await;
-        let config = config_in(&dir);
+        let (dir, config) = task_config().await;
 
         handle_save(
             &config,
