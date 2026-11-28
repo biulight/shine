@@ -650,6 +650,8 @@ mod tests {
     use super::super::uninstall::handle_uninstall_approved;
     use super::*;
     use crate::config::Config;
+    #[cfg(unix)]
+    use crate::test_support::RecordingReporter;
     use std::path::PathBuf;
     use tokio::fs;
 
@@ -664,19 +666,13 @@ mod tests {
             let mut config = Config::new_for_test(&root.join(".shine"));
             config.home_dir = root.clone();
             config.shell_type = ShellType::Bash;
-            struct Reporter(Vec<PresentationEvent>);
-            impl LifecycleReporter for Reporter {
-                fn emit(&mut self, event: PresentationEvent) {
-                    self.0.push(event);
-                }
-            }
-            let mut reporter = Reporter(Vec::new());
+            let mut reporter = RecordingReporter::default();
             println!("BEGIN REVIEW");
             handle_install_with_reporter(&config, Some(&target), false, true, &mut reporter)
                 .await
                 .unwrap();
             println!("END REVIEW");
-            assert!(!format!("{:?}", reporter.0).contains("Preset Source"));
+            assert!(!format!("{:?}", reporter.events()).contains("Preset Source"));
             let commands = if target == "utils" {
                 ["copyfile", "shine-env-export", "shine-theme-sync"]
             } else {
@@ -1997,13 +1993,6 @@ ANTHROPIC_MODEL = "first-model"
     #[cfg(unix)]
     #[tokio::test]
     async fn upgrade_link_summary_uses_production_reporter() {
-        #[derive(Default)]
-        struct Reporter(Vec<PresentationEvent>);
-        impl LifecycleReporter for Reporter {
-            fn emit(&mut self, event: PresentationEvent) {
-                self.0.push(event);
-            }
-        }
         for verbose in [false, true] {
             let dir = make_temp_dir().await;
             let config = Config::new_for_test(&dir);
@@ -2019,7 +2008,7 @@ ANTHROPIC_MODEL = "first-model"
             fs::remove_file(config.bin_dir().join("shine-env-export"))
                 .await
                 .unwrap();
-            let mut reporter = Reporter::default();
+            let mut reporter = RecordingReporter::default();
             let (report, _) = handle_upgrade_installed_target_with_reporter(
                 &config,
                 Some("utils"),
@@ -2032,7 +2021,7 @@ ANTHROPIC_MODEL = "first-model"
             assert_eq!(report.links_created, 1);
             assert_eq!(report.links_updated, 1);
             let lines = reporter
-                .0
+                .events()
                 .iter()
                 .filter_map(|event| match event {
                     PresentationEvent::Line { text, .. } if text.contains("Bin Links") => {
@@ -2053,7 +2042,7 @@ ANTHROPIC_MODEL = "first-model"
             let manifest = fs::read(config.shine_dir().join("shell-manifest.toml"))
                 .await
                 .unwrap();
-            let mut unchanged = Reporter::default();
+            let mut unchanged = RecordingReporter::default();
             crate::presentation::with_full_upgrade_plan(true, async {
                 handle_upgrade_installed_target_with_reporter(
                     &config,
@@ -2066,7 +2055,7 @@ ANTHROPIC_MODEL = "first-model"
                 .unwrap();
             })
             .await;
-            assert!(!unchanged.0.iter().any(|event| matches!(event,
+            assert!(!unchanged.events().iter().any(|event| matches!(event,
                 PresentationEvent::Line { text, .. } if text.contains("Bin Links")
             )));
             assert_eq!(

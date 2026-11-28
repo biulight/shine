@@ -344,18 +344,14 @@ mod tests {
     use super::super::uninstall::handle_uninstall_approved;
     use super::super::uninstall::handle_uninstall_with_result;
     use super::*;
+    use crate::apps::tests::{load_manifest, make_temp_dir};
     use crate::config::Config;
-    use crate::install_core::manifest::AppManifest;
     #[cfg(unix)]
     use crate::presets;
     #[cfg(unix)]
     use crate::test_support::env_lock;
     use shine_core::lifecycle::{LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1};
     use tokio::fs;
-
-    async fn make_temp_dir() -> std::path::PathBuf {
-        crate::test_support::make_temp_dir("shine-apps").await
-    }
 
     #[cfg(unix)]
     async fn temp_home_config() -> (
@@ -371,12 +367,6 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
         (guard, dir, config)
-    }
-
-    async fn read_manifest(config: &Config) -> AppManifest {
-        AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap()
     }
 
     #[cfg(unix)]
@@ -404,7 +394,7 @@ mod tests {
         );
 
         // At least the manifest should have entries
-        let manifest = read_manifest(&config).await;
+        let manifest = load_manifest(&config).await;
         assert!(
             !manifest.entries.is_empty(),
             "manifest should have entries after install"
@@ -436,7 +426,7 @@ mod tests {
         let serialized = serde_json::to_string(&uninstall_result).unwrap();
         assert!(!serialized.contains(&dir.display().to_string()));
 
-        let manifest_after = read_manifest(&config).await;
+        let manifest_after = load_manifest(&config).await;
         assert!(
             manifest_after.entries.is_empty(),
             "manifest should be empty after uninstall"
@@ -651,13 +641,13 @@ mod tests {
         handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
-        let manifest_first = read_manifest(&config).await;
+        let manifest_first = load_manifest(&config).await;
         let count_first = manifest_first.entries.len();
 
         handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
-        let manifest_second = read_manifest(&config).await;
+        let manifest_second = load_manifest(&config).await;
 
         assert_eq!(
             manifest_second.entries.len(),
@@ -903,7 +893,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             })
         );
 
-        let manifest = read_manifest(&config).await;
+        let manifest = load_manifest(&config).await;
         assert!(
             manifest.entries.is_empty(),
             "docker-desktop uninstall should clear manifest entries"

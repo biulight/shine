@@ -360,6 +360,7 @@ mod tests {
     #[cfg(unix)]
     use super::super::install::handle_install_approved;
     use super::*;
+    use crate::apps::tests::{external_app_config, load_manifest, make_temp_dir};
     use crate::install_core::manifest::AppInstallStrategy;
     #[cfg(unix)]
     use crate::test_support::env_lock;
@@ -546,23 +547,6 @@ mod tests {
             );
             fs::remove_dir_all(dir).await.unwrap();
         }
-    }
-
-    async fn make_temp_dir() -> std::path::PathBuf {
-        crate::test_support::make_temp_dir("shine-apps").await
-    }
-
-    async fn external_app_config(dir: &std::path::Path) -> Config {
-        let mut config = Config::new_for_test(dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
-        config
-    }
-
-    async fn load_manifest(config: &Config) -> AppManifest {
-        AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap()
     }
 
     fn copy_receipt(source: &str, destination: std::path::PathBuf, installed: &[u8]) -> AppEntry {

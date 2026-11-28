@@ -112,14 +112,26 @@ mod tests {
     #![allow(clippy::await_holding_lock)]
     use super::*;
     use crate::config::Config;
-    #[cfg(unix)]
     use crate::install_core::manifest::AppManifest;
     #[cfg(unix)]
     use crate::test_support::{TestEnvironmentGuard, env_lock};
     use tokio::fs;
 
-    async fn make_temp_dir() -> std::path::PathBuf {
+    pub(super) async fn make_temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-apps").await
+    }
+
+    pub(super) async fn external_app_config(dir: &std::path::Path) -> Config {
+        let mut config = Config::new_for_test(dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        config
+    }
+
+    pub(super) async fn load_manifest(config: &Config) -> AppManifest {
+        AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap()
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -214,13 +226,7 @@ mod tests {
             .unwrap();
 
         assert!(!destination.exists());
-        assert!(
-            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap()
-                .entries
-                .is_empty()
-        );
+        assert!(load_manifest(&config).await.entries.is_empty());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -327,9 +333,7 @@ mod tests {
     #[cfg(unix)]
     async fn install_sample_app(dir: &std::path::Path) -> (Config, std::path::PathBuf) {
         write_external_sample_app(dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
-        let mut config = Config::new_for_test(dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(dir).await;
 
         handle_install_approved(&config, Some("sample"), false, false, true)
             .await
@@ -366,9 +370,7 @@ mod tests {
             b"{\n  // proxy\n  \"proxy\": \"@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@\"\n}\n",
         )
         .await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
 
         handle_install_approved(&config, Some("sample"), false, false, true)
             .await
@@ -392,9 +394,7 @@ mod tests {
 
         let (config, dest) = install_sample_app(&dir).await;
         let before = fs::read(&dest).await.unwrap();
-        let manifest_before = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest_before = load_manifest(&config).await;
         let hash_before = manifest_before.entries[0].content_hash;
 
         write_external_sample_app(
@@ -407,9 +407,7 @@ mod tests {
         assert_eq!(report.updated, 1, "changed source should update");
         assert_eq!(report.skipped, 0);
         assert_ne!(fs::read(&dest).await.unwrap(), before);
-        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest_after = load_manifest(&config).await;
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -433,9 +431,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
         handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
@@ -498,9 +494,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
         let install = install::handle_install_with_result(&config, Some("sample"), false, false)
             .await
             .unwrap();
@@ -522,14 +516,12 @@ mod tests {
             .unwrap();
         let other_destination = dir.join(".config/other/config.json");
         let other_before = fs::read(&other_destination).await.unwrap();
-        let other_manifest_before =
-            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap()
-                .entries
-                .into_iter()
-                .find(|entry| entry.source == "app/other/config.json")
-                .unwrap();
+        let other_manifest_before = load_manifest(&config)
+            .await
+            .entries
+            .into_iter()
+            .find(|entry| entry.source == "app/other/config.json")
+            .unwrap();
 
         let mut service = crate::core_runtime::frontend_from_config(&config)
             .await
@@ -579,14 +571,12 @@ mod tests {
                 && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
         }));
         assert_eq!(fs::read(&other_destination).await.unwrap(), other_before);
-        let other_manifest_after =
-            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap()
-                .entries
-                .into_iter()
-                .find(|entry| entry.source == "app/other/config.json")
-                .unwrap();
+        let other_manifest_after = load_manifest(&config)
+            .await
+            .entries
+            .into_iter()
+            .find(|entry| entry.source == "app/other/config.json")
+            .unwrap();
         assert_eq!(
             toml::to_string(&other_manifest_after).unwrap(),
             toml::to_string(&other_manifest_before).unwrap()
@@ -628,9 +618,8 @@ mod tests {
         );
         assert!(other_destination.exists());
         assert!(
-            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            load_manifest(&config)
                 .await
-                .unwrap()
                 .entries
                 .iter()
                 .any(|entry| entry.source == "app/other/config.json")
@@ -654,9 +643,7 @@ mod tests {
             &marker,
         )
         .await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         handle_install_approved(&config, Some("sample"), false, false, true)
@@ -709,9 +696,7 @@ mod tests {
             &marker,
         )
         .await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         handle_install_approved(&config, Some("sample"), false, false, true)
@@ -740,9 +725,7 @@ mod tests {
             &marker,
         )
         .await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
 
         handle_install_approved(&config, Some("sample"), false, false, true)
             .await
@@ -797,9 +780,7 @@ mod tests {
             b"background = \n",
             "new file should be transformed before install"
         );
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest = load_manifest(&config).await;
         assert!(
             manifest.find_by_dest(&new_dest).is_some(),
             "new app file should be tracked in manifest"
@@ -830,9 +811,7 @@ mod tests {
 
         assert!(error.to_string().contains("Plan is blocked"));
         assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest = load_manifest(&config).await;
         assert!(
             manifest.find_by_dest(&new_dest).is_none(),
             "unmanaged destination should not be added to manifest"
@@ -856,9 +835,7 @@ mod tests {
         assert_eq!(report.updated, 1, "stale cleanup should count as a change");
         assert_eq!(report.skipped, 0);
         assert!(!dest.exists(), "unmodified stale file should be removed");
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest = load_manifest(&config).await;
         assert!(
             manifest.find_by_dest(&dest).is_none(),
             "stale manifest entry should be removed"
@@ -882,9 +859,7 @@ mod tests {
 
         assert_eq!(report.updated, 1, "manifest cleanup should count as change");
         assert_eq!(report.skipped, 0);
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest = load_manifest(&config).await;
         assert!(
             manifest.find_by_dest(&dest).is_none(),
             "missing stale destination should be removed from manifest"
@@ -908,9 +883,7 @@ mod tests {
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
         assert!(dest.exists(), "stale file should be left in place");
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest = load_manifest(&config).await;
         assert!(
             manifest.find_by_dest(&dest).is_some(),
             "stale manifest entry should remain without prune"
@@ -936,9 +909,7 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(report.user_modified, 1);
         assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest = load_manifest(&config).await;
         assert!(
             manifest.find_by_dest(&dest).is_some(),
             "user-modified stale entry should remain tracked"
@@ -953,9 +924,7 @@ mod tests {
         let (_guard, dir) = temp_home().await;
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"old\"\n}\n").await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
 
         handle_install_approved(&config, Some("sample"), false, false, true)
             .await
@@ -987,9 +956,7 @@ mod tests {
             fs::read(&dest).await.unwrap(),
             b"{\n  \"proxy\": \"new\"\n}\n"
         );
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let manifest = load_manifest(&config).await;
         let entry = manifest.find_by_dest(&dest).unwrap();
         assert_eq!(entry.source, "app/sample/daemon-renamed.jsonc");
 

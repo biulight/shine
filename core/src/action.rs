@@ -1771,6 +1771,36 @@ mod tests {
         }));
     }
 
+    #[track_caller]
+    fn assert_payload_free_roundtrip(value: &ActionIrV1, payloads: &[&str]) {
+        value.validate().unwrap();
+        let encoded = toml::to_string(value).unwrap();
+        for &payload in payloads {
+            assert!(
+                !encoded.contains(payload),
+                "serialized action contains {payload:?}"
+            );
+        }
+        assert_eq!(toml::from_str::<ActionIrV1>(&encoded).unwrap(), *value);
+    }
+
+    #[track_caller]
+    fn assert_file_replacement_permissions(
+        requirements: &ActionPermissionRequirementsV1,
+        destination: &Path,
+        rollback: &Path,
+    ) {
+        assert_file_permissions(
+            requirements,
+            &[
+                (Write, destination),
+                (Remove, destination),
+                (Write, rollback),
+                (Remove, rollback),
+            ],
+        );
+    }
+
     #[test]
     fn relocation_action_binds_both_destinations_and_previous_rollback() {
         let previous = PathBuf::from("/etc/demo-old/config.toml");
@@ -1797,12 +1827,7 @@ mod tests {
                 },
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("previous-private-bytes"));
-        assert!(!encoded.contains("desired-private-bytes"));
-        let decoded: ActionIrV1 = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded, value);
+        assert_payload_free_roundtrip(&value, &["previous-private-bytes", "desired-private-bytes"]);
         let requirements = absolute_permissions(&value);
         assert_file_permissions(
             &requirements,
@@ -1860,10 +1885,10 @@ mod tests {
                 ],
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private ps1 launcher bytes"));
-        assert!(!encoded.contains("private cmd launcher bytes"));
+        assert_payload_free_roundtrip(
+            &value,
+            &["private ps1 launcher bytes", "private cmd launcher bytes"],
+        );
         let requirements = absolute_permissions(&value);
         assert_file_permissions(&requirements, &[(Write, &ps1), (Write, &cmd)]);
     }
@@ -1898,19 +1923,9 @@ mod tests {
                 }],
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private replacement launcher bytes"));
+        assert_payload_free_roundtrip(&value, &["private replacement launcher bytes"]);
         let requirements = absolute_permissions(&value);
-        assert_file_permissions(
-            &requirements,
-            &[
-                (Write, &destination),
-                (Remove, &destination),
-                (Write, &rollback),
-                (Remove, &rollback),
-            ],
-        );
+        assert_file_replacement_permissions(&requirements, &destination, &rollback);
     }
 
     #[test]
@@ -1933,9 +1948,7 @@ mod tests {
                 }],
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private source bytes"));
+        assert_payload_free_roundtrip(&value, &["private source bytes"]);
         let requirements = absolute_permissions(&value);
         assert_file_permissions(
             &requirements,
@@ -2005,20 +2018,15 @@ mod tests {
                 },
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private previous rendered bytes"));
-        assert!(!encoded.contains("private desired rendered bytes"));
-        let requirements = absolute_permissions(&value);
-        assert_file_permissions(
-            &requirements,
+        assert_payload_free_roundtrip(
+            &value,
             &[
-                (Write, &destination),
-                (Remove, &destination),
-                (Write, &rollback),
-                (Remove, &rollback),
+                "private previous rendered bytes",
+                "private desired rendered bytes",
             ],
         );
+        let requirements = absolute_permissions(&value);
+        assert_file_replacement_permissions(&requirements, &destination, &rollback);
     }
 
     #[test]
@@ -2051,11 +2059,7 @@ mod tests {
                 },
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private rendered bytes"));
-        let decoded: ActionIrV1 = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded, value);
+        assert_payload_free_roundtrip(&value, &["private rendered bytes"]);
         let requirements = absolute_permissions(&value);
         assert_file_permissions(
             &requirements,
@@ -2102,20 +2106,15 @@ mod tests {
                 },
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private previous cache bytes"));
-        assert!(!encoded.contains("private desired cache bytes"));
-        let requirements = absolute_permissions(&value);
-        assert_file_permissions(
-            &requirements,
+        assert_payload_free_roundtrip(
+            &value,
             &[
-                (Write, &destination),
-                (Remove, &destination),
-                (Write, &rollback),
-                (Remove, &rollback),
+                "private previous cache bytes",
+                "private desired cache bytes",
             ],
         );
+        let requirements = absolute_permissions(&value);
+        assert_file_replacement_permissions(&requirements, &destination, &rollback);
     }
 
     #[test]
@@ -2161,10 +2160,7 @@ mod tests {
                 },
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private-original"));
-        assert!(!encoded.contains("private-managed"));
+        assert_payload_free_roundtrip(&value, &["private-original", "private-managed"]);
 
         let requirements = absolute_permissions(&value);
         assert!(requirements.uncomputable_codes.is_empty());
@@ -2200,21 +2196,13 @@ mod tests {
                 },
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private-previous-managed"));
-        assert!(!encoded.contains("private-next-managed"));
+        assert_payload_free_roundtrip(
+            &value,
+            &["private-previous-managed", "private-next-managed"],
+        );
 
         let requirements = absolute_permissions(&value);
-        assert_file_permissions(
-            &requirements,
-            &[
-                (Write, &destination),
-                (Remove, &destination),
-                (Write, &rollback),
-                (Remove, &rollback),
-            ],
-        );
+        assert_file_replacement_permissions(&requirements, &destination, &rollback);
     }
 
     #[test]
@@ -2236,9 +2224,7 @@ mod tests {
                 },
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private-managed"));
+        assert_payload_free_roundtrip(&value, &["private-managed"]);
 
         let requirements = absolute_permissions(&value);
         assert_file_permissions(
@@ -2275,10 +2261,7 @@ mod tests {
                 },
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("private-managed"));
-        assert!(!encoded.contains("private-user-original"));
+        assert_payload_free_roundtrip(&value, &["private-managed", "private-user-original"]);
 
         let requirements = absolute_permissions(&value);
         assert_file_permissions(
@@ -2319,11 +2302,14 @@ mod tests {
                 },
             )],
         );
-        value.validate().unwrap();
-        let encoded = toml::to_string(&value).unwrap();
-        assert!(!encoded.contains("previous-managed"));
-        assert!(!encoded.contains("private-user-modification"));
-        assert!(!encoded.contains("private-user-original"));
+        assert_payload_free_roundtrip(
+            &value,
+            &[
+                "previous-managed",
+                "private-user-modification",
+                "private-user-original",
+            ],
+        );
 
         let requirements = absolute_permissions(&value);
         assert_file_permissions(

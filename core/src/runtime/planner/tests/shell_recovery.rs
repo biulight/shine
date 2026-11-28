@@ -26,6 +26,47 @@ async fn approve_and_recover_shell(
         .unwrap()
 }
 
+async fn install_demo_with_receipt(runtime: &CoreRuntime<InMemoryHost>) -> ShellManifestEntry {
+    let install = shell_install_request();
+    let approval =
+        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+            .unwrap();
+    runtime
+        .install_shells_approved(install, &approval)
+        .await
+        .unwrap();
+    shell_manifest(runtime)
+        .await
+        .find("shell/demo/demo")
+        .unwrap()
+        .clone()
+}
+
+fn external_demo_snapshot(script: &[u8]) -> PresetSnapshot {
+    const DEMO_METADATA: &[u8] = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
+    PresetSnapshot::builder(PresetSourceKind::External)
+        .file("shell/demo/shine.toml", DEMO_METADATA.to_vec())
+        .file("shell/demo/demo.sh", script.to_vec())
+        .build()
+}
+
+fn external_demo_runtime(script: &[u8]) -> CoreRuntime<InMemoryHost> {
+    let runtime = external_shell_runtime(external_demo_snapshot(script));
+    for (path, bytes) in runtime.presets().files() {
+        runtime
+            .host()
+            .put_file(runtime.context().presets_dir.join(path), bytes.clone());
+    }
+    runtime
+}
+
+fn shell_journal_path(runtime: &CoreRuntime<InMemoryHost>) -> PathBuf {
+    runtime
+        .context()
+        .shine_dir
+        .join(SHELL_OPERATION_JOURNAL_FILE)
+}
+
 #[tokio::test]
 async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_prefix() {
     #[derive(serde::Deserialize)]
@@ -49,10 +90,7 @@ async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_pre
         let request = shell_install_request();
         let plan = runtime.plan_shells(request.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-        let journal_path = runtime
-            .context()
-            .shine_dir
-            .join(SHELL_OPERATION_JOURNAL_FILE);
+        let journal_path = shell_journal_path(&runtime);
         runtime
             .host()
             .fail_write_after(&journal_path, recorded_actions + 1);
@@ -229,10 +267,7 @@ async fn cache_replacement_recovers_partial_writes_with_mixed_previous_files() {
             .err()
             .expect("cache replacement must stop at the injected write failure");
         assert!(format!("{error:#}").contains("injected in-memory write failure"));
-        let journal_path = runtime
-            .context()
-            .shine_dir
-            .join(SHELL_OPERATION_JOURNAL_FILE);
+        let journal_path = shell_journal_path(&runtime);
         let journal_bytes = host.read(&journal_path).await.unwrap();
         let journal: Journal = toml::from_slice(&journal_bytes).unwrap();
         let ActionKindV1::ReplaceShellCache { files, .. } = &journal.action_ir.actions[0].kind
@@ -352,10 +387,7 @@ async fn cache_removal_recovers_partial_rename_and_preserves_changed_files() {
             .err()
             .expect("cache removal must stop at the injected failure");
         assert!(format!("{error:#}").contains("injected in-memory rename failure"));
-        let journal_path = runtime
-            .context()
-            .shine_dir
-            .join(SHELL_OPERATION_JOURNAL_FILE);
+        let journal_path = shell_journal_path(&runtime);
         let journal_bytes = host.read(&journal_path).await.unwrap();
         let journal: Journal = toml::from_slice(&journal_bytes).unwrap();
         let files = journal
@@ -502,20 +534,7 @@ async fn embedded_shell_cache_receipt_failure_removes_created_files_on_recovery(
 #[tokio::test]
 async fn embedded_shell_cache_marker_failure_restores_previous_files_and_receipt() {
     let original = runtime(shell_launcher_snapshot());
-    let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install, &approval)
-        .await
-        .unwrap();
-    let previous_receipt = ShellManifest::load(original.host(), &original.context().shine_dir)
-        .await
-        .unwrap()
-        .find("shell/demo/demo")
-        .unwrap()
-        .clone();
+    let previous_receipt = install_demo_with_receipt(&original).await;
     let desired = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "shell/demo/shine.toml",
@@ -539,10 +558,7 @@ async fn embedded_shell_cache_marker_failure_restores_previous_files_and_receipt
     assert!(plan.is_ready());
     assert_plan_diagnostic(&plan, "shell_cache_replace_transaction");
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let journal = runtime
-        .context()
-        .shine_dir
-        .join(crate::runtime::SHELL_OPERATION_JOURNAL_FILE);
+    let journal = shell_journal_path(&runtime);
     runtime.host().fail_write_after(&journal, 2);
     runtime
         .install_shells_approved(request, &approval)
@@ -609,20 +625,7 @@ async fn rendered_shell_receipt_failure_removes_created_output_on_recovery() {
 #[tokio::test]
 async fn rendered_shell_marker_failure_restores_previous_output_and_receipt() {
     let original = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho previous\n"));
-    let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install, &approval)
-        .await
-        .unwrap();
-    let previous_receipt = ShellManifest::load(original.host(), &original.context().shine_dir)
-        .await
-        .unwrap()
-        .find("shell/demo/demo")
-        .unwrap()
-        .clone();
+    let previous_receipt = install_demo_with_receipt(&original).await;
     let runtime = CoreRuntime::new(
         original.host().clone(),
         original.context().clone(),
@@ -642,10 +645,7 @@ async fn rendered_shell_marker_failure_restores_previous_output_and_receipt() {
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let journal = runtime
-        .context()
-        .shine_dir
-        .join(crate::runtime::SHELL_OPERATION_JOURNAL_FILE);
+    let journal = shell_journal_path(&runtime);
     runtime.host().fail_write_after(&journal, 2);
     runtime
         .upgrade_shells_approved(request, &approval)
@@ -851,12 +851,7 @@ async fn shell_profile_recovery_preserves_unrelated_post_interruption_edits() {
     let journal_text = String::from_utf8(
         runtime
             .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::SHELL_OPERATION_JOURNAL_FILE),
-            )
+            .read(&shell_journal_path(&runtime))
             .await
             .unwrap(),
     )
@@ -910,28 +905,12 @@ async fn live_render_refuses_to_run_while_shell_recovery_is_pending() {
 
 #[tokio::test]
 async fn external_shell_snapshot_marker_failure_restores_receipts_tree_and_launcher() {
-    let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
     let script = b"#!/bin/sh\necho external\n";
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-        .file("shell/demo/shine.toml", metadata.to_vec())
-        .file("shell/demo/demo.sh", script.to_vec())
-        .build();
-    let runtime = external_shell_runtime(snapshot);
-    runtime.host().put_file(
-        runtime.context().presets_dir.join("shell/demo/shine.toml"),
-        metadata.to_vec(),
-    );
-    runtime.host().put_file(
-        runtime.context().presets_dir.join("shell/demo/demo.sh"),
-        script.to_vec(),
-    );
+    let runtime = external_demo_runtime(script);
     let request = shell_install_request();
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let journal = runtime
-        .context()
-        .shine_dir
-        .join(crate::runtime::SHELL_OPERATION_JOURNAL_FILE);
+    let journal = shell_journal_path(&runtime);
     runtime.host().fail_write_after(&journal, 4);
     assert!(
         runtime
@@ -977,21 +956,8 @@ async fn external_shell_snapshot_marker_failure_restores_receipts_tree_and_launc
 
 #[tokio::test]
 async fn external_shell_snapshot_uninstall_receipt_failure_restores_tree_and_receipt() {
-    let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
     let script = b"#!/bin/sh\necho external\n";
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-        .file("shell/demo/shine.toml", metadata.to_vec())
-        .file("shell/demo/demo.sh", script.to_vec())
-        .build();
-    let runtime = external_shell_runtime(snapshot);
-    runtime.host().put_file(
-        runtime.context().presets_dir.join("shell/demo/shine.toml"),
-        metadata.to_vec(),
-    );
-    runtime.host().put_file(
-        runtime.context().presets_dir.join("shell/demo/demo.sh"),
-        script.to_vec(),
-    );
+    let runtime = external_demo_runtime(script);
     let install = shell_install_request();
     let approval =
         PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
@@ -1013,20 +979,15 @@ async fn external_shell_snapshot_uninstall_receipt_failure_restores_tree_and_rec
     }));
     let destination = runtime.context().shine_dir.join("installed/shell/demo");
     let rollback = shell_snapshot_rollback_path(&destination);
-    for (access, path) in [
-        (FilesystemAccessV1::Remove, &destination),
-        (FilesystemAccessV1::Write, &rollback),
-        (FilesystemAccessV1::Remove, &rollback),
-    ] {
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access,
-                    path: review_path(runtime.context(), path),
-                })
-        );
-    }
+    assert_file_permissions(
+        &runtime,
+        &plan,
+        &[
+            (FilesystemAccessV1::Remove, &destination),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ],
+    );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     fail_next_shell_manifest_write(&runtime);
     runtime
@@ -1067,41 +1028,12 @@ async fn external_shell_snapshot_uninstall_receipt_failure_restores_tree_and_rec
 
 #[tokio::test]
 async fn external_shell_snapshot_upgrade_marker_failure_restores_previous_tree_and_receipt() {
-    let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
     let previous_script = b"#!/bin/sh\necho previous\n";
     let desired_script = b"#!/bin/sh\necho desired\n";
-    let previous_snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-        .file("shell/demo/shine.toml", metadata.to_vec())
-        .file("shell/demo/demo.sh", previous_script.to_vec())
-        .build();
-    let original = external_shell_runtime(previous_snapshot);
-    original.host().put_file(
-        original.context().presets_dir.join("shell/demo/shine.toml"),
-        metadata.to_vec(),
-    );
-    original.host().put_file(
-        original.context().presets_dir.join("shell/demo/demo.sh"),
-        previous_script.to_vec(),
-    );
-    let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&original.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    original
-        .install_shells_approved(install, &approval)
-        .await
-        .unwrap();
-    let previous_receipt = ShellManifest::load(original.host(), &original.context().shine_dir)
-        .await
-        .unwrap()
-        .find("shell/demo/demo")
-        .unwrap()
-        .clone();
+    let original = external_demo_runtime(previous_script);
+    let previous_receipt = install_demo_with_receipt(&original).await;
 
-    let desired_snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-        .file("shell/demo/shine.toml", metadata.to_vec())
-        .file("shell/demo/demo.sh", desired_script.to_vec())
-        .build();
+    let desired_snapshot = external_demo_snapshot(desired_script);
     let mut runtime = CoreRuntime::new(
         original.host().clone(),
         original.context().clone(),
@@ -1122,10 +1054,7 @@ async fn external_shell_snapshot_upgrade_marker_failure_restores_previous_tree_a
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let journal = runtime
-        .context()
-        .shine_dir
-        .join(crate::runtime::SHELL_OPERATION_JOURNAL_FILE);
+    let journal = shell_journal_path(&runtime);
     runtime.host().fail_write_after(&journal, 2);
     assert!(
         runtime
@@ -1188,10 +1117,7 @@ async fn shell_receipt_failure_leaves_explicit_recovery_that_removes_unchanged_l
         .expect("Shell receipt write should fail");
     assert!(error.to_string().contains("failed to write shell manifest"));
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
-    let journal = runtime
-        .context()
-        .shine_dir
-        .join(crate::runtime::SHELL_OPERATION_JOURNAL_FILE);
+    let journal = shell_journal_path(&runtime);
     assert!(runtime.host().metadata(&launcher).await.is_ok());
     assert!(runtime.host().read(&journal).await.is_ok());
 
@@ -1249,10 +1175,7 @@ async fn shell_recovery_preserves_a_launcher_after_receipt_commit() {
     let request = shell_install_request();
     let plan = runtime.plan_shells(request).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let journal = runtime
-        .context()
-        .shine_dir
-        .join(crate::runtime::SHELL_OPERATION_JOURNAL_FILE);
+    let journal = shell_journal_path(&runtime);
     runtime.host().fail_remove_after(&journal, 0);
     let error = runtime
         .install_shells_approved(shell_install_request(), &approval)
@@ -1497,10 +1420,7 @@ async fn shell_launcher_removal_marker_failure_reconstructs_receipt_before_resto
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
     let rollback = managed_file_rollback_path(&launcher);
-    let journal = runtime
-        .context()
-        .shine_dir
-        .join(crate::runtime::SHELL_OPERATION_JOURNAL_FILE);
+    let journal = shell_journal_path(&runtime);
     runtime.host().fail_write_after(&journal, 3);
     runtime
         .uninstall_shells_approved(request, &approval)

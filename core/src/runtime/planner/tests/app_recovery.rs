@@ -453,41 +453,12 @@ async fn committed_json_relocation_cleanup_preserves_user_owned_values_on_both_s
 
 #[tokio::test]
 async fn app_relocation_recovery_after_receipt_commit_cleans_only_rollback() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"next-managed".to_vec())
-            .build();
-    let runtime = runtime(snapshot);
-    let previous = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-old/config.toml");
-    let desired = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-next/config.toml");
+    let (runtime, previous, desired) = static_relocation_fixture();
     let rollback = crate::action::managed_file_rollback_path(&previous);
     runtime
         .host()
         .put_file(&previous, b"previous-managed".to_vec());
-    AppManifest {
-        schema_version: APP_MANIFEST_SCHEMA_VERSION,
-        entries: vec![AppEntry {
-            source: "app/demo/config.toml".to_string(),
-            destination: previous.clone(),
-            backup: None,
-            content_hash: crate::install::hash_content(b"previous-managed"),
-            install_strategy: crate::install::AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
-        }],
-    }
-    .save(runtime.host(), &runtime.context().shine_dir)
-    .await
-    .unwrap();
+    save_previous_copy_receipt(&runtime, &previous, None, false).await;
     let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -530,43 +501,14 @@ async fn app_relocation_recovery_after_receipt_commit_cleans_only_rollback() {
 
 #[tokio::test]
 async fn app_relocation_receipt_failure_recovers_previous_file_and_backup() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"next-managed".to_vec())
-            .build();
-    let runtime = runtime(snapshot);
-    let previous = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-old/config.toml");
-    let desired = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-next/config.toml");
+    let (runtime, previous, desired) = static_relocation_fixture();
     let backup = crate::install::backup_path(&previous);
     let rollback = crate::action::managed_file_rollback_path(&previous);
     runtime
         .host()
         .put_file(&previous, b"previous-managed".to_vec());
     runtime.host().put_file(&backup, b"user-original".to_vec());
-    AppManifest {
-        schema_version: APP_MANIFEST_SCHEMA_VERSION,
-        entries: vec![AppEntry {
-            source: "app/demo/config.toml".to_string(),
-            destination: previous.clone(),
-            backup: Some(backup.clone()),
-            content_hash: crate::install::hash_content(b"previous-managed"),
-            install_strategy: crate::install::AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
-        }],
-    }
-    .save(runtime.host(), &runtime.context().shine_dir)
-    .await
-    .unwrap();
+    save_previous_copy_receipt(&runtime, &previous, Some(backup.clone()), false).await;
     let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -606,37 +548,8 @@ async fn app_relocation_receipt_failure_recovers_previous_file_and_backup() {
 
 #[tokio::test]
 async fn app_relocation_recovers_created_destination_when_previous_file_was_missing() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"next-managed".to_vec())
-            .build();
-    let runtime = runtime(snapshot);
-    let previous = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-old/config.toml");
-    let desired = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-next/config.toml");
-    AppManifest {
-        schema_version: APP_MANIFEST_SCHEMA_VERSION,
-        entries: vec![AppEntry {
-            source: "app/demo/config.toml".to_string(),
-            destination: previous.clone(),
-            backup: None,
-            content_hash: crate::install::hash_content(b"previous-managed"),
-            install_strategy: crate::install::AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
-        }],
-    }
-    .save(runtime.host(), &runtime.context().shine_dir)
-    .await
-    .unwrap();
+    let (runtime, previous, desired) = static_relocation_fixture();
+    save_previous_copy_receipt(&runtime, &previous, None, false).await;
     let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();

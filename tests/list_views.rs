@@ -3635,6 +3635,25 @@ async fn available_overview_keeps_its_snapshot_when_sources_change_between_secti
     assert!(text.contains("  after\n") && text.contains("sys-after"));
 }
 
+fn assert_update_columns(fixture: &Fixture, verbose_diff_marker: &str) {
+    for (args, marker) in [
+        (&["update", "--diff"][..], "update available"),
+        (&["update", "--verbose"][..], "update available"),
+        (&["update", "--verbose", "--diff"][..], verbose_diff_marker),
+    ] {
+        let output = fixture.run(args);
+        success(&output);
+        let text = stdout(&output);
+        let widths: Vec<_> = text
+            .lines()
+            .filter(|line| line.starts_with("  ↑  "))
+            .map(|line| console::measure_text_width(line.split_once(marker).unwrap().0))
+            .collect();
+        assert_eq!(widths.len(), 3, "{text}");
+        assert!(widths.iter().all(|width| *width == widths[0]), "{text}");
+    }
+}
+
 #[test]
 fn app_catalog_and_update_columns_use_unicode_display_width() {
     let fixture = Fixture::new();
@@ -3690,29 +3709,7 @@ fn app_catalog_and_update_columns_use_unicode_display_width() {
         )
         .unwrap();
     }
-    for args in [
-        vec!["update", "--diff"],
-        vec!["update", "--verbose"],
-        vec!["update", "--verbose", "--diff"],
-    ] {
-        let output = fixture.run(&args);
-        success(&output);
-        let text = stdout(&output);
-        let widths: Vec<_> = text
-            .lines()
-            .filter(|line| line.starts_with("  ↑  "))
-            .map(|line| {
-                let marker = if args.contains(&"--verbose") && args.contains(&"--diff") {
-                    "→"
-                } else {
-                    "update available"
-                };
-                console::measure_text_width(line.split_once(marker).unwrap().0)
-            })
-            .collect();
-        assert_eq!(widths.len(), 3, "{text}");
-        assert!(widths.iter().all(|width| *width == widths[0]), "{text}");
-    }
+    assert_update_columns(&fixture, "→");
     assert_eq!(fixture.app_manifest_bytes(), receipt);
 }
 
@@ -3732,22 +3729,7 @@ fn shell_update_columns_use_unicode_display_width_without_changing_receipts() {
         fs::write(preset.join("run.ts"), "console.log('changed');\n").unwrap();
     }
     let receipt = fs::read(fixture.0.join("state/shell-manifest.toml")).unwrap();
-    for args in [
-        vec!["update", "--diff"],
-        vec!["update", "--verbose"],
-        vec!["update", "--verbose", "--diff"],
-    ] {
-        let output = fixture.run(&args);
-        success(&output);
-        let text = stdout(&output);
-        let widths = text
-            .lines()
-            .filter(|line| line.starts_with("  ↑  "))
-            .map(|line| console::measure_text_width(line.split_once("update available").unwrap().0))
-            .collect::<Vec<_>>();
-        assert_eq!(widths.len(), 3, "{text}");
-        assert!(widths.iter().all(|width| *width == widths[0]), "{text}");
-    }
+    assert_update_columns(&fixture, "update available");
     assert_eq!(
         fs::read(fixture.0.join("state/shell-manifest.toml")).unwrap(),
         receipt

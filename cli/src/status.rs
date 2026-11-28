@@ -316,20 +316,25 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test]
-    async fn missing_shell_command_entry_is_an_update_reason() {
-        let dir = make_temp_dir().await;
-        let category = dir.join("presets/shell/custom");
-        fs::create_dir_all(&category).await.unwrap();
+    async fn write_custom_shell(category: &std::path::Path, contents: &[u8]) -> PathBuf {
+        fs::create_dir_all(category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
             b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
-        fs::write(category.join("tool.sh"), b"#!/bin/sh\necho same\n")
-            .await
-            .unwrap();
+        let source = category.join("tool.sh");
+        fs::write(&source, contents).await.unwrap();
+        source
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn missing_shell_command_entry_is_an_update_reason() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        write_custom_shell(&category, b"#!/bin/sh\necho same\n").await;
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
@@ -402,17 +407,7 @@ mod tests {
     async fn live_raw_shell_change_stays_live_and_current() {
         let dir = make_temp_dir().await;
         let cat_dir = dir.join("presets/shell/custom");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
-        )
-        .await
-        .unwrap();
-        let source = cat_dir.join("tool.sh");
-        fs::write(&source, b"#!/bin/sh\necho first\n")
-            .await
-            .unwrap();
+        let source = write_custom_shell(&cat_dir, b"#!/bin/sh\necho first\n").await;
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
@@ -451,16 +446,7 @@ mod tests {
         let old_overlay = dir.join("shineOverlay");
         let new_overlay = dir.join("shineOverlayTest");
         let old_category = old_overlay.join("shell/custom");
-        fs::create_dir_all(&old_category).await.unwrap();
-        fs::write(
-            old_category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
-        )
-        .await
-        .unwrap();
-        fs::write(old_category.join("tool.sh"), b"#!/bin/sh\necho same\n")
-            .await
-            .unwrap();
+        write_custom_shell(&old_category, b"#!/bin/sh\necho same\n").await;
 
         let mut old_config =
             Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(old_overlay.clone()));
@@ -473,27 +459,20 @@ mod tests {
             .unwrap();
 
         fs::rename(&old_overlay, &new_overlay).await.unwrap();
-        let mut new_config =
-            Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(new_overlay.clone()));
-        new_config.is_external_presets = true;
-        new_config.external_shell_mode = crate::config::ExternalShellMode::Live;
+        let new_config = old_config.with_presets_overlay_dir_override(Some(new_overlay.clone()));
 
+        let relocated = UpdateChange::SourceRelocated {
+            from: old_overlay.join("shell/custom/tool.sh"),
+            to: new_overlay.join("shell/custom/tool.sh"),
+        };
+        let trust_changed = UpdateChange::DeploymentChanged {
+            field: "trust",
+            from: "legacy or snapshot trust".to_string(),
+            to: "development trust".to_string(),
+        };
         let row = shell_row(&new_config, "custom/mytool").await;
         assert_eq!(row.status_text, "development trust required");
-        assert_eq!(
-            row.changes,
-            vec![
-                UpdateChange::SourceRelocated {
-                    from: old_overlay.join("shell/custom/tool.sh"),
-                    to: new_overlay.join("shell/custom/tool.sh"),
-                },
-                UpdateChange::DeploymentChanged {
-                    field: "trust",
-                    from: "legacy or snapshot trust".to_string(),
-                    to: "development trust".to_string(),
-                },
-            ]
-        );
+        assert_eq!(row.changes, [relocated.clone(), trust_changed.clone()]);
 
         fs::write(
             new_overlay.join("shell/custom/tool.sh"),
@@ -504,18 +483,7 @@ mod tests {
         let row = shell_row(&new_config, "custom/mytool").await;
         assert_eq!(
             row.changes,
-            vec![
-                UpdateChange::SourceRelocated {
-                    from: old_overlay.join("shell/custom/tool.sh"),
-                    to: new_overlay.join("shell/custom/tool.sh"),
-                },
-                UpdateChange::ContentChanged,
-                UpdateChange::DeploymentChanged {
-                    field: "trust",
-                    from: "legacy or snapshot trust".to_string(),
-                    to: "development trust".to_string(),
-                },
-            ]
+            [relocated, UpdateChange::ContentChanged, trust_changed]
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -528,16 +496,7 @@ mod tests {
         let old_overlay = dir.join("shineOverlay");
         let new_overlay = dir.join("shineOverlayTest");
         let old_category = old_overlay.join("shell/custom");
-        fs::create_dir_all(&old_category).await.unwrap();
-        fs::write(
-            old_category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
-        )
-        .await
-        .unwrap();
-        fs::write(old_category.join("tool.sh"), b"#!/bin/sh\necho same\n")
-            .await
-            .unwrap();
+        write_custom_shell(&old_category, b"#!/bin/sh\necho same\n").await;
 
         let mut old_config =
             Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(old_overlay.clone()));
@@ -545,9 +504,7 @@ mod tests {
         install_trusted_shell(&old_config, "custom").await;
 
         fs::rename(&old_overlay, &new_overlay).await.unwrap();
-        let mut new_config =
-            Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(new_overlay));
-        new_config.is_external_presets = true;
+        let new_config = old_config.with_presets_overlay_dir_override(Some(new_overlay));
 
         let row = shell_row(&new_config, "custom/mytool").await;
         assert_eq!(row.status_text, "up-to-date");

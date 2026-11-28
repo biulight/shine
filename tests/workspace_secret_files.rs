@@ -170,7 +170,7 @@ impl Fixture {
         .arg(mode);
         cmd
     }
-    fn export(&self) -> Command {
+    fn export_groups(&self, mode: &str, groups: &[&str]) -> Command {
         let mut cmd = self.command();
         cmd.args([
             "env",
@@ -179,13 +179,15 @@ impl Fixture {
             "--format",
             "files",
             "--mode",
-            "test",
-            "--file-group",
-            "signing",
-            "--file-group",
-            "account",
+            mode,
         ]);
+        for group in groups {
+            cmd.args(["--file-group", group]);
+        }
         cmd
+    }
+    fn export(&self) -> Command {
+        self.export_groups("test", &["signing", "account"])
     }
     fn blocked_export(&self) -> Child {
         self.export()
@@ -237,6 +239,18 @@ impl Fixture {
         for name in [".signing", "other"] {
             assert!(!self.root.join(name).exists(), "{name} should be absent");
         }
+    }
+
+    #[cfg(unix)]
+    #[track_caller]
+    fn assert_mode(&self, relative: &str, expected: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        let actual = fs::metadata(self.root.join(relative))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(actual, expected, "{relative}");
     }
 
     fn configure_phone_identity(&self) -> PathBuf {
@@ -586,21 +600,7 @@ fn file_group_previews_escape_paths_without_changing_io_or_streams() {
                 .any(|line| line == format!("Would decrypt temporarily {from} -> {to}"))
         );
         assert!(!f.root.join(target).exists());
-        let exported = f
-            .command()
-            .args([
-                "env",
-                "workspace",
-                "export",
-                "--format",
-                "files",
-                "--mode",
-                "test",
-                "--file-group",
-                "signing",
-            ])
-            .output()
-            .unwrap();
+        let exported = f.export_groups("test", &["signing"]).output().unwrap();
         assert!(exported.status.success(), "{exported:?}");
         let text = String::from_utf8(exported.stdout).unwrap();
         assert_eq!(text.lines().count(), 2, "{text:?}");
@@ -814,23 +814,11 @@ fn file_groups_reject_unsafe_paths_modes_versions_and_missing_groups() {
 #[test]
 fn file_groups_require_git_ignored_untracked_plaintext() {
     let f = Fixture::new();
-    good(
-        Command::new("git")
-            .current_dir(&f.root)
-            .arg("init")
-            .output()
-            .unwrap(),
-    );
+    fixture_git(&f.root, &["init"]);
     error(f.seal(&[]), "must be ignored");
     fs::write(f.root.join(".gitignore"), ".signing/\nother/\n").unwrap();
     good(f.seal(&[]));
-    good(
-        Command::new("git")
-            .current_dir(&f.root)
-            .args(["add", "--force", ".signing/key"])
-            .output()
-            .unwrap(),
-    );
+    fixture_git(&f.root, &["add", "--force", ".signing/key"]);
     error(f.seal(&[]), "is tracked");
 }
 
@@ -1059,7 +1047,7 @@ fn file_groups_preserve_exact_child_stdout_and_keep_preview_on_stderr() {
 #[cfg(unix)]
 #[test]
 fn file_groups_reject_links_and_create_private_files() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::symlink;
     let f = Fixture::new();
     fs::hard_link(f.root.join(".signing/key"), f.root.join("alias")).unwrap();
     error(f.seal(&[]), "hard link");
@@ -1077,22 +1065,8 @@ fn file_groups_reject_links_and_create_private_files() {
         .spawn()
         .unwrap();
     wait_for(&f.root.join("ready"));
-    assert_eq!(
-        fs::metadata(f.root.join(".signing/key"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
-    );
-    assert_eq!(
-        fs::metadata(f.root.join(".signing"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o700
-    );
+    f.assert_mode(".signing/key", 0o600);
+    f.assert_mode(".signing", 0o700);
     unsafe {
         libc::kill(child.id() as i32, libc::SIGTERM);
     }
@@ -1268,22 +1242,7 @@ fn file_export_persists_binary_and_empty_files_without_changing_inputs() {
         let source = f.root.join(format!(".secrets/{mode}/key.enc"));
         let cipher = fs::read(&source).unwrap();
         let output = f
-            .command()
-            .args([
-                "env",
-                "workspace",
-                "export",
-                "--format",
-                "files",
-                "--mode",
-                mode,
-                "--file-group",
-                "signing",
-                "--file-group",
-                "account",
-                "--file-group",
-                "signing",
-            ])
+            .export_groups(mode, &["signing", "account", "signing"])
             .output()
             .unwrap();
         assert!(String::from_utf8_lossy(&output.stdout).contains("Exported 2 files"));
@@ -1312,20 +1271,7 @@ fn file_export_persists_binary_and_empty_files_without_changing_inputs() {
             "plaintext target already exists",
         );
         error(
-            f.command()
-                .args([
-                    "env",
-                    "workspace",
-                    "export",
-                    "--format",
-                    "files",
-                    "--mode",
-                    mode,
-                    "--file-group",
-                    "signing",
-                ])
-                .output()
-                .unwrap(),
+            f.export_groups(mode, &["signing"]).output().unwrap(),
             "plaintext target already exists",
         );
     }
@@ -1367,18 +1313,7 @@ fn file_export_invalid_selection_and_existing_targets_fail_before_backend() {
         "unknown file group",
     );
     let output = f
-        .command()
-        .args([
-            "env",
-            "workspace",
-            "export",
-            "--format",
-            "files",
-            "--mode",
-            "missing",
-            "--file-group",
-            "signing",
-        ])
+        .export_groups("missing", &["signing"])
         .env("PROBE_BACKEND_LOG", &log)
         .output()
         .unwrap();
@@ -1503,31 +1438,17 @@ fn file_export_git_policy_follows_nested_targets_and_fails_closed() {
 #[cfg(unix)]
 #[test]
 fn file_export_uses_private_permissions_and_rejects_links() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::symlink;
     let f = Fixture::sealed();
     symlink("missing", f.root.join("other")).unwrap();
     error(f.export().output().unwrap(), "linked file-group path");
     fs::remove_file(f.root.join("other")).unwrap();
     good(f.export().output().unwrap());
     for target in [".signing/key", "other/password"] {
-        assert_eq!(
-            fs::metadata(f.root.join(target))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
+        f.assert_mode(target, 0o600);
     }
     for directory in [".signing", "other"] {
-        assert_eq!(
-            fs::metadata(f.root.join(directory))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
+        f.assert_mode(directory, 0o700);
     }
 }
 

@@ -8,6 +8,24 @@ use std::future::Future;
 use std::pin::Pin;
 
 #[track_caller]
+fn assert_file_permissions(
+    runtime: &CoreRuntime<InMemoryHost>,
+    plan: &PlanV1,
+    expected: &[(FilesystemAccessV1, &std::path::Path)],
+) {
+    for &(access, path) in expected {
+        let permission = PermissionV1::Filesystem {
+            access,
+            path: review_path(runtime.context(), path),
+        };
+        assert!(
+            plan.permissions.required.contains(&permission),
+            "missing {permission:?}"
+        );
+    }
+}
+
+#[track_caller]
 fn assert_plan_diagnostic(plan: &PlanV1, code: &str) {
     assert!(
         plan.steps
@@ -401,6 +419,49 @@ fn bootstrap_request() -> SysBootstrapPlanRequest {
         force_profile: false,
         input_versions: PlanningInputVersions::default(),
     }
+}
+
+fn static_relocation_fixture() -> (CoreRuntime<InMemoryHost>, PathBuf, PathBuf) {
+    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+    let runtime = runtime(snapshot);
+    let previous = runtime
+        .context()
+        .home_dir
+        .join(".config/demo-old/config.toml");
+    let desired = runtime
+        .context()
+        .home_dir
+        .join(".config/demo-next/config.toml");
+    (runtime, previous, desired)
+}
+
+async fn save_previous_copy_receipt(
+    runtime: &CoreRuntime<InMemoryHost>,
+    previous: &std::path::Path,
+    backup: Option<PathBuf>,
+    requires_admin: bool,
+) {
+    AppManifest {
+        schema_version: APP_MANIFEST_SCHEMA_VERSION,
+        entries: vec![AppEntry {
+            source: "app/demo/config.toml".to_string(),
+            destination: previous.to_path_buf(),
+            backup,
+            content_hash: crate::install::hash_content(b"previous-managed"),
+            install_strategy: crate::install::AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin,
+        }],
+    }
+    .save(runtime.host(), &runtime.context().shine_dir)
+    .await
+    .unwrap();
 }
 
 async fn generated_relocation_fixture(

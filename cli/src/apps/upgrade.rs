@@ -321,16 +321,23 @@ mod tests {
     #![allow(clippy::await_holding_lock)]
 
     use super::*;
-    use crate::test_support::env_lock;
+    use crate::apps::tests::external_app_config;
+    use crate::test_support::{RecordingReporter, env_lock};
     use tokio::fs;
 
-    #[derive(Default)]
-    struct RecordingReporter(Vec<PresentationEvent>);
-
-    impl LifecycleReporter for RecordingReporter {
-        fn emit(&mut self, event: PresentationEvent) {
-            self.0.push(event);
-        }
+    async fn verbose_sample_upgrade(config: &Config) -> RecordingReporter {
+        let mut reporter = RecordingReporter::default();
+        handle_upgrade_installed_target_with_reporter(
+            config,
+            Some("sample"),
+            false,
+            true,
+            true,
+            &mut reporter,
+        )
+        .await
+        .unwrap();
+        reporter
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -350,63 +357,26 @@ mod tests {
         fs::write(category.join("config.txt"), b"old\n")
             .await
             .unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let config = external_app_config(&dir).await;
         super::super::install::handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
 
-        let mut current = RecordingReporter::default();
-        handle_upgrade_installed_target_with_reporter(
-            &config,
-            Some("sample"),
-            false,
-            true,
-            true,
-            &mut current,
-        )
-        .await
-        .unwrap();
-        assert!(current.0.is_empty());
-
-        crate::presentation::with_full_upgrade_plan(true, async {
-            let mut full = RecordingReporter::default();
-            handle_upgrade_installed_target_with_reporter(
-                &config,
-                Some("sample"),
-                false,
-                true,
-                true,
-                &mut full,
-            )
-            .await
-            .unwrap();
-            assert!(full.0.iter().any(|event| matches!(
-                event,
-                PresentationEvent::Line { text, .. } if text.contains("up to date")
-            )));
-        })
-        .await;
+        assert!(verbose_sample_upgrade(&config).await.events().is_empty());
+        let full =
+            crate::presentation::with_full_upgrade_plan(true, verbose_sample_upgrade(&config))
+                .await;
+        assert!(full.text().contains("up to date"));
 
         fs::write(category.join("config.txt"), b"new\n")
             .await
             .unwrap();
-        let mut changed = RecordingReporter::default();
-        handle_upgrade_installed_target_with_reporter(
-            &config,
-            Some("sample"),
-            false,
-            true,
-            true,
-            &mut changed,
-        )
-        .await
-        .unwrap();
-        assert!(changed.0.iter().any(|event| matches!(
-            event,
-            PresentationEvent::Line { text, .. } if text.contains("config.txt")
-        )));
+        assert!(
+            verbose_sample_upgrade(&config)
+                .await
+                .text()
+                .contains("config.txt")
+        );
 
         drop(_guard);
         fs::remove_dir_all(dir).await.unwrap();

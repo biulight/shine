@@ -2,6 +2,7 @@
 use super::*;
 use crate::action::ActionKindV1;
 use crate::runtime::tests::poll_once;
+use FilesystemAccessV1::{Remove, Write};
 
 async fn single_approved_action(
     runtime: &CoreRuntime<InMemoryHost>,
@@ -534,22 +535,17 @@ async fn approved_app_upgrade_journals_key_owned_json_relocation() {
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(kind, ActionKindV1::RelocateManagedJson { .. }));
-    for (access, path) in [
-        (FilesystemAccessV1::Write, previous.clone()),
-        (FilesystemAccessV1::Remove, previous.clone()),
-        (FilesystemAccessV1::Write, desired.clone()),
-        (FilesystemAccessV1::Write, rollback.clone()),
-        (FilesystemAccessV1::Remove, rollback.clone()),
-    ] {
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access,
-                    path: review_path(runtime.context(), &path),
-                })
-        );
-    }
+    assert_file_permissions(
+        &runtime,
+        &plan,
+        &[
+            (Write, &previous),
+            (Remove, &previous),
+            (Write, &desired),
+            (Write, &rollback),
+            (Remove, &rollback),
+        ],
+    );
 
     let mut observer = crate::runtime::NullObserver;
     runtime
@@ -830,41 +826,12 @@ async fn approved_app_upgrade_converges_legacy_duplicate_relocation_receipts() {
 
 #[tokio::test]
 async fn approved_app_upgrade_journals_static_copy_relocation() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"next-managed".to_vec())
-            .build();
-    let runtime = runtime(snapshot);
-    let previous = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-old/config.toml");
-    let desired = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-next/config.toml");
+    let (runtime, previous, desired) = static_relocation_fixture();
     let rollback = crate::action::managed_file_rollback_path(&previous);
     runtime
         .host()
         .put_file(&previous, b"previous-managed".to_vec());
-    AppManifest {
-        schema_version: APP_MANIFEST_SCHEMA_VERSION,
-        entries: vec![AppEntry {
-            source: "app/demo/config.toml".to_string(),
-            destination: previous.clone(),
-            backup: None,
-            content_hash: crate::install::hash_content(b"previous-managed"),
-            install_strategy: crate::install::AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
-        }],
-    }
-    .save(runtime.host(), &runtime.context().shine_dir)
-    .await
-    .unwrap();
+    save_previous_copy_receipt(&runtime, &previous, None, false).await;
     let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -878,21 +845,16 @@ async fn approved_app_upgrade_journals_static_copy_relocation() {
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(kind, ActionKindV1::RelocateManagedFile { .. }));
-    for (access, path) in [
-        (FilesystemAccessV1::Remove, previous.clone()),
-        (FilesystemAccessV1::Write, desired.clone()),
-        (FilesystemAccessV1::Write, rollback.clone()),
-        (FilesystemAccessV1::Remove, rollback.clone()),
-    ] {
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access,
-                    path: review_path(runtime.context(), &path),
-                })
-        );
-    }
+    assert_file_permissions(
+        &runtime,
+        &plan,
+        &[
+            (Remove, &previous),
+            (Write, &desired),
+            (Write, &rollback),
+            (Remove, &rollback),
+        ],
+    );
 
     let mut observer = crate::runtime::NullObserver;
     runtime
@@ -919,38 +881,13 @@ async fn approved_app_upgrade_journals_static_copy_relocation() {
 
 #[tokio::test]
 async fn app_relocation_uses_previous_receipt_administrator_identity() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"next-managed".to_vec())
-            .build();
-    let runtime = runtime(snapshot);
+    let (runtime, _, desired) = static_relocation_fixture();
     let previous = PathBuf::from("/etc/demo-old/config.toml");
-    let desired = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-next/config.toml");
     let rollback = crate::action::managed_file_rollback_path(&previous);
     runtime
         .host()
         .put_file(&previous, b"previous-managed".to_vec());
-    AppManifest {
-        schema_version: APP_MANIFEST_SCHEMA_VERSION,
-        entries: vec![AppEntry {
-            source: "app/demo/config.toml".to_string(),
-            destination: previous.clone(),
-            backup: None,
-            content_hash: crate::install::hash_content(b"previous-managed"),
-            install_strategy: crate::install::AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: true,
-        }],
-    }
-    .save(runtime.host(), &runtime.context().shine_dir)
-    .await
-    .unwrap();
+    save_previous_copy_receipt(&runtime, &previous, None, true).await;
     let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(
@@ -994,22 +931,17 @@ async fn generated_relocation_binds_backup_changes_before_any_execution() {
             generated_relocation_fixture(false).await;
         let plan = runtime.plan_apps(request.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-        for (access, path) in [
-            (FilesystemAccessV1::Write, &desired),
-            (FilesystemAccessV1::Remove, &desired),
-            (FilesystemAccessV1::Remove, &previous),
-            (FilesystemAccessV1::Write, &previous),
-            (FilesystemAccessV1::Remove, &backup),
-        ] {
-            assert!(
-                plan.permissions
-                    .required
-                    .contains(&PermissionV1::Filesystem {
-                        access,
-                        path: review_path(runtime.context(), path),
-                    })
-            );
-        }
+        assert_file_permissions(
+            &runtime,
+            &plan,
+            &[
+                (Write, &desired),
+                (Remove, &desired),
+                (Remove, &previous),
+                (Write, &previous),
+                (Remove, &backup),
+            ],
+        );
         assert!(
             plan.steps
                 .iter()
@@ -1161,40 +1093,11 @@ async fn generated_relocation_preserves_incomplete_backup_state() {
 
 #[tokio::test]
 async fn app_relocation_rejects_destination_created_after_review() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"next-managed".to_vec())
-            .build();
-    let runtime = runtime(snapshot);
-    let previous = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-old/config.toml");
-    let desired = runtime
-        .context()
-        .home_dir
-        .join(".config/demo-next/config.toml");
+    let (runtime, previous, desired) = static_relocation_fixture();
     runtime
         .host()
         .put_file(&previous, b"previous-managed".to_vec());
-    AppManifest {
-        schema_version: APP_MANIFEST_SCHEMA_VERSION,
-        entries: vec![AppEntry {
-            source: "app/demo/config.toml".to_string(),
-            destination: previous.clone(),
-            backup: None,
-            content_hash: crate::install::hash_content(b"previous-managed"),
-            install_strategy: crate::install::AppInstallStrategy::Copy,
-            uses_env: false,
-            requires_admin: false,
-        }],
-    }
-    .save(runtime.host(), &runtime.context().shine_dir)
-    .await
-    .unwrap();
+    save_previous_copy_receipt(&runtime, &previous, None, false).await;
     let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -1363,13 +1266,10 @@ async fn approved_app_install_journals_backup_creation_and_commits_both_paths() 
         assert!(plan.permissions.required.contains(&permission));
     }
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(
-        actions[0].actions[0].kind,
-        crate::action::ActionKindV1::CreateManagedFileWithBackup { .. }
+        kind,
+        ActionKindV1::CreateManagedFileWithBackup { .. }
     ));
 
     let mut observer = crate::runtime::NullObserver;
@@ -1903,20 +1803,15 @@ async fn approved_app_upgrade_prune_journals_stale_static_copy_removal() {
                 .diagnostic_codes
                 .contains(&"app_stale_source_pruned".to_string())
     }));
-    for (access, path) in [
-        (FilesystemAccessV1::Remove, destination.clone()),
-        (FilesystemAccessV1::Write, rollback.clone()),
-        (FilesystemAccessV1::Remove, rollback.clone()),
-    ] {
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access,
-                    path: review_path(runtime.context(), &path),
-                })
-        );
-    }
+    assert_file_permissions(
+        &runtime,
+        &plan,
+        &[
+            (Remove, &destination),
+            (Write, &rollback),
+            (Remove, &rollback),
+        ],
+    );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(kind, ActionKindV1::RemoveManagedFile { .. }));
@@ -2076,21 +1971,16 @@ async fn approved_app_uninstall_journals_backup_restoration() {
     let request = app_request(LifecycleOperation::Uninstall, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
-    for (access, path) in [
-        (FilesystemAccessV1::Write, destination.clone()),
-        (FilesystemAccessV1::Remove, backup.clone()),
-        (FilesystemAccessV1::Write, rollback.clone()),
-        (FilesystemAccessV1::Remove, rollback.clone()),
-    ] {
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access,
-                    path: review_path(runtime.context(), &path),
-                })
-        );
-    }
+    assert_file_permissions(
+        &runtime,
+        &plan,
+        &[
+            (Write, &destination),
+            (Remove, &backup),
+            (Write, &rollback),
+            (Remove, &rollback),
+        ],
+    );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(
@@ -2191,13 +2081,10 @@ async fn approved_privileged_forced_app_uninstall_journals_backup_restoration() 
         );
     }
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(
-        &actions[0].actions[0].kind,
-        crate::action::ActionKindV1::ForceRemoveManagedFile {
+        kind,
+        ActionKindV1::ForceRemoveManagedFile {
             persistent_backup: Some(_),
             requires_admin: true,
             ..
@@ -2279,13 +2166,10 @@ async fn approved_forced_app_uninstall_journals_backup_restoration() {
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let actions = runtime
-        .approved_app_file_action_irs(&request, &plan, &approval)
-        .await
-        .unwrap();
+    let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(
-        &actions[0].actions[0].kind,
-        crate::action::ActionKindV1::ForceRemoveManagedFile {
+        kind,
+        ActionKindV1::ForceRemoveManagedFile {
             persistent_backup: Some(_),
             ..
         }

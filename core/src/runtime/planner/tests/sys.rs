@@ -638,8 +638,8 @@ target = '$HOME/.config/available.txt'
     assert!(!plan.is_converged_upgrade());
 }
 
-fn split_dns_snapshot(os_id: &str) -> PresetSnapshot {
-    PresetSnapshot::builder(PresetSourceKind::Embedded)
+fn split_dns_runtime(os_id: &str) -> CoreRuntime<InMemoryHost> {
+    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 format!("sys/{os_id}/shine.toml"),
                 br#"version = 2
@@ -657,7 +657,13 @@ servers_env = 'PRIVATE_DNS_SERVERS'
 "#
                 .to_vec(),
             )
-            .build()
+            .build();
+    let mut runtime = runtime(snapshot);
+    runtime.context_mut_for_test().env.extend([
+        ("PRIVATE_DNS_DOMAIN".into(), "corp.test".into()),
+        ("PRIVATE_DNS_SERVERS".into(), "10.0.0.53".into()),
+    ]);
+    runtime
 }
 
 fn installed_managed_file_without_preset() -> (CoreRuntime<InMemoryHost>, PathBuf, SysRunEntry) {
@@ -718,11 +724,10 @@ async fn managed_sys_uninstall_can_use_receipt_without_original_preset() {
     );
 }
 
-#[tokio::test]
-async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_recovery() {
-    let (runtime, destination, previous_entry) = installed_managed_file_without_preset();
-    let rollback = crate::action::managed_file_rollback_path(&destination);
-    let request = managed_request(LifecycleOperation::Uninstall, "test", Some("managed"));
+async fn interrupt_sys_manifest_write(
+    runtime: &CoreRuntime<InMemoryHost>,
+    request: SysManagedPlanRequest,
+) {
     let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -732,33 +737,38 @@ async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_reco
     let mut observer = crate::runtime::NullObserver;
     assert!(
         runtime
-            .run_managed_sys_approved(request, &approval, &mut Interaction, &mut observer,)
+            .run_managed_sys_approved(request, &approval, &mut Interaction, &mut observer)
             .await
             .is_err()
     );
-    assert!(runtime.host().read(&destination).await.is_err());
-    assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"managed");
-    assert!(
-        runtime
-            .host()
-            .read(
-                &runtime
-                    .context()
-                    .shine_dir
-                    .join(crate::runtime::SYS_OPERATION_JOURNAL_FILE)
-            )
-            .await
-            .is_ok()
-    );
+}
 
+async fn recover_pending_sys_operation(runtime: &CoreRuntime<InMemoryHost>) {
     let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
-    assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
+    assert_frontend_journal(runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
     assert!(recovery_plan.is_ready());
     let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
     runtime
         .recover_sys_operation_approved(&recovery_approval)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_recovery() {
+    let (runtime, destination, previous_entry) = installed_managed_file_without_preset();
+    let rollback = crate::action::managed_file_rollback_path(&destination);
+    let request = managed_request(LifecycleOperation::Uninstall, "test", Some("managed"));
+    interrupt_sys_manifest_write(&runtime, request).await;
+    assert!(runtime.host().read(&destination).await.is_err());
+    assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"managed");
+    let journal = runtime
+        .context()
+        .shine_dir
+        .join(crate::runtime::SYS_OPERATION_JOURNAL_FILE);
+    assert!(runtime.host().read(&journal).await.is_ok());
+
+    recover_pending_sys_operation(&runtime).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
     assert!(runtime.host().read(&rollback).await.is_err());
     let manifest = SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
@@ -768,30 +778,9 @@ async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_reco
 }
 
 pub(super) async fn interrupted_split_dns_install() -> (CoreRuntime<InMemoryHost>, PathBuf) {
-    let snapshot = split_dns_snapshot("macos");
-    let mut runtime = runtime(snapshot);
-    runtime
-        .context_mut_for_test()
-        .env
-        .insert("PRIVATE_DNS_DOMAIN".to_string(), "corp.test".to_string());
-    runtime
-        .context_mut_for_test()
-        .env
-        .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
+    let runtime = split_dns_runtime("macos");
     let request = managed_request(LifecycleOperation::Install, "macos", Some("split-dns"));
-    let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
-    assert!(plan.is_ready());
-    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    runtime
-        .host()
-        .fail_write_after(runtime.context().shine_dir.join("sys-manifest.toml"), 0);
-    let mut observer = crate::runtime::NullObserver;
-    assert!(
-        runtime
-            .run_managed_sys_approved(request, &approval, &mut Interaction, &mut observer,)
-            .await
-            .is_err()
-    );
+    interrupt_sys_manifest_write(&runtime, request).await;
     let receipt = split_dns_receipt(&crate::runtime::SplitDnsDomainRequest {
         os_id: "macos".to_string(),
         item_id: "split-dns".to_string(),
@@ -808,14 +797,7 @@ pub(super) async fn interrupted_split_dns_install() -> (CoreRuntime<InMemoryHost
 #[tokio::test]
 async fn split_dns_manifest_failure_removes_created_resource_on_explicit_recovery() {
     let (runtime, resource) = interrupted_split_dns_install().await;
-    let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
-    assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
-    assert!(recovery_plan.is_ready());
-    let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-    runtime
-        .recover_sys_operation_approved(&recovery_approval)
-        .await
-        .unwrap();
+    recover_pending_sys_operation(&runtime).await;
     assert!(runtime.host().read(&resource).await.is_err());
     assert!(
         SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
@@ -982,22 +964,13 @@ target = '$HOME/.config/managed.txt'
 #[tokio::test]
 async fn split_dns_plan_binds_receipt_and_live_ownership() {
     for os_id in ["macos", "windows"] {
-        let snapshot = split_dns_snapshot(os_id);
-        let base = runtime(snapshot);
+        let base = split_dns_runtime(os_id);
         let memory = base.host().clone();
         let mut runtime = CoreRuntime::new(
             ObservationOnlyHost(memory.clone()),
             base.context().clone(),
             base.presets().clone(),
         );
-        runtime
-            .context_mut_for_test()
-            .env
-            .insert("PRIVATE_DNS_DOMAIN".to_string(), "corp.test".to_string());
-        runtime
-            .context_mut_for_test()
-            .env
-            .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
         let receipt = split_dns_receipt(&crate::runtime::SplitDnsDomainRequest {
             os_id: os_id.to_string(),
             item_id: "split-dns".to_string(),

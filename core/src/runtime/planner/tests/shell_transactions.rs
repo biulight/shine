@@ -2,24 +2,6 @@
 use super::*;
 use FilesystemAccessV1::{Remove, Write};
 
-#[track_caller]
-fn assert_file_permissions(
-    runtime: &CoreRuntime<InMemoryHost>,
-    plan: &PlanV1,
-    expected: &[(FilesystemAccessV1, &std::path::Path)],
-) {
-    for &(access, path) in expected {
-        let permission = PermissionV1::Filesystem {
-            access,
-            path: review_path(runtime.context(), path),
-        };
-        assert!(
-            plan.permissions.required.contains(&permission),
-            "missing {permission:?}"
-        );
-    }
-}
-
 #[tokio::test]
 async fn filesystem_review_tracks_typed_shell_transactions_without_widening_permissions() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::External)

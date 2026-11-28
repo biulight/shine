@@ -407,8 +407,22 @@ mod tests {
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", path) };
     }
 
+    fn enter_project(guard: &TestEnvironmentGuard, state: &Path, cwd: &Path) {
+        set_config_dir(guard, state);
+        // SAFETY: the guard restores the environment and cwd before releasing the lock.
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        std::env::set_current_dir(cwd).unwrap();
+    }
+
+    async fn assert_same_path(actual: &Path, expected: impl AsRef<Path>) {
+        assert_eq!(
+            fs::canonicalize(actual).await.unwrap(),
+            fs::canonicalize(expected).await.unwrap()
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
-    async fn load_or_init_creates_bin_dir() {
+    async fn load_or_init_creates_bin_dir_and_default_env_table() {
         let guard = env_lock();
         let dir = make_temp_dir().await;
         set_config_dir(&guard, &dir);
@@ -416,17 +430,6 @@ mod tests {
         let config = Config::load_or_init().await.unwrap();
         assert!(config.bin_dir().exists(), "bin dir should be created");
         assert_eq!(config.bin_dir(), dir.join("bin"));
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn load_or_init_creates_env_table_in_config() {
-        let guard = env_lock();
-        let dir = make_temp_dir().await;
-        set_config_dir(&guard, &dir);
-
-        let config = Config::load_or_init().await.unwrap();
 
         assert_eq!(
             config.env.get("HTTP_PROXY_PORT").map(String::as_str),
@@ -504,26 +507,14 @@ mod tests {
         .await
         .unwrap();
 
-        set_config_dir(&guard, &state_dir);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-        std::env::set_current_dir(&child_dir).unwrap();
+        enter_project(&guard, &state_dir, &child_dir);
 
         let config = Config::load_or_init().await.unwrap();
 
-        assert_eq!(
-            fs::canonicalize(&config.config_path).await.unwrap(),
-            fs::canonicalize(project_dir.join("shine.config.toml"))
-                .await
-                .unwrap()
-        );
+        assert_same_path(&config.config_path, project_dir.join("shine.config.toml")).await;
         assert_eq!(config.shine_dir(), state_dir);
         assert_eq!(config.bin_dir(), state_dir.join("bin"));
-        assert_eq!(
-            fs::canonicalize(config.presets_dir()).await.unwrap(),
-            fs::canonicalize(&project_dir).await.unwrap()
-        );
+        assert_same_path(config.presets_dir(), &project_dir).await;
         assert_eq!(
             config.env.get("HTTP_PROXY_PORT").map(String::as_str),
             Some("2222")
@@ -567,12 +558,7 @@ mod tests {
 
         let config = Config::load_global_runtime(true).await.unwrap();
 
-        assert_eq!(
-            fs::canonicalize(config.config_path()).await.unwrap(),
-            fs::canonicalize(state_dir.join("config.toml"))
-                .await
-                .unwrap()
-        );
+        assert_same_path(config.config_path(), state_dir.join("config.toml")).await;
         assert_eq!(config.schema_version, 0);
         assert_eq!(config.last_cleared_schema_version, Some(0));
         assert_eq!(config.shine_dir(), state_dir);
@@ -646,20 +632,12 @@ mod tests {
 
         let config = Config::load_or_init().await.unwrap();
 
-        assert_eq!(
-            fs::canonicalize(config.config_path()).await.unwrap(),
-            fs::canonicalize(shine_dir.join("config.toml"))
-                .await
-                .unwrap()
-        );
+        assert_same_path(config.config_path(), shine_dir.join("config.toml")).await;
         assert!(
             !config.is_project_config,
             "global config.toml must not be treated as a project config"
         );
-        assert_eq!(
-            fs::canonicalize(config.presets_dir()).await.unwrap(),
-            fs::canonicalize(&external_presets).await.unwrap()
-        );
+        assert_same_path(config.presets_dir(), &external_presets).await;
 
         drop(guard);
         fs::remove_dir_all(&home_dir).await.unwrap();
@@ -688,25 +666,13 @@ mod tests {
         .await
         .unwrap();
 
-        set_config_dir(&guard, &state_dir);
-        // SAFETY: env_lock() is held for the duration of this block, preventing
-        //          concurrent env mutation from other threads in this test binary.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-        std::env::set_current_dir(&child_dir).unwrap();
+        enter_project(&guard, &state_dir, &child_dir);
 
         let config = Config::load_or_init().await.unwrap();
 
-        assert_eq!(
-            fs::canonicalize(&config.config_path).await.unwrap(),
-            fs::canonicalize(state_dir.join("config.toml"))
-                .await
-                .unwrap()
-        );
+        assert_same_path(&config.config_path, state_dir.join("config.toml")).await;
         assert!(!config.is_project_config);
-        assert_eq!(
-            fs::canonicalize(config.presets_dir()).await.unwrap(),
-            fs::canonicalize(state_dir.join("presets")).await.unwrap()
-        );
+        assert_same_path(config.presets_dir(), state_dir.join("presets")).await;
         assert_eq!(
             config.env.get("HTTP_PROXY_PORT").map(String::as_str),
             Some("6152")
@@ -734,10 +700,7 @@ mod tests {
             path.file_name().and_then(|name| name.to_str()),
             Some("shine.config.toml")
         );
-        assert_eq!(
-            fs::canonicalize(path.parent().unwrap()).await.unwrap(),
-            fs::canonicalize(&project_dir).await.unwrap()
-        );
+        assert_same_path(path.parent().unwrap(), &project_dir).await;
 
         let content = fs::read_to_string(&path).await.unwrap();
         let parsed: toml::Table = toml::from_str(&content).unwrap();
@@ -832,10 +795,7 @@ mod tests {
         std::env::set_current_dir(&project_dir).unwrap();
 
         let config = Config::load_or_init().await.unwrap();
-        assert_eq!(
-            fs::canonicalize(config.presets_dir()).await.unwrap(),
-            fs::canonicalize(&global_presets).await.unwrap()
-        );
+        assert_same_path(config.presets_dir(), &global_presets).await;
         assert_eq!(config.gpg_recipients, ["global-key"]);
         assert!(config.is_external_presets);
 
@@ -877,17 +837,10 @@ mod tests {
         .await
         .unwrap();
 
-        set_config_dir(&guard, &state_dir);
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-        std::env::set_current_dir(&project_dir).unwrap();
+        enter_project(&guard, &state_dir, &project_dir);
 
         let mut config = Config::load_or_init().await.unwrap();
-        assert_eq!(
-            fs::canonicalize(config.presets_dir()).await.unwrap(),
-            fs::canonicalize(project_dir.join("project-presets"))
-                .await
-                .unwrap()
-        );
+        assert_same_path(config.presets_dir(), project_dir.join("project-presets")).await;
         assert_eq!(config.env.get("GLOBAL").map(String::as_str), Some("config"));
         assert_eq!(
             config.env.get("PROJECT").map(String::as_str),
@@ -946,9 +899,7 @@ mod tests {
         .await
         .unwrap();
 
-        set_config_dir(&guard, &state_dir);
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-        std::env::set_current_dir(&project_dir).unwrap();
+        enter_project(&guard, &state_dir, &project_dir);
 
         let config = Config::load_or_init().await.unwrap();
 
@@ -991,9 +942,7 @@ mod tests {
         .await
         .unwrap();
 
-        set_config_dir(&guard, &state_dir);
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-        std::env::set_current_dir(&project_dir).unwrap();
+        enter_project(&guard, &state_dir, &project_dir);
 
         let config = Config::load_or_init().await.unwrap();
         assert!(config.age_identity.is_none());

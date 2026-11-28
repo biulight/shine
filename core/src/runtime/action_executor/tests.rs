@@ -331,6 +331,18 @@ fn fail_journal_write_after(runtime: &CoreRuntime<InMemoryHost>, successful_writ
     );
 }
 
+async fn mark_receipt_committed(runtime: &CoreRuntime<InMemoryHost>, action_id: &str) {
+    let state_dir = &runtime.context().shine_dir;
+    let (mut journal, _) = load_app_operation_journal(runtime.host(), state_dir)
+        .await
+        .unwrap()
+        .unwrap();
+    journal.mark_receipt_committed(action_id).unwrap();
+    save_app_operation_journal(runtime.host(), state_dir, &journal)
+        .await
+        .unwrap();
+}
+
 async fn seed_receipted_file(
     runtime: &CoreRuntime<InMemoryHost>,
     on_disk: &[u8],
@@ -1335,16 +1347,7 @@ async fn committed_json_removal_cleanup_preserves_new_user_owned_keys() {
         .await
         .unwrap();
     remove_matching_receipt(&runtime).await;
-    let (mut journal, _) = load_app_operation_journal(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap()
-        .unwrap();
-    journal
-        .mark_receipt_committed("action-json-remove")
-        .unwrap();
-    save_app_operation_journal(runtime.host(), &runtime.context().shine_dir, &journal)
-        .await
-        .unwrap();
+    mark_receipt_committed(&runtime, "action-json-remove").await;
     runtime.host().put_file(
         &destination,
         br#"{"proxy":"user-owned","theme":"dark"}"#.to_vec(),
@@ -1472,16 +1475,7 @@ async fn committed_forced_removal_recovery_cleans_only_exact_rollback() {
         .await
         .unwrap();
     remove_matching_receipt(&runtime).await;
-    let (mut journal, _) = load_app_operation_journal(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap()
-        .unwrap();
-    journal
-        .mark_receipt_committed("action-forced-remove")
-        .unwrap();
-    save_app_operation_journal(runtime.host(), &runtime.context().shine_dir, &journal)
-        .await
-        .unwrap();
+    mark_receipt_committed(&runtime, "action-forced-remove").await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert_recovery_step(
@@ -1825,14 +1819,7 @@ async fn removal_receipt_commit_marker_allows_rollback_cleanup() {
         .unwrap();
     remove_matching_receipt(&runtime).await;
 
-    let (mut journal, _) = load_app_operation_journal(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap()
-        .unwrap();
-    journal.mark_receipt_committed("action-remove").unwrap();
-    save_app_operation_journal(runtime.host(), &runtime.context().shine_dir, &journal)
-        .await
-        .unwrap();
+    mark_receipt_committed(&runtime, "action-remove").await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert_recovery_step(
@@ -1920,22 +1907,32 @@ async fn interruption_between_removal_renames_restores_managed_file() {
     assert!(runtime.host().read(&rollback).await.is_err());
 }
 
-#[tokio::test]
-async fn interruption_after_backup_restoration_recreates_pre_uninstall_state() {
-    let runtime = runtime();
-    let managed = b"managed";
-    let original = b"user-original";
+async fn interrupt_backup_removal(
+    runtime: &CoreRuntime<InMemoryHost>,
+    managed: &[u8],
+    original: &[u8],
+) -> (PathBuf, PathBuf, PathBuf) {
     let (destination, backup, rollback) =
-        seed_receipted_file_with_backup(&runtime, managed, managed, original).await;
-    fail_journal_write_after(&runtime, 1);
-    let ir = backup_remove_action_ir(&runtime, managed, original);
-    let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        seed_receipted_file_with_backup(runtime, managed, managed, original).await;
+    fail_journal_write_after(runtime, 1);
+    let ir = backup_remove_action_ir(runtime, managed, original);
+    let (plan, approval) = approved_remove_plan(runtime, &ir);
     assert!(
         runtime
             .execute_app_managed_file_removal_approved(&plan, &approval, ir)
             .await
             .is_err()
     );
+    (destination, backup, rollback)
+}
+
+#[tokio::test]
+async fn interruption_after_backup_restoration_recreates_pre_uninstall_state() {
+    let runtime = runtime();
+    let managed = b"managed";
+    let original = b"user-original";
+    let (destination, backup, rollback) =
+        interrupt_backup_removal(&runtime, managed, original).await;
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&backup).await.is_err());
     assert_eq!(runtime.host().read(&rollback).await.unwrap(), managed);
@@ -1995,16 +1992,7 @@ async fn committed_backup_removal_recovery_keeps_user_file_and_cleans_rollback()
         .await
         .unwrap();
     remove_matching_receipt(&runtime).await;
-    let (mut journal, _) = load_app_operation_journal(runtime.host(), &runtime.context().shine_dir)
-        .await
-        .unwrap()
-        .unwrap();
-    journal
-        .mark_receipt_committed("action-remove-with-backup")
-        .unwrap();
-    save_app_operation_journal(runtime.host(), &runtime.context().shine_dir, &journal)
-        .await
-        .unwrap();
+    mark_receipt_committed(&runtime, "action-remove-with-backup").await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert_recovery_step(
@@ -2023,17 +2011,7 @@ async fn backup_removal_recovery_blocks_changed_restored_user_file() {
     let runtime = runtime();
     let managed = b"managed";
     let original = b"user-original";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    runtime.host().put_file(&destination, managed.to_vec());
-    runtime.host().put_file(&backup, original.to_vec());
-    save_matching_receipt_with_backup(&runtime, managed, Some(backup)).await;
-    fail_journal_write_after(&runtime, 1);
-    let ir = backup_remove_action_ir(&runtime, managed, original);
-    let (plan, approval) = approved_remove_plan(&runtime, &ir);
-    let _ = runtime
-        .execute_app_managed_file_removal_approved(&plan, &approval, ir)
-        .await;
+    let (destination, _, _) = interrupt_backup_removal(&runtime, managed, original).await;
     runtime
         .host()
         .put_file(&destination, b"user-changed-after-restore".to_vec());
@@ -2056,17 +2034,7 @@ async fn backup_removal_recovery_blocks_a_restored_user_file_mode_change() {
     let runtime = runtime();
     let managed = b"managed";
     let original = b"user-original";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    runtime.host().put_file(&destination, managed.to_vec());
-    runtime.host().put_file(&backup, original.to_vec());
-    save_matching_receipt_with_backup(&runtime, managed, Some(backup)).await;
-    fail_journal_write_after(&runtime, 1);
-    let ir = backup_remove_action_ir(&runtime, managed, original);
-    let (plan, approval) = approved_remove_plan(&runtime, &ir);
-    let _ = runtime
-        .execute_app_managed_file_removal_approved(&plan, &approval, ir)
-        .await;
+    let (destination, _, _) = interrupt_backup_removal(&runtime, managed, original).await;
     runtime
         .host()
         .set_mode(&destination, 0o100600)

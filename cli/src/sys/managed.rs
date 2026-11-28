@@ -1029,6 +1029,33 @@ managed = true
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    async fn write_managed_file_preset(
+        os_dir: &std::path::Path,
+        destination: &std::path::Path,
+        item_fields: &str,
+    ) {
+        let metadata = format!(
+            r#"version = 2
+description = "Managed resource test"
+
+[[items]]
+id = "managed-file-test"
+label = "Managed file test"
+mode = "managed"
+driver = "managed-file"
+{item_fields}
+
+[items.config]
+source = "desired.txt"
+target = {:?}
+"#,
+            destination.display().to_string()
+        );
+        fs::write(os_dir.join("shine.toml"), metadata)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn builtin_receipt_uninstalls_after_preset_is_deleted() {
         let dir = make_temp_dir().await;
@@ -1041,30 +1068,12 @@ managed = true
         fs::write(os_dir.join("init.sh"), "#!/bin/bash\n")
             .await
             .unwrap();
-        fs::write(
-            os_dir.join("shine.toml"),
-            format!(
-                r#"
-version = 2
-
-description = "Managed resource test"
-
-[[items]]
-id = "managed-file-test"
-label = "Managed file test"
-mode = "managed"
-driver = "managed-file"
-permissions = {{ schema_version = 1 }}
-
-[items.config]
-source = "desired.txt"
-target = {:?}
-"#,
-                destination.display().to_string()
-            ),
+        write_managed_file_preset(
+            &os_dir,
+            &destination,
+            "permissions = { schema_version = 1 }",
         )
-        .await
-        .unwrap();
+        .await;
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
@@ -1152,29 +1161,12 @@ target = {:?}
         let dir = make_temp_dir().await;
         let os_dir = dir.join("presets/sys/fakeos");
         fs::create_dir_all(&os_dir).await.unwrap();
-        fs::write(
-            os_dir.join("shine.toml"),
-            format!(
-                r#"
-version = 2
-description = "Managed resource test"
-
-[[items]]
-id = "managed-file-test"
-label = "Managed file test"
-mode = "managed"
-driver = "managed-file"
-required_env = ["REQUIRED_TOKEN"]
-
-[items.config]
-source = "desired.txt"
-target = {:?}
-"#,
-                dir.join("managed-output.txt").display().to_string()
-            ),
+        write_managed_file_preset(
+            &os_dir,
+            &dir.join("managed-output.txt"),
+            r#"required_env = ["REQUIRED_TOKEN"]"#,
         )
-        .await
-        .unwrap();
+        .await;
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
@@ -1211,29 +1203,7 @@ target = {:?}
         fs::write(os_dir.join("desired.txt"), "managed")
             .await
             .unwrap();
-        fs::write(
-            os_dir.join("shine.toml"),
-            format!(
-                r#"
-version = 2
-
-description = "Managed resource test"
-
-[[items]]
-id = "managed-file-test"
-label = "Managed file test"
-mode = "managed"
-driver = "managed-file"
-
-[items.config]
-source = "desired.txt"
-target = {:?}
-"#,
-                destination.display().to_string()
-            ),
-        )
-        .await
-        .unwrap();
+        write_managed_file_preset(&os_dir, &destination, "").await;
         fs::write(
             dir.join(SYS_MANIFEST_FILE),
             "schema_version = 2\nentries = []\n",
