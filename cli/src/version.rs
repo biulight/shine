@@ -80,34 +80,26 @@ mod tests {
     use super::{format_display, format_semver};
 
     #[test]
-    fn format_version_without_metadata_returns_package_version() {
-        assert_eq!(format_semver("1.0.0", None), "1.0.0");
-        assert_eq!(format_semver("1.0.0", Some("")), "1.0.0");
-    }
-
-    #[test]
-    fn preview_uses_prerelease_label_without_duplicate_commit() {
-        assert_eq!(format_semver("1.0.0", Some("preview")), "1.0.0-preview");
-        assert_eq!(
-            format_semver("1.0.0", Some("preview.abc1234")),
-            "1.0.0-preview"
-        );
-        assert_eq!(
-            format_semver("2.0.0-rc.1", Some("preview")),
-            "2.0.0-rc.1.preview"
-        );
+    fn semver_formats_package_and_preview_versions() {
+        for (package, metadata, expected) in [
+            ("1.0.0", None, "1.0.0"),
+            ("1.0.0", Some(""), "1.0.0"),
+            ("1.0.0", Some("preview"), "1.0.0-preview"),
+            ("1.0.0", Some("preview.abc1234"), "1.0.0-preview"),
+            ("2.0.0-rc.1", Some("preview"), "2.0.0-rc.1.preview"),
+        ] {
+            assert_eq!(format_semver(package, metadata), expected, "{metadata:?}");
+        }
     }
 
     #[test]
     fn display_matches_cargo_style_when_provenance_is_available() {
-        assert_eq!(
-            format_display("1.0.0", Some("30a34c682"), Some("2026-05-25")),
-            "1.0.0 (30a34c682 2026-05-25)"
-        );
-        assert_eq!(
-            format_display("1.0.0-preview", Some("30a34c682"), Some("2026-05-25")),
-            "1.0.0-preview (30a34c682 2026-05-25)"
-        );
+        for version in ["1.0.0", "1.0.0-preview"] {
+            assert_eq!(
+                format_display(version, Some("30a34c682"), Some("2026-05-25")),
+                format!("{version} (30a34c682 2026-05-25)")
+            );
+        }
     }
 
     #[test]

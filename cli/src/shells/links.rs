@@ -110,80 +110,48 @@ fn shell_category_after_root(path: &Path) -> Option<String> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use crate::bin_links::{LinkConflict, LinkConflictKind};
 
-    async fn make_temp_dir() -> PathBuf {
-        crate::test_support::make_temp_dir("shine-shell").await
-    }
-
-    fn config_with_deepseek_key(dir: &Path) -> Config {
-        let mut config = Config::new_for_test(dir);
-        config
-            .env
-            .insert("DEEPSEEK_API_KEY".into(), "test-deepseek-key".into());
-        config
-    }
-
-    #[cfg(unix)]
     #[tokio::test]
-    async fn link_conflict_detail_describes_existing_file() {
-        let dir = make_temp_dir().await;
-        let config = config_with_deepseek_key(&dir);
-        tokio::fs::create_dir_all(config.bin_dir()).await.unwrap();
-        let link_path = config.bin_dir().join("setproxy");
-        let source = config.presets_dir().join("shell/proxy/set_proxy.sh");
-        tokio::fs::write(&link_path, b"custom command")
-            .await
-            .unwrap();
+    async fn link_conflict_details_describe_files_and_symlinks_with_reinstall_hint() {
+        for is_symlink in [false, true] {
+            let dir = crate::test_support::make_temp_dir("shine-shell").await;
+            let config = Config::new_for_test(&dir);
+            tokio::fs::create_dir_all(config.bin_dir()).await.unwrap();
+            let conflict = LinkConflict {
+                link_path: config.bin_dir().join("setproxy"),
+                source: config.presets_dir().join("shell/proxy/set_proxy.sh"),
+                kind: LinkConflictKind::ExistingEntry,
+            };
+            let (category_hint, existing) = if is_symlink {
+                tokio::fs::create_dir_all(conflict.source.parent().unwrap())
+                    .await
+                    .unwrap();
+                let target = dir.join("other-setproxy");
+                tokio::fs::write(&target, b"#!/bin/sh\n").await.unwrap();
+                tokio::fs::symlink(&target, &conflict.link_path)
+                    .await
+                    .unwrap();
+                (
+                    None,
+                    format!("existing: ~/bin/setproxy -> {}", target.display()),
+                )
+            } else {
+                tokio::fs::write(&conflict.link_path, b"custom command")
+                    .await
+                    .unwrap();
+                (Some("proxy"), "existing: file ~/bin/setproxy".to_owned())
+            };
 
-        let conflict = crate::bin_links::LinkConflict {
-            link_path: link_path.clone(),
-            source: source.clone(),
-            kind: crate::bin_links::LinkConflictKind::ExistingEntry,
-        };
-        let lines = link_conflict_detail_lines(&config, &conflict, Some("proxy"));
-
-        assert_eq!(lines[0], "existing: file ~/bin/setproxy");
-        assert_eq!(lines[1], "wanted:   ~/presets/shell/proxy/set_proxy.sh");
-        assert_eq!(
-            lines[2],
-            "fix:      remove ~/bin/setproxy or run `shine install shell/proxy --replace-managed`"
-        );
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn link_conflict_detail_describes_stale_symlink() {
-        let dir = make_temp_dir().await;
-        let config = config_with_deepseek_key(&dir);
-        tokio::fs::create_dir_all(config.bin_dir()).await.unwrap();
-        tokio::fs::create_dir_all(config.presets_dir().join("shell/proxy"))
-            .await
-            .unwrap();
-        let link_path = config.bin_dir().join("setproxy");
-        let source = config.presets_dir().join("shell/proxy/set_proxy.sh");
-        let other = dir.join("other-setproxy");
-        tokio::fs::write(&other, b"#!/bin/sh\n").await.unwrap();
-        tokio::fs::symlink(&other, &link_path).await.unwrap();
-
-        let conflict = crate::bin_links::LinkConflict {
-            link_path,
-            source,
-            kind: crate::bin_links::LinkConflictKind::ExistingEntry,
-        };
-        let lines = link_conflict_detail_lines(&config, &conflict, None);
-
-        assert!(lines[0].starts_with("existing: ~/bin/setproxy -> "));
-        assert!(lines[0].contains("other-setproxy"));
-        assert_eq!(lines[1], "wanted:   ~/presets/shell/proxy/set_proxy.sh");
-        assert_eq!(
-            lines[2],
-            "fix:      remove ~/bin/setproxy or run `shine install shell/proxy --replace-managed`"
-        );
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
+            let lines = link_conflict_detail_lines(&config, &conflict, category_hint);
+            assert_eq!(lines[0], existing);
+            assert_eq!(lines[1], "wanted:   ~/presets/shell/proxy/set_proxy.sh");
+            assert_eq!(
+                lines[2],
+                "fix:      remove ~/bin/setproxy or run `shine install shell/proxy --replace-managed`"
+            );
+            tokio::fs::remove_dir_all(dir).await.unwrap();
+        }
     }
 }
 
@@ -248,21 +216,10 @@ mod category_tests {
                 },
             ),
         ] {
-            for source in [
-                config
-                    .presets_dir()
-                    .join("shell")
-                    .join(category)
-                    .join("run.ts"),
-                config
-                    .rendered_dir()
-                    .join("shell")
-                    .join(category)
-                    .join("run.ts"),
-            ] {
+            for root in [config.presets_dir(), &config.rendered_dir()] {
                 let conflict = crate::bin_links::LinkConflict {
                     link_path: config.bin_dir().join("run"),
-                    source,
+                    source: root.join("shell").join(category).join("run.ts"),
                     kind: crate::bin_links::LinkConflictKind::DuplicateName,
                 };
                 for hint in [None, Some(category)] {

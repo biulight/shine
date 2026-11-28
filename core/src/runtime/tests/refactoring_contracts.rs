@@ -171,39 +171,21 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'ENABLE', se
                 .count(),
             1
         );
-        assert_eq!(
-            runtime
-                .host()
-                .read(&destination.join("a-static"))
-                .await
-                .unwrap(),
-            b"next static"
-        );
-        assert_eq!(
-            runtime
-                .host()
-                .read(&destination.join("b-generated"))
-                .await
-                .unwrap(),
-            b"last good generated"
-        );
         let receipt = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
             .await
             .unwrap();
-        assert_eq!(
-            receipt
-                .find_by_source("app/demo/a-static")
-                .unwrap()
-                .content_hash,
-            hash_content(b"next static")
-        );
-        assert_eq!(
-            receipt
-                .find_by_source("app/demo/b-generated")
-                .unwrap()
-                .content_hash,
-            hash_content(b"last good generated")
-        );
+        for (file, expected) in [
+            ("a-static", b"next static".as_slice()),
+            ("b-generated", b"last good generated"),
+        ] {
+            assert_eq!(
+                runtime.host().read(&destination.join(file)).await.unwrap(),
+                expected,
+                "{file}"
+            );
+            let entry = receipt.find_by_source(&format!("app/demo/{file}")).unwrap();
+            assert_eq!(entry.content_hash, hash_content(expected), "{file}");
+        }
         assert!(
             runtime
                 .host()
@@ -262,6 +244,10 @@ fn shell_snapshot(version: &str) -> PresetSnapshot {
 
 #[tokio::test]
 async fn shell_inspection_stays_read_only_across_interruption_recovery_and_fresh_retry() {
+    async fn assert_status(runtime: &CoreRuntime<InMemoryHost>, expected: InspectionFileStatus) {
+        assert_eq!(runtime.inspect_shells().await.unwrap()[0].status, expected);
+    }
+
     let mut context = context();
     context
         .env
@@ -281,19 +267,13 @@ async fn shell_inspection_stays_read_only_across_interruption_recovery_and_fresh
         .install_shells_approved(install.clone(), &approval)
         .await
         .unwrap();
-    assert_eq!(
-        runtime.inspect_shells().await.unwrap()[0].status,
-        InspectionFileStatus::UpToDate
-    );
+    assert_status(&runtime, InspectionFileStatus::UpToDate).await;
     let next = CoreRuntime::new(
         runtime.host().clone(),
         runtime.context().clone(),
         shell_snapshot("next"),
     );
-    assert_eq!(
-        next.inspect_shells().await.unwrap()[0].status,
-        InspectionFileStatus::UpdateAvail
-    );
+    assert_status(&next, InspectionFileStatus::UpdateAvail).await;
     let upgrade = ShellPlanRequest {
         operation: LifecycleOperation::Upgrade,
         ..install
@@ -310,10 +290,7 @@ async fn shell_inspection_stays_read_only_across_interruption_recovery_and_fresh
     let journal_bytes = next.host().read(&journal).await.unwrap();
     assert!(!String::from_utf8_lossy(&journal_bytes).contains("captured payload"));
     let since = next.host().operations().len();
-    assert_eq!(
-        next.inspect_shells().await.unwrap()[0].status,
-        InspectionFileStatus::UpdateAvail
-    );
+    assert_status(&next, InspectionFileStatus::UpdateAvail).await;
     assert!(
         next.host().operations()[since..]
             .iter()
@@ -326,14 +303,8 @@ async fn shell_inspection_stays_read_only_across_interruption_recovery_and_fresh
         .await
         .unwrap();
     assert!(next.host().metadata(&journal).await.is_err());
-    assert_eq!(
-        runtime.inspect_shells().await.unwrap()[0].status,
-        InspectionFileStatus::UpToDate
-    );
-    assert_eq!(
-        next.inspect_shells().await.unwrap()[0].status,
-        InspectionFileStatus::UpdateAvail
-    );
+    assert_status(&runtime, InspectionFileStatus::UpToDate).await;
+    assert_status(&next, InspectionFileStatus::UpdateAvail).await;
     let retry = next.plan_shells(upgrade.clone()).await.unwrap();
     let retry_approval = PlanApprovalV1::for_reviewed_plan(&retry).unwrap();
     next.upgrade_shells_approved(upgrade, &retry_approval)
@@ -403,38 +374,33 @@ async fn shared_shell_rendering_keeps_cached_bytes_receipt_consumers_and_recover
     let mut cache_at = None;
     let mut rendered_at = None;
     for (index, action) in journal.action_ir.actions.iter().enumerate() {
-        match &action.kind {
+        let receipts = match &action.kind {
             ActionKindV1::ReplaceShellCache { receipts, .. } => {
                 cache_at = Some(index);
-                assert_eq!(
-                    receipts
-                        .iter()
-                        .map(|r| r.target.as_str())
-                        .collect::<Vec<_>>(),
-                    ["shell/demo/first", "shell/demo/second"]
-                );
                 assert!(receipts.iter().all(|r| r.previous.is_none()
                     && r.desired.content_hash == hash_content(cached_bytes)));
+                receipts
             }
             ActionKindV1::ReplaceShellRenderedFile {
                 receipts, desired, ..
             } => {
                 rendered_at = Some(index);
                 assert_eq!(
-                    receipts
-                        .iter()
-                        .map(|r| r.target.as_str())
-                        .collect::<Vec<_>>(),
-                    ["shell/demo/first", "shell/demo/second"]
-                );
-                assert_eq!(
                     desired.content_hash,
                     hash_content(b"console.log('cached captured');\n")
                 );
                 assert_eq!(desired.unix_mode, Some(0o744));
+                receipts
             }
-            _ => {}
-        }
+            _ => continue,
+        };
+        assert_eq!(
+            receipts
+                .iter()
+                .map(|r| r.target.as_str())
+                .collect::<Vec<_>>(),
+            ["shell/demo/first", "shell/demo/second"]
+        );
     }
     assert!(cache_at.unwrap() < rendered_at.unwrap());
     assert!(!String::from_utf8_lossy(&bytes).contains("cached captured"));

@@ -110,67 +110,32 @@ pub fn secret_key(key: &str) -> String {
     format!("{key}_SECRET")
 }
 
-impl EnvConfig {
-    #[cfg(test)]
-    fn with_defaults() -> Self {
-        Self {
-            vars: crate::config::default_env_map(),
-            descriptions: BTreeMap::new(),
-            pending: BTreeMap::new(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn from_config_reads_env_table() {
-        let dir = std::env::temp_dir().join(format!("shine-env-test-{}", uuid::Uuid::new_v4()));
-        let mut config = Config::new_for_test(&dir);
+    fn from_config_reads_values_and_descriptions() {
+        let mut config = Config::new_for_test(std::path::Path::new("env-test"));
         config.env.insert("HTTP_PROXY_PORT".into(), "7890".into());
-
-        let env = EnvConfig::from_config(&config);
-
-        assert_eq!(env.get("HTTP_PROXY_PORT"), Some("7890"));
-    }
-
-    #[test]
-    fn from_config_reads_description() {
-        let dir = std::env::temp_dir().join(format!("shine-env-test-{}", uuid::Uuid::new_v4()));
-        let mut config = Config::new_for_test(&dir);
         config
             .env_descriptions
             .insert("MY_TOKEN".into(), "Internal token".into());
 
         let env = EnvConfig::from_config(&config);
-
+        assert_eq!(env.get("HTTP_PROXY_PORT"), Some("7890"));
         assert_eq!(env.description("MY_TOKEN"), Some("Internal token"));
     }
 
     #[test]
-    fn set_and_get_roundtrip() {
+    fn set_get_and_remove_preserve_values_and_report_missing_keys() {
         let mut env = EnvConfig::default();
+        assert_eq!(env.remove("OTHER"), None);
         env.set("MY_VAR", "hello");
         assert_eq!(env.get("MY_VAR"), Some("hello"));
         assert_eq!(env.get("OTHER"), None);
-    }
-
-    #[test]
-    fn remove_deletes_existing_key() {
-        let mut env = EnvConfig::default();
-        env.set("MY_VAR", "hello");
-
-        assert_eq!(env.remove("MY_VAR"), Some("hello".to_string()));
+        assert_eq!(env.remove("MY_VAR").as_deref(), Some("hello"));
         assert_eq!(env.get("MY_VAR"), None);
-    }
-
-    #[test]
-    fn remove_missing_key_returns_none() {
-        let mut env = EnvConfig::default();
-
-        assert_eq!(env.remove("OTHER"), None);
     }
 
     #[test]
@@ -185,7 +150,8 @@ mod tests {
 
     #[test]
     fn defaults_are_available_for_tests() {
-        let env = EnvConfig::with_defaults();
+        let config = Config::new_for_test(std::path::Path::new("env-test"));
+        let env = EnvConfig::from_config(&config);
         assert_eq!(env.get("HTTP_PROXY_PORT"), Some("6152"));
         assert_eq!(env.get("SOCKS5_PROXY_PORT"), Some("6153"));
         assert_eq!(env.get("PROXY_HOST"), Some("127.0.0.1"));

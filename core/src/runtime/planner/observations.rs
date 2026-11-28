@@ -390,85 +390,56 @@ mod manifest_reader_tests {
                 if let Some(input) = input {
                     host.put_file(&path, input.as_bytes().to_vec());
                 }
-                let loaded = if domain == "app" {
-                    load_app_manifest(&host, root)
-                        .await
-                        .map(|(manifest, bytes)| {
-                            (
-                                manifest.schema_version,
-                                serde_json::to_value(manifest.entries).unwrap(),
-                                bytes,
-                            )
-                        })
+                let expected_read = [HostOperation::Read(path.clone())];
+                let text = input.unwrap_or_default();
+                let bytes = input.map(|value| value.as_bytes().to_vec());
+                if domain == "app" {
+                    let planned = load_app_manifest(&host, root).await;
+                    assert_eq!(host.operations(), expected_read);
+                    let parsed = toml::from_str::<AppManifest>(text);
+                    match input {
+                        Some("schema_version = -1\n" | "[") => {
+                            assert_eq!(
+                                planned.unwrap_err().to_string(),
+                                parsed.unwrap_err().to_string()
+                            );
+                        }
+                        _ => {
+                            let expected = AppManifest {
+                                schema_version: 2,
+                                ..parsed.unwrap()
+                            };
+                            assert_eq!(planned.unwrap(), (expected, bytes));
+                        }
+                    }
                 } else {
-                    load_sys_manifest(&host, root)
-                        .await
-                        .map(|(manifest, bytes)| {
-                            (
-                                manifest.schema_version,
-                                serde_json::to_value(manifest.entries).unwrap(),
-                                bytes,
-                            )
-                        })
-                };
-                assert_eq!(host.operations(), vec![HostOperation::Read(path.clone())]);
-                match input {
-                    Some("schema_version = 2\n") if domain == "sys" => assert_eq!(
-                        loaded.unwrap_err().to_string(),
-                        format!(
-                            "{domain} manifest schema version 2 is newer than this Shine supports (1)"
-                        )
-                    ),
-                    Some("schema_version = -1\n" | "[") => {
-                        let error = if domain == "app" {
-                            toml::from_str::<AppManifest>(input.unwrap()).unwrap_err()
-                        } else {
-                            toml::from_str::<SysRunManifest>(input.unwrap()).unwrap_err()
-                        };
-                        assert_eq!(loaded.unwrap_err().to_string(), error.to_string());
-                    }
-                    _ => {
-                        let (version, entries, bytes) = loaded.unwrap();
-                        assert_eq!(version, if domain == "app" { 2 } else { 1 });
-                        assert_eq!(bytes.as_deref(), input.map(str::as_bytes));
-                        let expected_entries = if domain == "app" {
-                            serde_json::to_value(
-                                toml::from_str::<AppManifest>(input.unwrap_or(""))
-                                    .unwrap()
-                                    .entries,
-                            )
-                            .unwrap()
-                        } else {
-                            serde_json::to_value(
-                                toml::from_str::<SysRunManifest>(input.unwrap_or(""))
-                                    .unwrap()
-                                    .entries,
-                            )
-                            .unwrap()
-                        };
-                        assert_eq!(entries, expected_entries);
-                    }
-                }
-                if domain == "sys" {
+                    let planned = load_sys_manifest(&host, root).await;
+                    assert_eq!(host.operations(), expected_read);
                     let direct = SysRunManifest::load(&host, root).await;
                     match input {
-                        Some("schema_version = 2\n") => assert_eq!(
-                            direct.unwrap_err().to_string(),
-                            "sys manifest schema version 2 is newer than this Shine supports (1)"
-                        ),
-                        Some("schema_version = -1\n" | "[") => assert_eq!(
-                            direct.unwrap_err().to_string(),
-                            "failed to parse sys manifest"
-                        ),
-                        _ => {
-                            let manifest = direct.unwrap();
-                            assert_eq!(manifest.schema_version, 1);
+                        Some("schema_version = 2\n") => {
+                            for error in [planned.unwrap_err(), direct.unwrap_err()] {
+                                assert_eq!(
+                                    error.to_string(),
+                                    "sys manifest schema version 2 is newer than this Shine supports (1)"
+                                );
+                            }
+                        }
+                        Some("schema_version = -1\n" | "[") => {
+                            let parse_error = toml::from_str::<SysRunManifest>(text).unwrap_err();
+                            assert_eq!(planned.unwrap_err().to_string(), parse_error.to_string());
                             assert_eq!(
-                                manifest.entries,
-                                toml::from_str::<SysRunManifest>(input.unwrap_or(""))
-                                    .unwrap()
-                                    .entries
+                                direct.unwrap_err().to_string(),
+                                "failed to parse sys manifest"
                             );
+                        }
+                        _ => {
+                            let expected = SysRunManifest {
+                                schema_version: 1,
+                                ..toml::from_str(text).unwrap()
+                            };
+                            assert_eq!(direct.unwrap(), expected);
+                            assert_eq!(planned.unwrap(), (expected, bytes));
                         }
                     }
                 }

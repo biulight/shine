@@ -154,6 +154,12 @@ mod tests {
         (root, category)
     }
 
+    async fn pack(input: &Path, output: &Path, force: bool) -> bool {
+        handle_pack(input, output, force, PresetReportFormat::Json)
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn pack_rejects_regular_file_ancestors_without_publishing() {
         let (root, category) = category_fixture();
@@ -166,11 +172,7 @@ mod tests {
             }
             let requested = blocker.join("../bundle.tar.gz");
 
-            assert!(
-                !handle_pack(&category, &requested, force, PresetReportFormat::Json)
-                    .await
-                    .unwrap()
-            );
+            assert!(!pack(&category, &requested, force).await);
 
             if force {
                 assert_eq!(std::fs::read(&output).unwrap(), b"preserve");
@@ -222,13 +224,10 @@ mod tests {
         }
         for index in 0..4 {
             let output = root.join(format!("bundle-{index}.tar.gz"));
-            let (a, b) = tokio::join!(
-                handle_pack(&first, &output, false, PresetReportFormat::Json),
-                handle_pack(&second, &output, false, PresetReportFormat::Json),
-            );
-            let successes = [a.unwrap(), b.unwrap()];
-            assert_eq!(successes.iter().filter(|&&ok| ok).count(), 1);
-            let winner = usize::from(successes[1]);
+            let (first_won, second_won) =
+                tokio::join!(pack(&first, &output, false), pack(&second, &output, false));
+            assert_ne!(first_won, second_won, "exactly one publisher must succeed");
+            let winner = usize::from(second_won);
             assert_eq!(std::fs::read(&output).unwrap(), expected[winner]);
         }
         assert!(std::fs::read_dir(&root).unwrap().all(|entry| {
@@ -245,23 +244,10 @@ mod tests {
     async fn pack_resolves_parent_components_before_output_scope_check() {
         let (root, category) = category_fixture();
         let output = root.join("app/../app/demo/new/bundle.tar.gz");
-        assert!(
-            !handle_pack(&category, &output, true, PresetReportFormat::Json)
-                .await
-                .unwrap()
-        );
+        assert!(!pack(&category, &output, true).await);
         assert!(!category.join("new").exists());
         let outside = category.join("../bundles/release.tar.gz");
-        assert!(
-            handle_pack(
-                &category.join("../demo/shine.toml"),
-                &outside,
-                false,
-                PresetReportFormat::Json
-            )
-            .await
-            .unwrap()
-        );
+        assert!(pack(&category.join("../demo/shine.toml"), &outside, false).await);
         assert!(root.join("app/bundles/release.tar.gz").is_file());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -275,16 +261,7 @@ mod tests {
         symlink(&category, &alias).unwrap();
         for input in [&category, &alias] {
             for force in [false, true] {
-                assert!(
-                    !handle_pack(
-                        input,
-                        &alias.join("new/bundle.tar.gz"),
-                        force,
-                        PresetReportFormat::Json
-                    )
-                    .await
-                    .unwrap()
-                );
+                assert!(!pack(input, &alias.join("new/bundle.tar.gz"), force).await);
                 assert!(!category.join("new").exists());
             }
         }
@@ -306,17 +283,9 @@ mod tests {
         let output = root.join("bundle.tar.gz");
         let target = category.join("missing");
         symlink(&target, &output).unwrap();
-        assert!(
-            !handle_pack(&category, &output, false, PresetReportFormat::Json)
-                .await
-                .unwrap()
-        );
+        assert!(!pack(&category, &output, false).await);
         assert!(output.is_symlink());
-        assert!(
-            handle_pack(&category, &output, true, PresetReportFormat::Json)
-                .await
-                .unwrap()
-        );
+        assert!(pack(&category, &output, true).await);
         assert!(!output.is_symlink());
         assert!(!target.exists());
         std::fs::remove_dir_all(root).unwrap();

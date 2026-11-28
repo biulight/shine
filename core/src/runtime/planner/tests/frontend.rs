@@ -1,17 +1,23 @@
 //! Frontend regressions.
 use super::*;
+use crate::frontend::CapabilityKindV1;
+
+async fn assert_user_edit_blocks_recovery(
+    runtime: &CoreRuntime<InMemoryHost>,
+    kind: CapabilityKindV1,
+    relative_path: &str,
+) {
+    let contents = b"user content after interruption";
+    let destination = runtime.context().home_dir.join(relative_path);
+    runtime.host().put_file(&destination, contents.to_vec());
+    assert_frontend_journal(runtime, kind, false).await;
+    assert_eq!(runtime.host().read(&destination).await.unwrap(), contents);
+}
 
 #[tokio::test]
 async fn frontend_app_operation_state_preserves_post_interruption_user_changes() {
     let runtime = runtime(static_copy_app_snapshot());
-    let request = AppPlanRequest {
-        operation: LifecycleOperation::Install,
-        target: Some("demo".into()),
-        force: false,
-        purge: false,
-        prune_stale: false,
-        input_versions: PlanningInputVersions::default(),
-    };
+    let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
@@ -28,15 +34,8 @@ async fn frontend_app_operation_state_preserves_post_interruption_user_changes()
             .await
             .is_err()
     );
-    let destination = runtime.context().home_dir.join(".config/demo/config.toml");
-    runtime
-        .host()
-        .put_file(&destination, b"user content after interruption".to_vec());
-    assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::App, false).await;
-    assert_eq!(
-        runtime.host().read(&destination).await.unwrap(),
-        b"user content after interruption"
-    );
+    assert_user_edit_blocks_recovery(&runtime, CapabilityKindV1::App, ".config/demo/config.toml")
+        .await;
 }
 
 #[tokio::test]
@@ -83,22 +82,14 @@ target = "~/.config/managed.txt"
             &mut crate::runtime::NullObserver,
         )
         .await;
-    assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
+    assert_frontend_journal(&runtime, CapabilityKindV1::Sys, true).await;
     let observation = runtime
         .inspect_sys_operation_journal()
         .await
         .unwrap()
         .unwrap();
     assert_eq!(observation.receipt_committed_actions, 1);
-    let destination = runtime.context().home_dir.join(".config/managed.txt");
-    runtime
-        .host()
-        .put_file(&destination, b"user content".to_vec());
-    assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, false).await;
-    assert_eq!(
-        runtime.host().read(&destination).await.unwrap(),
-        b"user content"
-    );
+    assert_user_edit_blocks_recovery(&runtime, CapabilityKindV1::Sys, ".config/managed.txt").await;
 }
 
 #[tokio::test]
@@ -258,22 +249,19 @@ install = { kind = 'package', provider = 'homebrew', package = 'recorded' }
     );
     let sys = rich.inspect_sys("test").await.unwrap();
     assert_eq!(sys.report, only_filesystem[2]);
-    assert!(
-        sys.report
-            .items
-            .iter()
-            .any(|item| item.target == "sys/recorded" && item.state == InspectionStateV1::Recorded)
-    );
-    assert!(
-        sys.report
-            .items
-            .iter()
-            .any(|item| item.target == "sys/removed"
-                && item.state == InspectionStateV1::PresetMissing)
-    );
-    assert!(sys.report.items.iter().any(
-        |item| item.target == "sys/managed" && item.state == InspectionStateV1::UpdateAvailable
-    ));
+    for (target, state) in [
+        ("sys/recorded", InspectionStateV1::Recorded),
+        ("sys/removed", InspectionStateV1::PresetMissing),
+        ("sys/managed", InspectionStateV1::UpdateAvailable),
+    ] {
+        assert!(
+            sys.report
+                .items
+                .iter()
+                .any(|item| item.target == target && item.state == state),
+            "{target}: {state:?}"
+        );
+    }
     assert_eq!(
         rich.missing_app_sources().await.unwrap(),
         restricted.missing_app_sources().await.unwrap()

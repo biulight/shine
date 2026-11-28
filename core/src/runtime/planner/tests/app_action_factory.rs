@@ -38,6 +38,13 @@ fn receipt(resource: &str, destination: PathBuf, bytes: &[u8], json: bool) -> Ap
     }
 }
 
+fn resource_order(actions: &[ActionIrV1]) -> Vec<&str> {
+    actions
+        .iter()
+        .map(|ir| ir.actions[0].resource.as_str())
+        .collect()
+}
+
 async fn factory_actions(
     runtime: &CoreRuntime<ObservationOnlyHost>,
     host: &InMemoryHost,
@@ -163,13 +170,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'ENABLE', se
         "d-new.json",
         "e-update.json",
     ];
-    assert_eq!(
-        actions
-            .iter()
-            .map(|ir| ir.actions[0].resource.as_str())
-            .collect::<Vec<_>>(),
-        resources
-    );
+    assert_eq!(resource_order(&actions), resources);
     let fingerprint = plan.fingerprint().unwrap().as_hex();
     for ((ir, resource), prefix) in actions.iter().zip(resources).zip([
         "create",
@@ -314,13 +315,7 @@ managed_keys = ['next']
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     assert!(plan.is_ready(), "{plan:?}");
     let actions = factory_actions(&runtime, &host, &request, &plan).await;
-    assert_eq!(
-        actions
-            .iter()
-            .map(|ir| ir.actions[0].resource.as_str())
-            .collect::<Vec<_>>(),
-        ["copy", "settings.json", "stale"]
-    );
+    assert_eq!(resource_order(&actions), ["copy", "settings.json", "stale"]);
     assert!(
         matches!(&actions[0].actions[0].kind, ActionKindV1::RelocateManagedFile { previous_destination, desired_destination, previous_present, previous_mode, previous_hash, desired_hash, previous_backup: Some(previous_backup), previous_uses_env, desired_uses_env, previous_requires_admin, desired_requires_admin, previous_rollback }
         if previous_destination == &old.join("copy") && desired_destination == &next.join("copy") && *previous_present && *previous_mode == Some(0o100640) && *previous_hash == hash_content(b"old copy") && *desired_hash == hash_content(b"rendered private") && previous_backup.path == backup && previous_backup.mode == Some(0o100600) && previous_backup.hash == hash_content(b"user backup") && !previous_uses_env && *desired_uses_env && !previous_requires_admin && *desired_requires_admin && previous_rollback == &managed_file_rollback_path(&old.join("copy")))
@@ -357,6 +352,15 @@ struct UpdateFixture {
     plan: PlanV1,
     previous: PathBuf,
     destination: PathBuf,
+}
+
+impl UpdateFixture {
+    async fn rejected_actions(&self, plan: &PlanV1, approval: &PlanApprovalV1) -> anyhow::Error {
+        self.runtime
+            .approved_app_file_action_irs(&self.request, plan, approval)
+            .await
+            .unwrap_err()
+    }
 }
 
 async fn update_fixture(json: bool, relocate: bool) -> UpdateFixture {
@@ -429,11 +433,7 @@ async fn app_factory_relocation_requires_typed_intent_and_checks_destination_fir
             .host
             .put_file(&fixture.previous, b"late source".to_vec());
         let before = fixture.host.operations().len();
-        let error = fixture
-            .runtime
-            .approved_app_file_action_irs(&fixture.request, &fixture.plan, &approval)
-            .await
-            .unwrap_err();
+        let error = fixture.rejected_actions(&fixture.plan, &approval).await;
         assert_eq!(
             error.to_string(),
             if json {
@@ -489,11 +489,7 @@ async fn app_factory_all_update_handlers_recheck_late_rollback_occupants_without
             .host
             .put_file(&rollback, b"late rollback occupant".to_vec());
         let before = fixture.host.operations().len();
-        let error = fixture
-            .runtime
-            .approved_app_file_action_irs(&fixture.request, &fixture.plan, &approval)
-            .await
-            .unwrap_err();
+        let error = fixture.rejected_actions(&fixture.plan, &approval).await;
         assert_eq!(error.to_string(), expected);
         assert!(
             fixture.host.operations()[before..]
@@ -516,12 +512,6 @@ async fn app_factory_rejects_invalid_approval_before_any_host_observation() {
         .diagnostic_codes
         .push("changed-after-review".into());
     let before = fixture.host.operations().len();
-    assert!(
-        fixture
-            .runtime
-            .approved_app_file_action_irs(&fixture.request, &changed, &approval)
-            .await
-            .is_err()
-    );
+    fixture.rejected_actions(&changed, &approval).await;
     assert!(fixture.host.operations()[before..].is_empty());
 }

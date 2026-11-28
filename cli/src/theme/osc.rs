@@ -229,8 +229,7 @@ mod tests {
 
     #[test]
     fn parse_osc_response_extracts_theme_from_well_formed_reply() {
-        let response = b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\";
-        assert_eq!(parse_osc_response(response), Some(Theme::Light));
+        assert_eq!(parse_osc_response(FULL_REPLY), Some(Theme::Light));
     }
 
     #[test]
@@ -243,15 +242,13 @@ mod tests {
     /// Drive the production deadline policy with scheduled bytes and a virtual
     /// clock. Real sleeps can overshoot under CI load, even between ready bytes.
     /// Socket and PTY tests below cover the actual select/read adapter separately.
-    fn run_matrix_case(
-        chunks: Vec<(&'static [u8], Duration)>,
-        deadline_budget: Duration,
-    ) -> Vec<u8> {
+    fn run_matrix_case(chunks: &[(&[u8], u64)], budget_ms: u64) -> Vec<u8> {
+        let deadline_budget = Duration::from_millis(budget_ms);
         let start = Instant::now();
         let elapsed = Cell::new(Duration::ZERO);
         let mut arrival = Duration::ZERO;
-        let mut bytes = chunks.into_iter().flat_map(|(chunk, gap)| {
-            arrival += gap;
+        let mut bytes = chunks.iter().flat_map(|&(chunk, gap_ms)| {
+            arrival += Duration::from_millis(gap_ms);
             chunk.iter().map(move |&byte| (arrival, byte))
         });
         read_response_until_deadline(
@@ -278,64 +275,29 @@ mod tests {
 
     #[test]
     fn matrix_whole_packet_reads_complete_response() {
-        let result = run_matrix_case(
-            vec![(FULL_REPLY, Duration::ZERO)],
-            Duration::from_millis(200),
-        );
-        assert_eq!(result, FULL_REPLY);
+        assert_eq!(run_matrix_case(&[(FULL_REPLY, 0)], 200), FULL_REPLY);
     }
 
     #[test]
-    fn matrix_fragmented_50ms_gap_still_reads_complete_response() {
-        // This is the case the superseded shell implementation got wrong:
-        // a fragment arriving well past any *inter-byte* timeout (its 10ms)
-        // must still be captured because the deadline here is total, not
-        // per-byte.
-        let result = run_matrix_case(
-            vec![
-                (&FULL_REPLY[..2], Duration::ZERO), // "\x1b]"
-                (&FULL_REPLY[2..], Duration::from_millis(50)),
-            ],
-            Duration::from_millis(200),
-        );
-        assert_eq!(
-            result, FULL_REPLY,
-            "a 50ms-fragmented reply must be read in full under a 200ms total deadline"
-        );
-    }
-
-    #[test]
-    fn matrix_fragmented_5ms_gap_reads_complete_response() {
-        let result = run_matrix_case(
-            vec![
-                (&FULL_REPLY[..2], Duration::ZERO),
-                (&FULL_REPLY[2..], Duration::from_millis(5)),
-            ],
-            Duration::from_millis(200),
-        );
-        assert_eq!(result, FULL_REPLY);
+    fn matrix_fragmented_replies_respect_the_total_deadline() {
+        // A 50 ms gap exceeded the former 10 ms inter-byte timeout. Only the total budget matters.
+        for (gap_ms, budget_ms, expected) in [
+            (5, 200, FULL_REPLY),
+            (50, 200, FULL_REPLY),
+            (300, 50, &FULL_REPLY[..2]),
+        ] {
+            let chunks = [(&FULL_REPLY[..2], 0), (&FULL_REPLY[2..], gap_ms)];
+            assert_eq!(
+                run_matrix_case(&chunks, budget_ms),
+                expected,
+                "gap={gap_ms} ms, budget={budget_ms} ms"
+            );
+        }
     }
 
     #[test]
     fn matrix_no_reply_returns_empty_at_deadline() {
-        let result = run_matrix_case(vec![], Duration::from_millis(80));
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn matrix_reply_fragmented_beyond_total_deadline_is_truncated_not_leaked() {
-        // A fragment arriving *after* the total deadline must simply not be
-        // read (the function returns at the deadline) — it must never be
-        // echoed by a caller that has already restored tty state, which is
-        // exactly the bug this module fixes.
-        let result = run_matrix_case(
-            vec![
-                (&FULL_REPLY[..2], Duration::ZERO),
-                (&FULL_REPLY[2..], Duration::from_millis(300)),
-            ],
-            Duration::from_millis(50),
-        );
-        assert_eq!(result, &FULL_REPLY[..2]);
+        assert!(run_matrix_case(&[], 80).is_empty());
     }
 
     #[test]
@@ -414,7 +376,6 @@ mod tests {
             "a fresh pty slave must start in canonical mode"
         );
 
-        let reply = b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\";
         let got = {
             let _guard = TtyQueryGuard::enter(slave).expect("guard on a real tty");
 
@@ -424,16 +385,16 @@ mod tests {
             assert_eq!(during.c_lflag & libc::ECHO, 0, "ECHO must be cleared");
 
             // Deliver the newline-free reply to the slave via the master.
-            // SAFETY: `master` is an open fd; `reply` is a valid byte buffer.
-            let n = unsafe { libc::write(master, reply.as_ptr().cast(), reply.len()) };
-            assert_eq!(n, reply.len() as isize, "short write to pty master");
+            // SAFETY: `master` is an open fd; `FULL_REPLY` is a valid byte buffer.
+            let n = unsafe { libc::write(master, FULL_REPLY.as_ptr().cast(), FULL_REPLY.len()) };
+            assert_eq!(n, FULL_REPLY.len() as isize, "short write to pty master");
 
             let deadline = Instant::now() + Duration::from_secs(5);
             read_until_terminator_or_deadline(slave, deadline)
         };
 
         assert_eq!(
-            got, reply,
+            got, FULL_REPLY,
             "newline-free OSC reply must be read in full once ICANON is cleared"
         );
 

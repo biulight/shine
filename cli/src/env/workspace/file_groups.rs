@@ -697,84 +697,69 @@ mod export_tests {
         task::{Context, Waker},
     };
 
-    struct Fixture(PathBuf);
-    impl Drop for Fixture {
+    struct ExportDir(PathBuf);
+    impl Drop for ExportDir {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
-    impl Fixture {
-        async fn new() -> (Self, Selection, Vec<CapturedFile>, Vec<Zeroizing<Vec<u8>>>) {
-            let root = std::env::temp_dir()
-                .join(format!("shine-export-rollback-{}", uuid::Uuid::new_v4()));
-            fs::create_dir_all(root.join("existing")).unwrap();
-            let path = root.join("shine.workspace.toml");
-            fs::write(&path, "version=3\n[env]\ndefault_mode='test'\n[[file_groups.signing.files]]\nsource='one.enc'\ntarget='new/one'\n[[file_groups.signing.files]]\nsource='two.enc'\ntarget='existing/two'\n").unwrap();
-            fs::write(root.join("one.enc"), "one").unwrap();
-            fs::write(root.join("two.enc"), "two").unwrap();
-            let selected = Selection::load(Some(&path), Some("test"), &["signing".into()])
-                .await
-                .unwrap();
-            let captured = selected
-                .mappings
-                .iter()
-                .map(|(source, _)| CapturedFile::read(&selected.root, source, MAX_CIPHER).unwrap())
-                .collect();
-            let plain = vec![Zeroizing::new(vec![0, 255]), Zeroizing::new(Vec::new())];
-            (Self(root), selected, captured, plain)
-        }
+
+    async fn export_after_first_write() -> (ExportDir, impl Future<Output = Result<()>>) {
+        let dir = ExportDir(crate::test_support::make_temp_dir("shine-export-rollback").await);
+        let root = &dir.0;
+        fs::create_dir_all(root.join("existing")).unwrap();
+        let path = root.join("shine.workspace.toml");
+        fs::write(&path, "version=3\n[env]\ndefault_mode='test'\n[[file_groups.signing.files]]\nsource='one.enc'\ntarget='new/one'\n[[file_groups.signing.files]]\nsource='two.enc'\ntarget='existing/two'\n").unwrap();
+        fs::write(root.join("one.enc"), "one").unwrap();
+        fs::write(root.join("two.enc"), "two").unwrap();
+        let selected = Selection::load(Some(&path), Some("test"), &["signing".into()])
+            .await
+            .unwrap();
+        let captured: Vec<_> = selected
+            .mappings
+            .iter()
+            .map(|(source, _)| CapturedFile::read(&selected.root, source, MAX_CIPHER).unwrap())
+            .collect();
+        let plain = [Zeroizing::new(vec![0, 255]), Zeroizing::new(Vec::new())];
+        let mut future =
+            Box::pin(async move { persist_export(&selected, &captured, &plain).await });
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert!(root.join("new/one").exists());
+        (dir, future)
     }
 
     #[tokio::test]
     async fn file_export_late_write_failure_rolls_back_only_owned_files() {
-        let (f, selected, captured, plain) = Fixture::new().await;
-        let mut future = Box::pin(persist_export(&selected, &captured, &plain));
-        assert!(
-            future
-                .as_mut()
-                .poll(&mut Context::from_waker(Waker::noop()))
-                .is_pending()
-        );
-        assert!(f.0.join("new/one").exists());
+        let (dir, future) = export_after_first_write().await;
         // Inject a competing writer after the first target is completely written.
-        fs::write(f.0.join("existing/two"), "winner").unwrap();
+        fs::write(dir.0.join("existing/two"), "winner").unwrap();
         let error = future.await.unwrap_err();
         assert!(format!("{error:#}").contains("files created by this export were removed"));
-        assert!(!f.0.join("new").exists());
-        assert_eq!(fs::read(f.0.join("existing/two")).unwrap(), b"winner");
-        assert!(f.0.join("existing").is_dir());
+        assert!(!dir.0.join("new").exists());
+        assert_eq!(fs::read(dir.0.join("existing/two")).unwrap(), b"winner");
+        assert!(dir.0.join("existing").is_dir());
     }
 
     #[tokio::test]
     async fn file_export_cancelled_write_future_rolls_back_owned_files() {
-        let (f, selected, captured, plain) = Fixture::new().await;
-        let mut future = Box::pin(persist_export(&selected, &captured, &plain));
-        assert!(
-            future
-                .as_mut()
-                .poll(&mut Context::from_waker(Waker::noop()))
-                .is_pending()
-        );
-        assert!(f.0.join("new/one").exists());
+        let (dir, future) = export_after_first_write().await;
         drop(future);
-        assert!(!f.0.join("new").exists());
-        assert!(f.0.join("existing").is_dir());
-        assert!(!f.0.join("existing/two").exists());
+        assert!(!dir.0.join("new").exists());
+        assert!(dir.0.join("existing").is_dir());
+        assert!(!dir.0.join("existing/two").exists());
     }
 
     #[tokio::test]
     async fn file_export_rollback_retains_replacements_and_reports_residue() {
-        let (f, selected, captured, plain) = Fixture::new().await;
-        let mut future = Box::pin(persist_export(&selected, &captured, &plain));
-        assert!(
-            future
-                .as_mut()
-                .poll(&mut Context::from_waker(Waker::noop()))
-                .is_pending()
-        );
-        fs::remove_file(f.0.join("new/one")).unwrap();
-        fs::write(f.0.join("new/one"), "replacement").unwrap();
-        fs::write(f.0.join("existing/two"), "winner").unwrap();
+        let (dir, future) = export_after_first_write().await;
+        fs::remove_file(dir.0.join("new/one")).unwrap();
+        fs::write(dir.0.join("new/one"), "replacement").unwrap();
+        fs::write(dir.0.join("existing/two"), "winner").unwrap();
         let error = future.await.unwrap_err();
         let diagnostic = format!("{error:#}");
         assert!(
@@ -782,7 +767,7 @@ mod export_tests {
                 && diagnostic.contains("plaintext target was replaced"),
             "{diagnostic}"
         );
-        assert_eq!(fs::read(f.0.join("new/one")).unwrap(), b"replacement");
-        assert_eq!(fs::read(f.0.join("existing/two")).unwrap(), b"winner");
+        assert_eq!(fs::read(dir.0.join("new/one")).unwrap(), b"replacement");
+        assert_eq!(fs::read(dir.0.join("existing/two")).unwrap(), b"winner");
     }
 }

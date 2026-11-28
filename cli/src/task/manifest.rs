@@ -91,35 +91,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_returns_default_when_file_missing() {
+    async fn missing_registry_starts_empty_and_roundtrips_argv_and_fixed_cwd() {
         let dir = temp_dir().await;
-        let manifest = TaskManifest::load(&dir).await.unwrap();
+        let mut manifest = TaskManifest::load(&dir).await.unwrap();
         assert!(manifest.tasks.is_empty());
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
 
-    #[tokio::test]
-    async fn save_then_load_roundtrips_argv_boundaries() {
-        let dir = temp_dir().await;
-        let mut manifest = TaskManifest::default();
+        let command = ["sh", "-c", "lsof -ti :3000 | xargs kill"];
         manifest.upsert(
             "kill-port",
-            vec![
-                "sh".to_string(),
-                "-c".to_string(),
-                "lsof -ti :3000 | xargs kill".to_string(),
-            ],
+            command.into_iter().map(String::from).collect(),
             None,
+        );
+        let cwd = dir.join("project");
+        manifest.upsert(
+            "build",
+            vec!["cargo".into(), "build".into()],
+            Some(cwd.clone()),
         );
         manifest.save(&dir).await.unwrap();
 
         let reloaded = TaskManifest::load(&dir).await.unwrap();
-        assert_eq!(manifest, reloaded);
-        assert_eq!(
-            reloaded.get("kill-port").unwrap().command,
-            ["sh", "-c", "lsof -ti :3000 | xargs kill"]
-        );
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
+        assert_eq!(reloaded, manifest);
+        assert_eq!(reloaded.get("kill-port").unwrap().command, command);
+        assert_eq!(reloaded.get("build").unwrap().cwd.as_ref(), Some(&cwd));
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]
@@ -129,32 +124,13 @@ mod tests {
         assert_eq!(manifest.get("build").unwrap().cwd, None);
     }
 
-    #[tokio::test]
-    async fn save_then_load_roundtrips_fixed_cwd() {
-        let dir = temp_dir().await;
-        let cwd = dir.join("project");
-        let mut manifest = TaskManifest::default();
-        manifest.upsert(
-            "build",
-            vec!["cargo".to_string(), "build".to_string()],
-            Some(cwd.clone()),
-        );
-        manifest.save(&dir).await.unwrap();
-
-        let reloaded = TaskManifest::load(&dir).await.unwrap();
-        assert_eq!(reloaded.get("build").unwrap().cwd.as_ref(), Some(&cwd));
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn upsert_replaces_and_remove_reports_presence() {
-        let dir = temp_dir().await;
+    #[test]
+    fn upsert_replaces_and_remove_reports_presence() {
         let mut manifest = TaskManifest::default();
         manifest.upsert("t", vec!["echo".to_string(), "one".to_string()], None);
         manifest.upsert("t", vec!["echo".to_string(), "two".to_string()], None);
         assert_eq!(manifest.get("t").unwrap().command, ["echo", "two"]);
         assert!(manifest.remove("t"));
         assert!(!manifest.remove("t"));
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }

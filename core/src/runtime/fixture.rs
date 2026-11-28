@@ -708,7 +708,7 @@ fn invalid(code: &str) -> PresetTestReportV1 {
 mod tests {
     use super::*;
 
-    fn fixture(expect_ready: bool) -> InMemoryHost {
+    fn app_fixture(document: &str) -> InMemoryHost {
         let host = InMemoryHost::new();
         host.put_file(
             "/repo/app/demo/shine.toml",
@@ -718,10 +718,7 @@ mod tests {
         host.put_file("/repo/app/demo/config.toml", b"value = true\n".to_vec());
         host.put_file(
             "/repo/app/demo/shine.test.toml",
-            format!(
-                "schema_version = 1\n[[cases]]\nname = 'linux-empty'\nplatform = 'linux'\n[cases.expect]\nvalid = true\nready = {expect_ready}\nplan_kinds = ['lifecycle-install']\nactions = ['create']\n"
-            )
-            .into_bytes(),
+            document.as_bytes().to_vec(),
         );
         host
     }
@@ -730,20 +727,15 @@ mod tests {
     async fn seeded_files_and_receipts_reach_the_authoring_planner() {
         for platform in ["macos", "linux", "windows"] {
             for receipt_quote in [None, Some('\''), Some('"')] {
-                let host = fixture(true);
                 let receipt = receipt_quote.map_or_else(String::new, |quote| {
                     format!(
                         "[cases.host.receipts]\napp = '''\nschema_version = 1\n[[entries]]\nsource = 'app/demo/config.toml'\ndestination = {quote}${{HOME}}/.config/demo/config.toml{quote}\ncontent_hash = {}\n'''\n",
                         crate::install::manifest::hash_content(b"value = true\n")
                     )
                 });
-                host.put_file(
-                    "/repo/app/demo/shine.test.toml",
-                    format!(
-                        "schema_version = 1\n[[cases]]\nname = 'seeded-state'\nplatform = '{platform}'\n[[cases.host.files]]\nbase = 'home'\npath = '.config/demo/config.toml'\ncontent = \"value = true\\n\"\n{receipt}[cases.expect]\nvalid = true\nready = true\n"
-                    )
-                    .into_bytes(),
-                );
+                let host = app_fixture(&format!(
+                    "schema_version = 1\n[[cases]]\nname = 'seeded-state'\nplatform = '{platform}'\n[[cases.host.files]]\nbase = 'home'\npath = '.config/demo/config.toml'\ncontent = \"value = true\\n\"\n{receipt}[cases.expect]\nvalid = true\nready = true\n"
+                ));
                 let report =
                     test_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
                 assert!(report.valid, "{platform} {receipt_quote:?}: {report:?}");
@@ -771,25 +763,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn declarative_fixture_passes_without_execution() {
-        let host = fixture(true);
-        let report = test_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
-
-        assert!(report.valid, "{:?}", report.diagnostics);
-        assert_eq!(report.summary.passed, 1);
-        assert!(report.cases[0].passed);
-    }
-
-    #[tokio::test]
-    async fn expectation_mismatch_is_a_stable_case_failure() {
-        let host = fixture(false);
-        let report = test_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
-
-        assert!(!report.valid);
-        assert_eq!(
-            report.cases[0].failure_codes,
-            vec!["expected_ready_mismatch"]
-        );
+    async fn declarative_fixture_reports_matching_and_mismatched_expectations() {
+        for (expect_ready, failures) in [(true, &[][..]), (false, &["expected_ready_mismatch"][..])]
+        {
+            let host = app_fixture(&format!(
+                "schema_version = 1\n[[cases]]\nname = 'linux-empty'\nplatform = 'linux'\n[cases.expect]\nvalid = true\nready = {expect_ready}\nplan_kinds = ['lifecycle-install']\nactions = ['create']\n"
+            ));
+            let report = test_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+            assert_eq!(report.valid, expect_ready, "{report:?}");
+            assert_eq!(report.summary.passed, usize::from(expect_ready));
+            assert_eq!(report.cases[0].passed, expect_ready);
+            assert_eq!(report.cases[0].failure_codes, failures);
+        }
     }
 
     #[tokio::test]
@@ -890,18 +875,15 @@ step_diagnostic_codes = ["shell_profile_reconcile_transaction", "shell_snapshot_
 
     #[tokio::test]
     async fn invalid_fixture_host_path_fails_with_stable_code() {
-        let host = fixture(true);
-        host.put_file(
-            "/repo/app/demo/shine.test.toml",
-            br#"schema_version = 1
+        let host = app_fixture(
+            r#"schema_version = 1
 [[cases]]
 name = "escaping-file"
 platform = "linux"
 [[cases.host.files]]
 base = "home"
 path = "../outside"
-"#
-            .to_vec(),
+"#,
         );
 
         let report = test_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;

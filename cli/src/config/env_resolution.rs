@@ -277,6 +277,12 @@ mod tests {
         config
     }
 
+    #[track_caller]
+    fn assert_path_controls_escaped(text: &str) {
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(!text.contains("\nFORGED"), "{text:?}");
+    }
+
     #[tokio::test]
     async fn input_capture_errors_preserve_io_causes_and_encode_only_paths() {
         let dir = crate::test_support::make_temp_dir("config-input-display").await;
@@ -295,10 +301,7 @@ mod tests {
         fs::create_dir(&path).await.unwrap();
         let error = ConfigInput::capture(&path).await.unwrap_err().to_string();
         assert!(error.contains("must be a regular file"));
-        assert!(
-            !error.contains(['\r', '\t', '\u{1b}']) && !error.contains("\nFORGED"),
-            "{error:?}"
-        );
+        assert_path_controls_escaped(&error);
         fs::remove_dir(&path).await.unwrap();
         fs::write(&path, b"PRIVATE_INPUT\xff").await.unwrap();
         let error = ConfigInput::capture(&path).await.unwrap_err();
@@ -308,10 +311,7 @@ mod tests {
                 .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
         );
         let text = format!("{error:#}");
-        assert!(
-            !text.contains(['\r', '\t', '\u{1b}']) && !text.contains("\nFORGED"),
-            "{text:?}"
-        );
+        assert_path_controls_escaped(&text);
         assert!(!text.contains("PRIVATE_INPUT"));
         assert_eq!(fs::read(&path).await.unwrap(), b"PRIVATE_INPUT\xff");
         fs::remove_dir_all(dir).await.unwrap();
@@ -381,10 +381,7 @@ mod tests {
         for error in [error, config.save().await.unwrap_err()] {
             let text = format!("{error:#}");
             assert!(text.contains("retry"));
-            assert!(
-                !text.contains(['\r', '\t', '\u{1b}']) && !text.contains("\nFORGED"),
-                "{text:?}"
-            );
+            assert_path_controls_escaped(&text);
         }
         let contents = fs::read_to_string(config.config_path()).await.unwrap();
         assert!(contents.contains("ONE"));

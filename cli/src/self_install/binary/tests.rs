@@ -1,11 +1,8 @@
 use super::*;
+use crate::test_support::test_config;
 
 async fn make_temp_dir() -> std::path::PathBuf {
     crate::test_support::make_temp_dir("shine-self-install-test").await
-}
-
-fn config_in(dir: &std::path::Path) -> Config {
-    crate::test_support::test_config(dir)
 }
 
 #[allow(clippy::await_holding_lock)]
@@ -22,7 +19,7 @@ async fn relative_self_install_destination_survives_reload_and_sync() {
     unsafe { std::env::set_var("SHINE_CONFIG_DIR", &state) };
     let relative = std::path::PathBuf::from("bin").join(platform::current_executable_name());
     let installed = std::env::current_dir().unwrap().join(&relative);
-    handle_self_install(config_in(&state), Some(relative))
+    handle_self_install(test_config(&state), Some(relative))
         .await
         .unwrap();
     assert!(installed.is_file());
@@ -62,40 +59,26 @@ fn install_binary_atomically_overwrites_existing_dest() {
 }
 
 #[tokio::test]
-async fn sync_self_install_dest_creates_missing_parent() {
-    let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
-    let src = dir.join("new-shine");
+async fn sync_self_install_creates_missing_parent_and_skips_the_current_binary() {
+    let dir = make_temp_dir().await;
+    let src = dir.join("shine");
     let dest = dir.join("usr/local/bin/shine");
-
-    std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(&src, b"new").unwrap();
 
     let outcome = sync_self_install_dest_from(&src, &dest).await.unwrap();
-
     assert!(matches!(outcome, SelfInstallSync::Synced));
     assert_eq!(std::fs::read(&dest).unwrap(), b"new");
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[tokio::test]
-async fn sync_self_install_dest_skips_current_exe_path() {
-    let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
-    let src = dir.join("shine");
-
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(&src, b"new").unwrap();
 
     let outcome = sync_self_install_dest_from(&src, &src).await.unwrap();
-
     assert!(matches!(outcome, SelfInstallSync::AlreadyCurrent));
     assert_eq!(std::fs::read(&src).unwrap(), b"new");
-    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn self_install_errors_when_source_is_destination() {
     let dir = make_temp_dir().await;
-    let config = config_in(&dir);
+    let config = test_config(&dir);
     let current = std::env::current_exe().unwrap();
 
     let err = handle_self_install(config, Some(current))
@@ -152,7 +135,7 @@ async fn sync_output_preserves_warning_stream_and_success_behavior() {
     if let Some(root) = std::env::var_os(CHILD_ROOT) {
         let root = std::path::PathBuf::from(root);
         let src = root.join("source");
-        let mut config = config_in(&root);
+        let mut config = test_config(&root);
         config.self_install_dest = Some(root.join("parent-file/shine"));
         // A regular file as parent fails without triggering automatic elevation.
         sync_self_install_dest(&config, &src).await;

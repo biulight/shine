@@ -323,26 +323,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_plaintext_fails_before_external_commands() {
-        let err = encrypt_gpg_secret_to_base64(b"", &["test@example.com".to_string()])
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("secret is empty"), "{err:#}");
-    }
-
-    #[tokio::test]
-    async fn empty_recipients_fails_before_external_commands() {
-        let err = encrypt_gpg_secret_to_base64(b"secret", &[])
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("recipients is empty"), "{err:#}");
-    }
-
-    #[tokio::test]
-    async fn blank_recipient_fails_before_external_commands() {
-        let err = encrypt_gpg_secret_to_base64(b"secret", &["  ".to_string()])
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("recipient is empty"), "{err:#}");
+    async fn invalid_encryption_inputs_fail_before_external_commands() {
+        for (plaintext, recipients, expected) in [
+            (
+                b"".as_slice(),
+                vec!["test@example.com".into()],
+                "secret is empty",
+            ),
+            (b"secret", vec![], "recipients is empty"),
+            (b"secret", vec!["  ".into()], "recipient is empty"),
+        ] {
+            let err = encrypt_gpg_secret_to_base64(plaintext, &recipients)
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "expected {expected:?}, got {err:#}"
+            );
+        }
     }
 }

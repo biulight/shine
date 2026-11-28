@@ -883,16 +883,17 @@ mod tests {
         let opaque = PermissionV1::OpaqueCode {
             scope: OpaqueCodeScopeV1::Unrestricted,
         };
+        let secret_env = PermissionV1::Environment {
+            name: "TOKEN".to_string(),
+            sensitivity: EnvironmentSensitivityV1::Secret,
+        };
         let required = PermissionSetV1::new([
             opaque.clone(),
             PermissionV1::Command {
                 program: "arbitrary-tool".to_string(),
             },
             filesystem_permission("~/.outside"),
-            PermissionV1::Environment {
-                name: "TOKEN".to_string(),
-                sensitivity: EnvironmentSensitivityV1::Secret,
-            },
+            secret_env.clone(),
             PermissionV1::Administrator,
         ]);
         let resolution = PermissionResolutionV1::resolve(
@@ -901,20 +902,11 @@ mod tests {
             std::iter::empty::<String>(),
         );
 
-        assert_eq!(resolution.missing_declarations.iter().count(), 2);
-        assert!(
-            resolution
-                .missing_declarations
-                .contains(&PermissionV1::Environment {
-                    name: "TOKEN".to_string(),
-                    sensitivity: EnvironmentSensitivityV1::Secret,
-                })
-        );
-        assert!(
-            resolution
-                .missing_declarations
-                .contains(&PermissionV1::Administrator)
-        );
+        let missing = resolution.missing_declarations;
+        assert_eq!(missing.iter().count(), 2);
+        for permission in [secret_env, PermissionV1::Administrator] {
+            assert!(missing.contains(&permission), "{permission:?}");
+        }
     }
 
     #[test]
@@ -937,6 +929,14 @@ mod tests {
         );
     }
 
+    #[track_caller]
+    fn assert_plan_changed(approval: &PlanApprovalV1, changed: &PlanV1) {
+        assert_eq!(
+            approval.validate(changed),
+            Err(PlanApprovalError::PlanChanged)
+        );
+    }
+
     #[test]
     fn approval_binds_filesystem_review_purpose_and_target() {
         let mut plan = ready_plan();
@@ -951,22 +951,13 @@ mod tests {
         let required = plan.permissions.required.clone();
         let mut changed = plan.clone();
         changed.filesystem_review[0].purpose = FilesystemPurposeV1::Maintenance;
-        assert_eq!(
-            approval.validate(&changed),
-            Err(PlanApprovalError::PlanChanged)
-        );
+        assert_plan_changed(&approval, &changed);
         changed = plan.clone();
         changed.filesystem_review[0].target = "app/other".into();
-        assert_eq!(
-            approval.validate(&changed),
-            Err(PlanApprovalError::PlanChanged)
-        );
+        assert_plan_changed(&approval, &changed);
         assert_eq!(changed.permissions.required, required);
         changed.filesystem_review.clear();
-        assert_eq!(
-            approval.validate(&changed),
-            Err(PlanApprovalError::PlanChanged)
-        );
+        assert_plan_changed(&approval, &changed);
     }
 
     #[test]
@@ -977,24 +968,15 @@ mod tests {
 
         let mut changed_preset = plan.clone();
         changed_preset.inputs.preset = digest("preset", "app/demo/shine.toml", b"changed");
-        assert_eq!(
-            approval.validate(&changed_preset),
-            Err(PlanApprovalError::PlanChanged)
-        );
+        assert_plan_changed(&approval, &changed_preset);
 
         let mut changed_state = plan.clone();
         changed_state.inputs.state = digest("state", "app-manifest.toml", b"changed");
-        assert_eq!(
-            approval.validate(&changed_state),
-            Err(PlanApprovalError::PlanChanged)
-        );
+        assert_plan_changed(&approval, &changed_state);
 
         let mut changed_step = plan.clone();
         changed_step.steps[0].action = PlanActionV1::Update;
-        assert_eq!(
-            approval.validate(&changed_step),
-            Err(PlanApprovalError::PlanChanged)
-        );
+        assert_plan_changed(&approval, &changed_step);
 
         let mut expanded = plan.clone();
         expanded.permissions.required.insert(PermissionV1::Command {
@@ -1021,10 +1003,7 @@ mod tests {
         for changed_kind in [None, Some(PlanStepKindV1::AppJsonRelocation)] {
             let mut changed = plan.clone();
             changed.steps[0].kind = changed_kind;
-            assert_eq!(
-                approval.validate(&changed),
-                Err(PlanApprovalError::PlanChanged)
-            );
+            assert_plan_changed(&approval, &changed);
         }
     }
 

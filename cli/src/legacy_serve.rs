@@ -345,10 +345,11 @@ mod tests {
             let host = InMemoryHost::new();
             queue(&host, code, output);
             let result = has_native_service(&host, platform).await;
-            match expected {
-                Some(expected) => assert_eq!(result.unwrap(), expected),
-                None => assert!(result.is_err()),
-            }
+            assert_eq!(
+                result.as_ref().ok(),
+                expected.as_ref(),
+                "{platform} {code} {output:?}: {result:?}"
+            );
             for (_, args) in runs(&host) {
                 let args = args.join(" ");
                 for mutation in [
@@ -451,7 +452,12 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_failure_encodes_diagnostics_without_removing_registration() {
-        for platform in ["macos", "linux", "windows"] {
+        for (platform, xdg) in [
+            ("macos", None),
+            ("linux", None),
+            ("linux", Some(Path::new("relative"))),
+            ("windows", None),
+        ] {
             let host = InMemoryHost::new();
             let home = std::env::temp_dir().join("shine-legacy-diagnostic");
             let registration = home.join(if platform == "macos" {
@@ -467,7 +473,7 @@ mod tests {
                 stdout: b"ignored stdout".to_vec(),
                 stderr: b"failure\nFORGED\r\t\x1b[31m".to_vec(),
             }));
-            let error = uninstall(&host, platform, &home, None)
+            let error = uninstall(&host, platform, &home, xdg)
                 .await
                 .unwrap_err()
                 .to_string();
@@ -480,7 +486,11 @@ mod tests {
                 host.read(&registration).await.unwrap(),
                 b"retain registration"
             );
-            assert_eq!(runs(&host).len(), 1);
+            let commands = runs(&host);
+            assert_eq!(commands.len(), 1);
+            if platform == "linux" {
+                assert_eq!(commands[0].1, ["--user", "disable", "--now", SYSTEMD_UNIT]);
+            }
         }
     }
 
@@ -498,43 +508,14 @@ mod tests {
         assert!(uninstall(&host, "linux", &home, Some(&xdg)).await.unwrap());
         assert!(host.metadata(&path).await.unwrap_err().is_not_found());
         assert_eq!(host.read(&other).await.unwrap(), b"other registration");
-        assert_eq!(
-            runs(&host),
-            [
-                (
-                    "systemctl".into(),
-                    vec![
-                        "--user".into(),
-                        "disable".into(),
-                        "--now".into(),
-                        SYSTEMD_UNIT.into()
-                    ]
-                ),
-                (
-                    "systemctl".into(),
-                    vec!["--user".into(), "daemon-reload".into()]
-                ),
-            ]
-        );
+        let commands = runs(&host);
+        assert_eq!(commands.len(), 2);
+        assert!(commands.iter().all(|(program, _)| program == "systemctl"));
+        assert_eq!(commands[0].1, ["--user", "disable", "--now", SYSTEMD_UNIT]);
+        assert_eq!(commands[1].1, ["--user", "daemon-reload"]);
         queue(&host, 0, "LoadState=not-found\nActiveState=inactive\n");
         assert!(!uninstall(&host, "linux", &home, Some(&xdg)).await.unwrap());
         assert_eq!(runs(&host).len(), 3);
-    }
-
-    #[tokio::test]
-    async fn linux_stop_failure_keeps_registration_for_retry() {
-        let host = InMemoryHost::new();
-        let home = std::env::temp_dir().join("shine-legacy-home");
-        let path = home.join(".config/systemd/user/shine-http.service");
-        host.put_file(&path, b"legacy registration".to_vec());
-        queue(&host, 1, "");
-        assert!(
-            uninstall(&host, "linux", &home, Some(Path::new("relative")))
-                .await
-                .is_err()
-        );
-        assert_eq!(host.read(&path).await.unwrap(), b"legacy registration");
-        assert_eq!(runs(&host).len(), 1);
     }
 
     #[tokio::test]
@@ -547,10 +528,11 @@ mod tests {
         ] {
             queue(&host, code, output);
             let result = uninstall(&host, "windows", Path::new("unused"), None).await;
-            match expected {
-                Some(value) => assert_eq!(result.unwrap(), value),
-                None => assert!(result.is_err()),
-            }
+            assert_eq!(
+                result.as_ref().ok(),
+                expected.as_ref(),
+                "{code}: {result:?}"
+            );
         }
         for (program, args) in runs(&host) {
             assert_eq!(program, "powershell.exe");

@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, onTestFinished, spyOn, test } from "bun:test";
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -93,42 +93,45 @@ describe("provider configuration", () => {
 
   test("reads the config beside the delivered script, independently of cwd", async () => {
     const dir = mkdtempSync(join(tmpdir(), "shine-cc-config-"));
-    try {
-      copyFileSync(join(import.meta.dir, "cc.ts"), join(dir, "cc.ts"));
-      writeFileSync(join(dir, "cc.providers.toml"), customConfig);
-      const probe = join(dir, "probe.ts");
-      writeFileSync(probe, `import { loadProviderConfig } from "./cc.ts";
-        console.log(JSON.stringify(loadProviderConfig()));`);
-      const probeChild = Bun.spawn([process.execPath, "--no-install", probe], {
-        cwd: tmpdir(), stdout: "pipe", stderr: "pipe",
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const script = join(dir, "cc.ts");
+    const configPath = join(dir, "cc.providers.toml");
+    const probe = join(dir, "probe.ts");
+    copyFileSync(join(import.meta.dir, "cc.ts"), script);
+    writeFileSync(configPath, customConfig);
+    writeFileSync(probe, `import { loadProviderConfig } from "./cc.ts";
+      console.log(JSON.stringify(loadProviderConfig()));`);
+
+    async function run(path: string, input?: string) {
+      const child = Bun.spawn([process.execPath, "--no-install", path], {
+        cwd: tmpdir(), stdin: input === undefined ? "ignore" : Buffer.from(input),
+        stdout: "pipe", stderr: "pipe",
       });
-      const result = await new Response(probeChild.stdout).text();
-      expect(await probeChild.exited).toBe(0);
-      expect(await new Response(probeChild.stderr).text()).toBe("");
-      expect(JSON.parse(result)).toEqual(parseProviderConfig(customConfig));
-      const menu = Bun.spawn([process.execPath, "--no-install", join(dir, "cc.ts")], {
-        cwd: tmpdir(), stdin: new TextEncoder().encode("invalid\n"), stdout: "pipe", stderr: "pipe",
-      });
-      const menuOutput = await new Response(menu.stdout).text();
-      expect(await menu.exited).toBe(1);
-      expect(menuOutput).toContain("1) First");
-      expect(menuOutput).toContain("2) Second");
-      expect(menuOutput).toContain("Provider [2]:");
-      expect(await new Response(menu.stderr).text()).toContain("invalid provider");
-      for (const content of [undefined, 'secret = "do-not-echo']) {
-        if (content === undefined) rmSync(join(dir, "cc.providers.toml"));
-        else writeFileSync(join(dir, "cc.providers.toml"), content);
-        const child = Bun.spawn([process.execPath, "--no-install", join(dir, "cc.ts")], {
-          cwd: tmpdir(), stdin: "ignore", stdout: "pipe", stderr: "pipe",
-        });
-        expect(await child.exited).toBe(1);
-        expect(await new Response(child.stdout).text()).toBe("");
-        const stderr = await new Response(child.stderr).text();
-        expect(stderr).toContain("ccenv: cc.providers.toml:");
-        expect(stderr).not.toContain("do-not-echo");
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ]);
+      return { exitCode, stdout, stderr };
+    }
+
+    const result = await run(probe);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual(parseProviderConfig(customConfig));
+
+    const menu = await run(script, "invalid\n");
+    expect(menu.exitCode).toBe(1);
+    expect(menu.stdout).toContain("1) First");
+    expect(menu.stdout).toContain("2) Second");
+    expect(menu.stdout).toContain("Provider [2]:");
+    expect(menu.stderr).toContain("invalid provider");
+    for (const content of [undefined, 'secret = "do-not-echo']) {
+      if (content === undefined) rmSync(configPath);
+      else writeFileSync(configPath, content);
+      const child = await run(script);
+      expect(child.exitCode).toBe(1);
+      expect(child.stdout).toBe("");
+      expect(child.stderr).toContain("ccenv: cc.providers.toml:");
+      expect(child.stderr).not.toContain("do-not-echo");
     }
   });
 });
@@ -234,7 +237,7 @@ describe("credential resolution", () => {
       { TOKEN_SECRET: "broken", TOKEN: "plaintext" },
       new Set(["TOKEN_SECRET"]),
     );
-    expect(resolveCredential("TOKEN", runner)).rejects.toThrow(
+    await expect(resolveCredential("TOKEN", runner)).rejects.toThrow(
       "failed to decrypt TOKEN_SECRET",
     );
     expect(calls).not.toContainEqual(["env", "get", "TOKEN"]);
@@ -242,7 +245,7 @@ describe("credential resolution", () => {
 
   test("reports all accepted credential keys when missing", async () => {
     const { runner } = fakeRunner({});
-    expect(resolveCredential("TOKEN", runner)).rejects.toThrow(
+    await expect(resolveCredential("TOKEN", runner)).rejects.toThrow(
       "TOKEN_SECRET, TOKEN_GPG_SECRET, or TOKEN is not set",
     );
   });
@@ -263,23 +266,17 @@ describe("provider environments", () => {
 
   test("clears custom values owned by other providers without mutating the caller", () => {
     const custom = parseProviderConfig(customConfig);
-    const base = { CUSTOM_PROVIDER_VALUE: "stale", PATH: "/bin", ANTHROPIC_API_KEY: "stale" };
+    const base = {
+      CUSTOM_PROVIDER_VALUE: "stale", PATH: "/bin", ANTHROPIC_API_KEY: "stale", ANTHROPIC_DEFAULT_FABLE_MODEL: "stale",
+    };
     const environment = buildClaudeEnvironment(providerFromChoice("", custom), "token", base, custom.providers);
     expect(environment.CUSTOM_PROVIDER_VALUE).toBeUndefined();
     expect(environment.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(environment.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
     expect(environment.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("983616");
     expect(environment.ANTHROPIC_AUTH_TOKEN).toBe("token");
     expect(base.CUSTOM_PROVIDER_VALUE).toBe("stale");
     expect(environment.PATH).toBe("/bin");
-  });
-
-  test("clears a stale Fable alias even when the provider config omits it", () => {
-    const custom = parseProviderConfig(customConfig);
-    const environment = buildClaudeEnvironment(
-      providerFromChoice("", custom), "token",
-      { ANTHROPIC_DEFAULT_FABLE_MODEL: "stale" }, custom.providers,
-    );
-    expect(environment.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
   });
 
   test("passes Codex's Fable and Opus mappings to Claude", () => {
@@ -309,14 +306,8 @@ describe("provider environments", () => {
       expect(environment.ANTHROPIC_API_KEY).toBeUndefined();
       expect(environment.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
       expect(environment).toMatchObject(provider.env);
-      if (!("ANTHROPIC_MODEL" in provider.env)) {
-        expect(environment.ANTHROPIC_MODEL).toBeUndefined();
-      }
-      if (!("CLAUDE_CODE_EFFORT_LEVEL" in provider.env)) {
-        expect(environment.CLAUDE_CODE_EFFORT_LEVEL).toBeUndefined();
-      }
-      if (!("CLAUDE_CODE_MAX_CONTEXT_TOKENS" in provider.env)) {
-        expect(environment.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+      for (const key of ["ANTHROPIC_MODEL", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"]) {
+        if (!(key in provider.env)) expect(environment[key]).toBeUndefined();
       }
     },
   );

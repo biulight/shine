@@ -42,6 +42,9 @@ impl Fixture {
             .await
             .unwrap()
     }
+    async fn run_worker(&self, ticket: Uuid) -> Result<()> {
+        run_worker(&self.scope, ticket, &self.host).await
+    }
     fn runs(&self) -> usize {
         self.host
             .operations()
@@ -125,9 +128,7 @@ async fn native_result_is_published_by_worker_and_shown_on_next_invocation() {
     assert_eq!(f.runs(), 0);
     assert!(f.inspect(false, now()).await.worker.is_none());
     f.queue(0, "- 0 top.biulight.shine.http\n");
-    run_worker(&f.scope, first.worker.unwrap(), &f.host)
-        .await
-        .unwrap();
+    f.run_worker(first.worker.unwrap()).await.unwrap();
     assert_eq!(f.runs(), 1);
     let next = f.inspect(false, now()).await;
     assert!(next.notified() && next.required() && next.worker.is_none());
@@ -141,9 +142,7 @@ async fn native_failures_back_off_without_becoming_findings() {
     let f = Fixture::new();
     let first = f.inspect(false, now()).await;
     f.queue(1, "");
-    run_worker(&f.scope, first.worker.unwrap(), &f.host)
-        .await
-        .unwrap();
+    f.run_worker(first.worker.unwrap()).await.unwrap();
     let cache = store::load(&f.scope).await;
     let failed = cache.entries[&CheckId::ServeNative].attempted_at.unwrap();
     assert!(!f.inspect(false, failed + 1).await.notified());
@@ -207,16 +206,16 @@ async fn invalidated_tickets_and_duplicate_workers_do_not_execute_probes() {
     let f = Fixture::new();
     let ticket = f.inspect(false, now()).await.worker.unwrap();
     invalidate(&f.scope).await.unwrap();
-    run_worker(&f.scope, ticket, &f.host).await.unwrap();
+    f.run_worker(ticket).await.unwrap();
     assert_eq!(f.runs(), 0);
     let ticket = f.inspect(false, now()).await.worker.unwrap();
     let guard = store::lock(&f.scope.root.join("worker.lock")).unwrap();
-    assert!(run_worker(&f.scope, ticket, &f.host).await.is_err());
+    assert!(f.run_worker(ticket).await.is_err());
     assert_eq!(f.runs(), 0);
     drop(guard);
     f.queue(0, "");
-    run_worker(&f.scope, ticket, &f.host).await.unwrap();
-    run_worker(&f.scope, ticket, &f.host).await.unwrap();
+    f.run_worker(ticket).await.unwrap();
+    f.run_worker(ticket).await.unwrap();
     assert_eq!(f.runs(), 1);
 }
 
@@ -257,29 +256,14 @@ async fn scope_is_stable_when_missing_directories_are_created() {
 #[test]
 fn scopes_separate_users_config_dirs_and_native_config_locations() {
     let f = Fixture::new();
-    for scope in [
-        Scope::new(
-            f.root.join("other-state"),
-            f.scope.home.clone(),
-            None,
-            "macos",
-        )
-        .unwrap(),
-        Scope::new(
-            f.scope.config_dir.clone(),
-            f.root.join("other-home"),
-            None,
-            "macos",
-        )
-        .unwrap(),
-        Scope::new(
-            f.scope.config_dir.clone(),
-            f.scope.home.clone(),
-            Some(f.root.join("xdg")),
-            "macos",
-        )
-        .unwrap(),
+    let config_dir = &f.scope.config_dir;
+    let home = &f.scope.home;
+    for (config_dir, home, xdg) in [
+        (f.root.join("other-state"), home.clone(), None),
+        (config_dir.clone(), f.root.join("other-home"), None),
+        (config_dir.clone(), home.clone(), Some(f.root.join("xdg"))),
     ] {
+        let scope = Scope::new(config_dir, home, xdg, "macos").unwrap();
         assert_ne!(scope.key, f.scope.key);
     }
 }

@@ -1284,21 +1284,34 @@ mod tests {
 
     use super::*;
 
+    fn shell_probe(script: &str, paths: &[&Path]) -> ProcessRequest {
+        let mut args = vec!["-c".into(), script.into(), "probe".into()];
+        args.extend(paths.iter().map(|path| path.display().to_string()));
+        ProcessRequest {
+            program: "sh".into(),
+            args,
+            ..Default::default()
+        }
+    }
+
+    fn tail_timeout_probe(script: &str, marker: &Path) -> ProcessRequest {
+        ProcessRequest {
+            io: ProcessIo::CapturedTail,
+            stdout_limit: Some(4),
+            stderr_limit: Some(4),
+            timeout: Some(Duration::from_millis(50)),
+            ..shell_probe(script, &[marker])
+        }
+    }
+
     #[tokio::test]
     async fn failed_parent_stops_descendants_before_draining_their_pipes() {
         let marker =
             std::env::temp_dir().join(format!("shine-failed-child-{}", uuid::Uuid::new_v4()));
         let output = RealHost
             .run(ProcessRequest {
-                program: "sh".into(),
-                args: vec![
-                    "-c".into(),
-                    "(sleep 0.3; printf leaked > \"$1\") & exit 2".into(),
-                    "probe".into(),
-                    marker.display().to_string(),
-                ],
                 timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
+                ..shell_probe("(sleep 0.3; printf leaked > \"$1\") & exit 2", &[&marker])
             })
             .await
             .unwrap();
@@ -1323,17 +1336,9 @@ mod tests {
             let script =
                 format!("(printf ready > \"$1\"; sleep 0.5; printf continued > \"$2\") & {tail}");
             let task = tokio::spawn(RealHost.run(ProcessRequest {
-                program: "sh".into(),
-                args: vec![
-                    "-c".into(),
-                    script,
-                    "probe".into(),
-                    ready.display().to_string(),
-                    marker.display().to_string(),
-                ],
                 detach_terminal,
                 timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
+                ..shell_probe(&script, &[&ready, &marker])
             }));
             tokio::time::timeout(Duration::from_secs(5), async {
                 while !ready.exists() {
@@ -1462,14 +1467,11 @@ sys.exit(os.waitstatus_to_exitcode(status))
                 "shine-timeout-process-group-{}",
                 uuid::Uuid::new_v4()
             ));
-            let script = format!("(sleep 0.3; printf leaked > '{}') & wait", marker.display());
             let error = RealHost
                 .run(ProcessRequest {
-                    program: "sh".to_string(),
-                    args: vec!["-c".to_string(), script],
                     detach_terminal,
                     timeout: Some(Duration::from_millis(50)),
-                    ..ProcessRequest::default()
+                    ..shell_probe("(sleep 0.3; printf leaked > \"$1\") & wait", &[&marker])
                 })
                 .await
                 .unwrap_err();
@@ -1490,16 +1492,9 @@ sys.exit(os.waitstatus_to_exitcode(status))
             );
             let error = RealHost
                 .run(ProcessRequest {
-                    program: "sh".into(),
-                    args: vec![
-                        "-c".into(),
-                        script,
-                        "probe".into(),
-                        marker.display().to_string(),
-                    ],
                     stdout_limit: (stream == "stdout").then_some(4),
                     stderr_limit: (stream == "stderr").then_some(4),
-                    ..Default::default()
+                    ..shell_probe(&script, &[&marker])
                 })
                 .await
                 .unwrap_err();
@@ -1520,17 +1515,11 @@ sys.exit(os.waitstatus_to_exitcode(status))
     async fn tail_capture_still_times_out_and_terminates_descendants() {
         let marker =
             std::env::temp_dir().join(format!("shine-tail-timeout-{}", uuid::Uuid::new_v4()));
-        let error = RealHost.run(ProcessRequest {
-            program: "sh".into(),
-            args: vec!["-c".into(),
-                "(sleep 0.3; printf leaked > \"$1\") & while :; do printf 123456789; printf 123456789 >&2; done".into(),
-                "probe".into(), marker.display().to_string()],
-            io: ProcessIo::CapturedTail,
-            stdout_limit: Some(4),
-            stderr_limit: Some(4),
-            timeout: Some(Duration::from_millis(50)),
-            ..Default::default()
-        }).await.unwrap_err();
+        let request = tail_timeout_probe(
+            "(sleep 0.3; printf leaked > \"$1\") & while :; do printf 123456789; printf 123456789 >&2; done",
+            &marker,
+        );
+        let error = RealHost.run(request).await.unwrap_err();
         assert!(error.to_string().contains("process timed out"));
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert!(!marker.exists());
@@ -1565,24 +1554,11 @@ sys.exit(os.waitstatus_to_exitcode(status))
         let marker =
             std::env::temp_dir().join(format!("shine-live-timeout-{}", uuid::Uuid::new_v4()));
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
-        let error =
-            RealHost
-                .run_with_output(
-                    ProcessRequest {
-                        program: "sh".into(),
-                        args: vec!["-c".into(),
-                "(sleep 0.3; printf leaked > \"$1\") & while :; do printf 123456789; done".into(),
-                "probe".into(), marker.display().to_string()],
-                        io: ProcessIo::CapturedTail,
-                        stdout_limit: Some(4),
-                        stderr_limit: Some(4),
-                        timeout: Some(Duration::from_millis(50)),
-                        ..Default::default()
-                    },
-                    sender,
-                )
-                .await
-                .unwrap_err();
+        let request = tail_timeout_probe(
+            "(sleep 0.3; printf leaked > \"$1\") & while :; do printf 123456789; done",
+            &marker,
+        );
+        let error = RealHost.run_with_output(request, sender).await.unwrap_err();
         assert!(
             error
                 .downcast_ref::<std::io::Error>()
@@ -1618,33 +1594,23 @@ sys.exit(os.waitstatus_to_exitcode(status))
 
     #[tokio::test]
     async fn bounded_reader_accepts_exact_limit_without_retaining_overflow() {
-        let mut exact = Some(&b"1234"[..]);
-        let mut output = Vec::new();
-        read_process_stream(
-            &mut exact,
-            &mut output,
-            Some(4),
-            ProcessIo::Captured,
-            "stdout",
-            None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(output, b"1234");
-        let mut overflow = Some(&b"123456789"[..]);
-        output.clear();
-        assert!(
+        async fn read(input: &[u8], output: &mut Vec<u8>) -> std::io::Result<bool> {
             read_process_stream(
-                &mut overflow,
-                &mut output,
+                &mut Some(input),
+                output,
                 Some(4),
                 ProcessIo::Captured,
                 "stdout",
                 None,
             )
             .await
-            .is_err()
-        );
+        }
+
+        let mut output = Vec::new();
+        read(b"1234", &mut output).await.unwrap();
+        assert_eq!(output, b"1234");
+        output.clear();
+        assert!(read(b"123456789", &mut output).await.is_err());
         assert!(output.len() <= 4);
     }
 

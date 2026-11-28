@@ -292,17 +292,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn untagged_ciphertext_routes_to_gpg() {
-        let (backend, payload) = parse_tagged_ciphertext("aGVsbG8=");
-        assert_eq!(backend, BackendKind::Gpg);
-        assert_eq!(payload, "aGVsbG8=");
-    }
-
-    #[test]
-    fn age_tagged_ciphertext_routes_to_age_and_strips_tag() {
-        let (backend, payload) = parse_tagged_ciphertext("age:aGVsbG8=");
-        assert_eq!(backend, BackendKind::Age);
-        assert_eq!(payload, "aGVsbG8=");
+    fn ciphertext_tag_selects_the_backend_and_preserves_the_payload() {
+        for (stored, backend) in [
+            ("aGVsbG8=", BackendKind::Gpg),
+            ("age:aGVsbG8=", BackendKind::Age),
+        ] {
+            assert_eq!(parse_tagged_ciphertext(stored), (backend, "aGVsbG8="));
+        }
     }
 
     #[test]
@@ -376,36 +372,22 @@ esac
         unsafe { std::env::set_var("PATH", &dir) };
         let result: Result<()> = runtime.block_on(async {
             assert!(crate::proc::ensure_command("base64").is_err());
-            for recipients in [
-                EncryptRecipients::Gpg(vec!["test@example.com".into()]),
-                EncryptRecipients::Age(vec!["age1tag1test".into()]),
+            let mut config = crate::config::Config::new_for_test(&dir);
+            config.age_identity = Some(legacy_identity.to_str().unwrap().to_string());
+            config.age_identities = vec![
+                identity.to_str().unwrap().to_string(),
+                legacy_identity.to_str().unwrap().to_string(),
+            ];
+            let plaintext = "secret\nwith trailing newline\n";
+            let payload = "c2VjcmV0CndpdGggdHJhaWxpbmcgbmV3bGluZQo=";
+            for (recipients, tag, other_backend) in [
+                (EncryptRecipients::Gpg(vec!["test@example.com".into()]), "", "age"),
+                (EncryptRecipients::Age(vec!["age1tag1test".into()]), "age:", "gpg"),
             ] {
-                let plaintext = "secret\nwith trailing newline\n";
                 let encoded = encrypt_secret(plaintext.as_bytes(), &recipients).await?;
-                let expected = "c2VjcmV0CndpdGggdHJhaWxpbmcgbmV3bGluZQo=";
-                assert_eq!(
-                    encoded,
-                    match recipients {
-                        EncryptRecipients::Gpg(_) => expected.to_string(),
-                        EncryptRecipients::Age(_) => format!("age:{expected}"),
-                        EncryptRecipients::Hybrid(_) => unreachable!(),
-                    }
-                );
-                let mut config = crate::config::Config::new_for_test(&dir);
-                config.age_identity = Some(legacy_identity.to_str().unwrap().to_string());
-                config.age_identities = vec![
-                    identity.to_str().unwrap().to_string(),
-                    legacy_identity.to_str().unwrap().to_string(),
-                ];
-                // The encryption default must not override the stored ciphertext tag.
-                config.secret_backend = Some(
-                    match recipients {
-                        EncryptRecipients::Gpg(_) => "age",
-                        EncryptRecipients::Age(_) => "gpg",
-                        EncryptRecipients::Hybrid(_) => unreachable!(),
-                    }
-                    .into(),
-                );
+                assert_eq!(encoded, format!("{tag}{payload}"));
+                // Decryption follows the stored tag even when the configured default differs.
+                config.secret_backend = Some(other_backend.into());
                 assert_eq!(decrypt_with_config(&encoded, &config).await?, plaintext);
                 for tool in ["gpg", "age"] {
                     let called = dir.join(format!("{tool}.decrypt-called"));

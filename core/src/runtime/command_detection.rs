@@ -120,55 +120,41 @@ mod tests {
     use crate::runtime::{FileSystemHost, InMemoryHost};
 
     #[tokio::test]
-    async fn executable_symlink_resolves_to_its_target() {
-        let host = InMemoryHost::new();
-        host.put_file_with_mode("/usr/bin/batcat", b"binary".to_vec(), 0o100755);
-        host.symlink(
-            Path::new("/usr/bin/batcat"),
-            Path::new("/home/test/.local/bin/bat"),
-        )
-        .await
-        .unwrap();
+    async fn symlink_command_detection_depends_on_the_resolved_target() {
+        for (command, target, mode, executable) in [
+            (
+                "/home/test/.local/bin/bat",
+                "/usr/bin/batcat",
+                Some(0o100755),
+                true,
+            ),
+            ("/bin/plain", "/bin/plain-target", Some(0o100644), false),
+            ("/bin/broken", "/missing", None, false),
+        ] {
+            let host = InMemoryHost::new();
+            let target = Path::new(target);
+            let command = Path::new(command);
+            if let Some(mode) = mode {
+                host.put_file_with_mode(target, b"binary".to_vec(), mode);
+            }
+            host.symlink(target, command).await.unwrap();
 
-        let observation = observe_command_candidate(&host, Path::new("/home/test/.local/bin/bat"))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            observation.source.as_ref().map(|metadata| metadata.kind),
-            Some(FileKind::Symlink)
-        );
-        assert_eq!(
-            observation
-                .resolved
-                .as_ref()
-                .map(|resolved| resolved.path.as_path()),
-            Some(Path::new("/usr/bin/batcat"))
-        );
-        assert!(observation.is_executable(RuntimePlatform::Linux));
-    }
-
-    #[tokio::test]
-    async fn broken_and_non_executable_symlinks_are_not_commands() {
-        let host = InMemoryHost::new();
-        host.symlink(Path::new("/missing"), Path::new("/bin/broken"))
-            .await
-            .unwrap();
-        host.put_file_with_mode("/bin/plain-target", b"plain".to_vec(), 0o100644);
-        host.symlink(Path::new("/bin/plain-target"), Path::new("/bin/plain"))
-            .await
-            .unwrap();
-
-        let broken = observe_command_candidate(&host, Path::new("/bin/broken"))
-            .await
-            .unwrap();
-        let plain = observe_command_candidate(&host, Path::new("/bin/plain"))
-            .await
-            .unwrap();
-
-        assert!(broken.resolved.is_none());
-        assert!(!broken.is_executable(RuntimePlatform::Linux));
-        assert!(!plain.is_executable(RuntimePlatform::Linux));
+            let observation = observe_command_candidate(&host, command).await.unwrap();
+            assert_eq!(observation.source.as_ref().unwrap().kind, FileKind::Symlink);
+            assert_eq!(
+                observation
+                    .resolved
+                    .as_ref()
+                    .map(|resolved| resolved.path.as_path()),
+                mode.map(|_| target),
+                "{command:?}"
+            );
+            assert_eq!(
+                observation.is_executable(RuntimePlatform::Linux),
+                executable,
+                "{command:?}"
+            );
+        }
     }
 
     #[cfg(unix)]

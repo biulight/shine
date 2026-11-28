@@ -1,15 +1,19 @@
 use super::*;
 
-#[tokio::test]
-async fn shell_row_projection_preserves_all_status_symbols_and_attention_precedence() {
-    let runtime = crate::test_support::installed_shell_runtime().await;
-    let inspection = runtime
+async fn installed_run_inspection() -> ShellFileInspection {
+    crate::test_support::installed_shell_runtime()
+        .await
         .inspect_shells()
         .await
         .unwrap()
         .into_iter()
         .find(|row| row.file.command_name == "run")
-        .unwrap();
+        .expect("installed demo/run")
+}
+
+#[tokio::test]
+async fn shell_row_projection_preserves_all_status_symbols_and_attention_precedence() {
+    let inspection = installed_run_inspection().await;
     for (status, expected) in [
         (FileStatus::NotInstalled, "✗"),
         (FileStatus::UpToDate, "✓"),
@@ -44,14 +48,7 @@ async fn shell_row_projection_preserves_all_status_symbols_and_attention_precede
 
 #[tokio::test]
 async fn shell_row_preserves_legacy_receipt_target_normalization_independently_of_label() {
-    let runtime = crate::test_support::installed_shell_runtime().await;
-    let inspection = runtime
-        .inspect_shells()
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|row| row.file.command_name == "run")
-        .unwrap();
+    let inspection = installed_run_inspection().await;
     for (command, selector, target) in [
         ("run", "demo/run", "shell/demo/run"),
         ("nested/run", "demo/nested/run", "shell/demo/run"),

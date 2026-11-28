@@ -142,73 +142,51 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
-    async fn handle_sync_skips_when_auto_and_env_var_disabled() {
+    async fn disabled_auto_sync_and_manual_sync_both_succeed() {
         let _guard = env_lock();
-        // SAFETY: env_lock() is held for the duration of this block.
-        unsafe { std::env::set_var("SHINE_SYNC_TERMINAL_THEME", "0") };
-        unsafe { std::env::set_var("SHINE_TERMINAL_THEME", "dark") };
-
-        let result = handle_sync(true, true).await;
-        assert!(result.is_ok());
-
-        unsafe { std::env::remove_var("SHINE_SYNC_TERMINAL_THEME") };
-        unsafe { std::env::remove_var("SHINE_TERMINAL_THEME") };
-    }
-
-    #[allow(clippy::await_holding_lock)]
-    #[tokio::test(flavor = "current_thread")]
-    async fn handle_sync_manual_ignores_env_disable() {
-        let _guard = env_lock();
-        unsafe { std::env::set_var("SHINE_SYNC_TERMINAL_THEME", "0") };
-        unsafe { std::env::set_var("SHINE_TERMINAL_THEME", "dark") };
-        unsafe { std::env::remove_var("BAT_THEME") };
-
-        // auto = false: PRD §5 says manual sync must not be gated by
-        // SHINE_SYNC_TERMINAL_THEME/config, so this must still resolve
-        // rather than short-circuiting through the auto-gate.
-        let result = handle_sync(false, true).await;
-        assert!(result.is_ok());
-
-        unsafe { std::env::remove_var("SHINE_SYNC_TERMINAL_THEME") };
-        unsafe { std::env::remove_var("SHINE_TERMINAL_THEME") };
+        let dir = crate::test_support::make_temp_dir("shine-theme-sync").await;
+        // SAFETY: the guard serializes changes and restores the environment on drop.
+        unsafe {
+            std::env::set_var("SHINE_CONFIG_DIR", &dir);
+            std::env::set_var("SHINE_SYNC_TERMINAL_THEME", "0");
+            std::env::set_var("SHINE_TERMINAL_THEME", "dark");
+            std::env::remove_var("BAT_THEME");
+        }
+        handle_sync(true, true).await.unwrap();
+        handle_sync(false, true).await.unwrap();
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]
-    fn resolve_bat_theme_override_uses_published_env_vars() {
+    fn bat_theme_uses_the_override_and_defaults_for_absent_or_empty_values() {
         let _guard = env_lock();
-        // SAFETY: env_lock() is held for the duration of this block.
-        unsafe { std::env::set_var("SHINE_BAT_LIGHT_THEME", "Solarized") };
+        // SAFETY: the guard serializes all environment changes in this test.
+        unsafe {
+            std::env::set_var("SHINE_BAT_LIGHT_THEME", "Solarized");
+            std::env::remove_var("SHINE_BAT_DARK_THEME");
+        }
         assert_eq!(resolve_bat_theme_override(Theme::Light), "Solarized");
-        unsafe { std::env::remove_var("SHINE_BAT_LIGHT_THEME") };
-
+        assert_eq!(resolve_bat_theme_override(Theme::Dark), "OneHalfDark");
+        unsafe {
+            std::env::remove_var("SHINE_BAT_LIGHT_THEME");
+            std::env::set_var("SHINE_BAT_DARK_THEME", "");
+        }
         assert_eq!(resolve_bat_theme_override(Theme::Light), "GitHub");
         assert_eq!(resolve_bat_theme_override(Theme::Dark), "OneHalfDark");
     }
 
     #[test]
-    fn resolve_bat_theme_override_ignores_empty_env_var() {
+    fn resolve_theme_prefers_exported_theme_then_falls_back_to_colorfgbg() {
         let _guard = env_lock();
-        unsafe { std::env::set_var("SHINE_BAT_DARK_THEME", "") };
-        assert_eq!(resolve_bat_theme_override(Theme::Dark), "OneHalfDark");
-        unsafe { std::env::remove_var("SHINE_BAT_DARK_THEME") };
-    }
-
-    #[test]
-    fn resolve_theme_prefers_already_exported_var_over_colorfgbg() {
-        let _guard = env_lock();
-        unsafe { std::env::set_var("SHINE_TERMINAL_THEME", "light") };
-        unsafe { std::env::set_var("COLORFGBG", "15;0") }; // would resolve dark
+        // SAFETY: the guard serializes all environment changes in this test.
+        unsafe {
+            std::env::set_var("SHINE_TERMINAL_THEME", "light");
+            std::env::set_var("COLORFGBG", "15;0");
+        }
         assert_eq!(resolve_theme(), Some(Theme::Light));
         unsafe { std::env::remove_var("SHINE_TERMINAL_THEME") };
-        unsafe { std::env::remove_var("COLORFGBG") };
-    }
-
-    #[test]
-    fn resolve_theme_falls_back_to_colorfgbg() {
-        let _guard = env_lock();
-        unsafe { std::env::remove_var("SHINE_TERMINAL_THEME") };
+        assert_eq!(resolve_theme(), Some(Theme::Dark));
         unsafe { std::env::set_var("COLORFGBG", "0;15") };
         assert_eq!(resolve_theme(), Some(Theme::Light));
-        unsafe { std::env::remove_var("COLORFGBG") };
     }
 }

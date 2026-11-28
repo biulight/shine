@@ -41,6 +41,22 @@ fn service(host: InMemoryHost) -> FrontendService<InMemoryHost> {
         .with_configuration_revision(Some("config:one".into()))
 }
 
+async fn apply_approved(
+    trusted: TrustedFrontend<InMemoryHost>,
+    approved: ApprovedOperation,
+    events: &mut Vec<FrontendEventV1>,
+) -> Result<OperationExecution, FrontendServiceError> {
+    trusted
+        .apply(
+            approved,
+            ExecutionOptions::default(),
+            &mut NullObserver,
+            &mut Human,
+            events,
+        )
+        .await
+}
+
 fn same_json(left: &impl serde::Serialize, right: &impl serde::Serialize) {
     assert_eq!(
         serde_json::to_value(left).unwrap(),
@@ -93,11 +109,8 @@ source = 'config.toml'
                 input_versions,
             });
             runtime.host().queue_process_output(Ok(ProcessOutput {
-                interrupted: false,
-                output_truncated: false,
                 exit_code: Some(0),
-                stdout: Vec::new(),
-                stderr: Vec::new(),
+                ..ProcessOutput::default()
             }));
             let service = FrontendService::new(runtime);
             let readonly = service.read_only().request_review(&request).await.unwrap();
@@ -106,14 +119,7 @@ source = 'config.toml'
             same_json(review.report(), &readonly);
             let approved = review.approve_after_human_confirmation().unwrap();
             let mut events = Vec::new();
-            let execution = trusted
-                .apply(
-                    approved,
-                    ExecutionOptions::default(),
-                    &mut NullObserver,
-                    &mut Human,
-                    &mut events,
-                )
+            let execution = apply_approved(trusted, approved, &mut events)
                 .await
                 .unwrap();
             assert!(matches!(
@@ -187,14 +193,7 @@ path = '$HOME/.tool/bin'
             let operation = review.report().plan.operation;
             let approved = review.approve_after_human_confirmation().unwrap();
             let mut events = Vec::new();
-            let execution = trusted
-                .apply(
-                    approved,
-                    ExecutionOptions::default(),
-                    &mut NullObserver,
-                    &mut Human,
-                    &mut events,
-                )
+            let execution = apply_approved(trusted, approved, &mut events)
                 .await
                 .unwrap();
             assert!(matches!(
@@ -257,11 +256,9 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', se
         .await
         .unwrap();
         runtime.host().queue_process_output(Ok(ProcessOutput {
-            interrupted: false,
-            output_truncated: false,
             exit_code: Some(0),
             stdout: b"generated".to_vec(),
-            stderr: Vec::new(),
+            ..ProcessOutput::default()
         }));
         let mut input_versions = PlanningInputVersions::default();
         input_versions.insert_secret_version("SOURCE", OpaqueSecretVersion::new("source-version"));
@@ -275,14 +272,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', se
         let review = trusted.review(request).await.unwrap();
         let approved = review.approve_after_human_confirmation().unwrap();
         let mut events = Vec::new();
-        let execution = trusted
-            .apply(
-                approved,
-                ExecutionOptions::default(),
-                &mut NullObserver,
-                &mut Human,
-                &mut events,
-            )
+        let execution = apply_approved(trusted, approved, &mut events)
             .await
             .unwrap();
         assert_eq!(
@@ -527,15 +517,7 @@ async fn normal_lifecycle_cli_ui_and_core_results_agree() {
                 same_json(&review.report().plan, &plan);
                 let approved = review.approve_after_human_confirmation().unwrap();
                 let mut events = Vec::new();
-                let execution = service(host)
-                    .into_trusted()
-                    .apply(
-                        approved,
-                        ExecutionOptions::default(),
-                        &mut NullObserver,
-                        &mut Human,
-                        &mut events,
-                    )
+                let execution = apply_approved(service(host).into_trusted(), approved, &mut events)
                     .await
                     .unwrap();
                 let ExecutionResultV1::Lifecycle { result } = &execution.report.result else {
@@ -579,15 +561,7 @@ async fn configuration_and_live_state_changes_reject_before_effects() {
         };
         let since = host.operations().len();
         let mut events = Vec::new();
-        let error = current
-            .into_trusted()
-            .apply(
-                approved,
-                ExecutionOptions::default(),
-                &mut NullObserver,
-                &mut Human,
-                &mut events,
-            )
+        let error = apply_approved(current.into_trusted(), approved, &mut events)
             .await
             .err()
             .expect("stale approval rejected");
@@ -635,14 +609,7 @@ async fn changed_source_or_permissions_in_fresh_capture_invalidates_approval() {
             .with_configuration_revision(Some("config:one".into()))
             .into_trusted();
         let since = host.operations().len();
-        let error = current
-            .apply(
-                approved,
-                ExecutionOptions::default(),
-                &mut NullObserver,
-                &mut Human,
-                &mut Vec::new(),
-            )
+        let error = apply_approved(current, approved, &mut Vec::new())
             .await
             .err()
             .expect("source change invalidates review");
@@ -668,14 +635,7 @@ async fn prevalidated_approval_is_rechecked_before_apply() {
     );
     let since = host.operations().len();
     let mut events = Vec::new();
-    let error = trusted
-        .apply(
-            approved,
-            ExecutionOptions::default(),
-            &mut NullObserver,
-            &mut Human,
-            &mut events,
-        )
+    let error = apply_approved(trusted, approved, &mut events)
         .await
         .err()
         .expect("apply must revalidate a previously validated approval");

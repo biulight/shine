@@ -1,4 +1,14 @@
 use super::*;
+
+async fn assert_file_contents(path: &Path, expected: &str) {
+    assert_eq!(
+        tokio::fs::read_to_string(path).await.unwrap(),
+        expected,
+        "{}",
+        path.display()
+    );
+}
+
 #[test]
 fn hybrid_policy_validation_and_overrides() {
     let config = Config::new_for_test(Path::new("unused"));
@@ -71,10 +81,7 @@ async fn seal_distinguishes_sources_and_workspace_with_matching_stems() {
             .is_err()
     );
     for name in names {
-        assert_eq!(
-            tokio::fs::read_to_string(dir.join(name)).await.unwrap(),
-            original
-        );
+        assert_file_contents(&dir.join(name), original).await;
     }
     drop(lock);
 
@@ -101,32 +108,15 @@ async fn replacement_preserves_source_and_policy_edits_and_missing_files() {
     tokio::fs::write(&workspace, "policy").await.unwrap();
     let lock = SealLock::acquire(&workspace).unwrap();
     assert!(SealLock::acquire(&workspace).is_err());
+    let replace = |policy| replace_sealed_file(&source, b"sealed", "original", policy);
     tokio::fs::write(&workspace, "edited policy").await.unwrap();
-    assert!(
-        replace_sealed_file(&source, b"sealed", "original", Some((&workspace, "policy")))
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        tokio::fs::read_to_string(&source).await.unwrap(),
-        "original"
-    );
+    assert!(replace(Some((&workspace, "policy"))).await.is_err());
+    assert_file_contents(&source, "original").await;
     tokio::fs::write(&source, "edited source").await.unwrap();
-    assert!(
-        replace_sealed_file(&source, b"sealed", "original", None)
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        tokio::fs::read_to_string(&source).await.unwrap(),
-        "edited source"
-    );
+    assert!(replace(None).await.is_err());
+    assert_file_contents(&source, "edited source").await;
     tokio::fs::remove_file(&source).await.unwrap();
-    assert!(
-        replace_sealed_file(&source, b"sealed", "original", None)
-            .await
-            .is_err()
-    );
+    assert!(replace(None).await.is_err());
     assert!(!source.exists());
     drop(lock);
     assert!(SealLock::acquire(&workspace).is_ok());
@@ -168,25 +158,15 @@ async fn seal_rejects_linked_sources_before_updating_any_file() {
         } else {
             "regular environment source"
         }));
-        assert_eq!(
-            tokio::fs::read_to_string(dir.join("public.toml"))
-                .await
-                .unwrap(),
-            public
-        );
-        assert_eq!(
-            tokio::fs::read_to_string(dir.join("target.toml"))
-                .await
-                .unwrap(),
-            original
-        );
+        assert_file_contents(&dir.join("public.toml"), public).await;
+        assert_file_contents(&dir.join("target.toml"), original).await;
         // The replacement boundary must also reject a link introduced after capture.
         assert!(
             replace_sealed_file(&linked, b"sealed", original, None)
                 .await
                 .is_err()
         );
-        assert_eq!(tokio::fs::read_to_string(&linked).await.unwrap(), original);
+        assert_file_contents(&linked, original).await;
         tokio::fs::remove_file(&linked).await.unwrap();
     }
     tokio::fs::remove_dir_all(dir).await.unwrap();

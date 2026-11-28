@@ -199,9 +199,18 @@ pub(super) fn migrate(kind: &str, document: &mut DocumentMut) -> Result<bool> {
 mod tests {
     use super::*;
 
-    fn migrate(kind: &str, original: &[u8]) -> Result<Option<Vec<u8>>> {
-        let mut document = std::str::from_utf8(original)?.parse::<DocumentMut>()?;
-        Ok(super::migrate(kind, &mut document)?.then(|| document.to_string().into_bytes()))
+    fn migrate(kind: &str, original: &str) -> Result<Option<String>> {
+        let mut document = original.parse::<DocumentMut>()?;
+        Ok(super::migrate(kind, &mut document)?.then(|| document.to_string()))
+    }
+
+    fn migrate_once(kind: &str, original: &str) -> String {
+        let migrated = migrate(kind, original).unwrap().unwrap();
+        assert!(
+            migrate(kind, &migrated).unwrap().is_none(),
+            "second migration changed {kind} metadata"
+        );
+        migrated
     }
 
     #[test]
@@ -211,11 +220,11 @@ mod tests {
                 "metadata_schema_version=2\ndest='~/.demo'\n{root_extra}[permissions]\nschema_version=1\nenvironment=[{{name='TOKEN',sensitivity='secret'}}]\n[[files]]\nsource='config'\n{file_extra}"
             );
             assert!(
-                migrate("app", original.as_bytes()).unwrap().is_none(),
+                migrate("app", &original).unwrap().is_none(),
                 "ignored metadata was rewritten: {original}"
             );
         }
-        let original = br#"dest='~/.demo'
+        let original = r#"dest='~/.demo'
 env=['TOKEN']
 [artifact]
 script='build.ts'
@@ -227,8 +236,7 @@ environment=[{name='TOKEN',sensitivity='secret'},{name='RUN',sensitivity='plain'
 source='config'
 env=['TOKEN']
 "#;
-        let migrated = migrate("app", original).unwrap().unwrap();
-        let value: toml::Value = toml::from_slice(&migrated).unwrap();
+        let value: toml::Value = toml::from_str(&migrate_once("app", original)).unwrap();
         assert_eq!(value["env"][0].as_str(), Some("TOKEN"));
         assert_eq!(value["files"][0]["env"][0].as_str(), Some("TOKEN"));
         assert_eq!(
@@ -240,7 +248,7 @@ env=['TOKEN']
 
     #[test]
     fn app_migration_preserves_comments_conditions_aliases_and_remaining_permissions() {
-        let original = br#"# Keep this comment.
+        let original = r#"# Keep this comment.
 dest = '~/.config/demo'
 post_install = [{ script = 'hook.ts', runtime = 'bun', env = ['TOKEN'] }]
 [artifact]
@@ -254,10 +262,9 @@ environment = [{ name = 'PROFILE', sensitivity = 'plain' }, { name = 'TOKEN', se
 source = 'config'
 generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN=ALIAS'], when_env = 'TOKEN', auto = false }
 "#;
-        let migrated = migrate("app", original).unwrap().unwrap();
-        let text = std::str::from_utf8(&migrated).unwrap();
+        let text = migrate_once("app", original);
         assert!(text.starts_with("# Keep this comment."));
-        let value: toml::Value = toml::from_str(text).unwrap();
+        let value: toml::Value = toml::from_str(&text).unwrap();
         let generator = &value["files"][0]["generator"];
         assert_eq!(generator["env"][0]["source"].as_str(), Some("TOKEN"));
         assert_eq!(generator["env"][0]["target"].as_str(), Some("ALIAS"));
@@ -268,23 +275,14 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN=ALIAS'], when_en
             value["artifact"]["env"][0]["source"].as_str(),
             Some("PROFILE")
         );
-        assert_eq!(
-            value["permissions"]["environment"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            value["permissions"]["environment"][0]["name"].as_str(),
-            Some("TEMPLATE")
-        );
-        assert!(migrate("app", &migrated).unwrap().is_none());
+        let remaining = value["permissions"]["environment"].as_array().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0]["name"].as_str(), Some("TEMPLATE"));
     }
 
     #[test]
     fn shell_migration_respects_whole_entry_override_and_never_guesses_sensitivity() {
-        let original = br#"[permission_defaults]
+        let original = r#"[permission_defaults]
 schema_version = 1
 environment = [{ name = 'TOKEN', sensitivity = 'secret' }]
 [[files]]
@@ -299,8 +297,7 @@ env = ['TOKEN']
 schema_version = 1
 environment = [{ name = 'TOKEN', sensitivity = 'plain' }]
 "#;
-        let migrated = migrate("shell", original).unwrap().unwrap();
-        let value: toml::Value = toml::from_slice(&migrated).unwrap();
+        let value: toml::Value = toml::from_str(&migrate_once("shell", original)).unwrap();
         assert_eq!(
             value["files"][0]["env"][0]["sensitivity"].as_str(),
             Some("secret")
@@ -309,18 +306,17 @@ environment = [{ name = 'TOKEN', sensitivity = 'plain' }]
             value["files"][1]["env"][0]["sensitivity"].as_str(),
             Some("plain")
         );
-        assert!(migrate("shell", &migrated).unwrap().is_none());
-        let text = std::str::from_utf8(original).unwrap().replace(
+        let text = original.replace(
             "environment = [{ name = 'TOKEN', sensitivity = 'plain' }]",
             "",
         );
-        assert!(migrate("shell", text.as_bytes()).is_err());
-        assert!(migrate("app", b"[artifact]\nscript = 'build.ts'\nenv = ['TOKEN']").is_err());
+        assert!(migrate("shell", &text).is_err());
+        assert!(migrate("app", "[artifact]\nscript = 'build.ts'\nenv = ['TOKEN']").is_err());
     }
 
     #[test]
     fn app_migration_keeps_shared_contract_when_generator_can_be_filtered() {
-        let original = br#"dest='~/.demo'
+        let original = r#"dest='~/.demo'
 [permissions]
 schema_version=1
 environment=[{name='TOKEN',sensitivity='secret'}]
@@ -332,8 +328,7 @@ source='generated'
 platforms=['windows']
 generator={script='gen.ts',runtime='bun',env=['TOKEN'],when_env='TOKEN'}
 "#;
-        let migrated = migrate("app", original).unwrap().unwrap();
-        let value: toml::Value = toml::from_slice(&migrated).unwrap();
+        let value: toml::Value = toml::from_str(&migrate_once("app", original)).unwrap();
         assert_eq!(
             value["permissions"]["environment"][0]["name"].as_str(),
             Some("TOKEN")
@@ -342,6 +337,5 @@ generator={script='gen.ts',runtime='bun',env=['TOKEN'],when_env='TOKEN'}
             value["files"][1]["generator"]["env"][0]["source"].as_str(),
             Some("TOKEN")
         );
-        assert!(migrate("app", &migrated).unwrap().is_none());
     }
 }

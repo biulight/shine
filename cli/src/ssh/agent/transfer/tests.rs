@@ -375,13 +375,7 @@ async fn system_rsync_transfers_remote_spaces_metacharacters_and_globs() {
     std::fs::write(&ssh, "#!/bin/sh\nshift\nexec /bin/sh -c \"$*\"\n").unwrap();
     std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
     let ctx = ctx_with("fixture", vec![], None);
-    for pattern in [literal, "report [!c]?.log"] {
-        let request = plan(
-            Direction::Download,
-            remote.join(pattern).to_str().unwrap(),
-            &[local.to_str().unwrap()],
-            false,
-        );
+    let run_rsync = async |request: TransferPlan| {
         let mut command = build_transfer_argv(Tool::Rsync, &ctx, &request).unwrap();
         command.program = rsync.display().to_string();
         let output = command
@@ -391,6 +385,15 @@ async fn system_rsync_transfers_remote_spaces_metacharacters_and_globs() {
             .await
             .unwrap();
         assert!(output.status.success(), "{output:?}");
+    };
+    for pattern in [literal, "report [!c]?.log"] {
+        let request = plan(
+            Direction::Download,
+            remote.join(pattern).to_str().unwrap(),
+            &[local.to_str().unwrap()],
+            false,
+        );
+        run_rsync(request).await;
     }
     assert_eq!(
         std::fs::read(local.join(literal)).unwrap(),
@@ -408,20 +411,17 @@ async fn system_rsync_transfers_remote_spaces_metacharacters_and_globs() {
         &[local.join(literal).to_str().unwrap()],
         true,
     );
-    let mut command = build_transfer_argv(Tool::Rsync, &ctx, &request).unwrap();
-    command.program = rsync.display().to_string();
-    let output = command
-        .process()
-        .env("RSYNC_RSH", &ssh)
-        .output()
-        .await
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
+    run_rsync(request).await;
     assert_eq!(
         std::fs::read(destination.join(literal)).unwrap(),
         b"literal contents"
     );
     tokio::fs::remove_dir_all(dir).await.unwrap();
+}
+
+fn operands(command: &TransferCommand) -> &[String] {
+    let separator = command.args.iter().position(|arg| arg == "--").unwrap();
+    &command.args[separator + 1..]
 }
 
 #[test]
@@ -435,7 +435,6 @@ fn rsync_download_argv_uses_dashdash_and_control_master() {
     );
     let cmd = build_transfer_argv(Tool::Rsync, &ctx, &plan).unwrap();
     assert_eq!(cmd.program, "rsync");
-    assert!(cmd.args.contains(&"--".to_string()));
     assert!(cmd.args.contains(&"-a".to_string()));
     assert!(cmd.args.contains(&"--progress".to_string()));
     assert!(cmd.args.contains(&"--ignore-existing".to_string()));
@@ -446,9 +445,7 @@ fn rsync_download_argv_uses_dashdash_and_control_master() {
         "ssh -o ControlPath=/run/ctl.sock -o ControlMaster=no"
     );
     // remote operand is host:spec, after the -- separator.
-    let sep = cmd.args.iter().position(|a| a == "--").unwrap();
-    assert_eq!(cmd.args[sep + 1], "dev:/abs/logs/*.log");
-    assert_eq!(cmd.args[sep + 2], "/home/u/proj");
+    assert_eq!(operands(&cmd), ["dev:/abs/logs/*.log", "/home/u/proj"]);
 }
 
 #[cfg(target_os = "macos")]
@@ -493,10 +490,14 @@ fn rsync_upload_puts_local_sources_before_remote_dest() {
     );
     let cmd = build_transfer_argv(Tool::Rsync, &ctx, &plan).unwrap();
     assert!(!cmd.args.contains(&"--ignore-existing".to_string())); // force set
-    let sep = cmd.args.iter().position(|a| a == "--").unwrap();
-    assert_eq!(cmd.args[sep + 1], "/home/u/proj/a.txt");
-    assert_eq!(cmd.args[sep + 2], "/home/u/proj/b.txt");
-    assert_eq!(cmd.args[sep + 3], "dev:/remote/dir");
+    assert_eq!(
+        operands(&cmd),
+        [
+            "/home/u/proj/a.txt",
+            "/home/u/proj/b.txt",
+            "dev:/remote/dir"
+        ]
+    );
 }
 
 #[test]
@@ -506,9 +507,7 @@ fn scp_download_argv_shape() {
     let cmd = build_transfer_argv(Tool::Scp, &ctx, &plan).unwrap();
     assert_eq!(cmd.program, "scp");
     assert!(cmd.args.contains(&"-r".to_string()));
-    let sep = cmd.args.iter().position(|a| a == "--").unwrap();
-    assert_eq!(cmd.args[sep + 1], "dev:/abs/file");
-    assert_eq!(cmd.args[sep + 2], "/home/u/proj");
+    assert_eq!(operands(&cmd), ["dev:/abs/file", "/home/u/proj"]);
 }
 
 #[test]
@@ -681,20 +680,15 @@ fn expand_hint_is_tilde_only_and_anchors_relative() {
         std::env::remove_var("SUDO_USER");
     }
     let base = Path::new("/home/u/proj");
-    assert_eq!(
-        expand_hint(base, "sub/file").unwrap(),
-        base.join("sub/file")
-    );
-    assert_eq!(expand_hint(base, "/abs").unwrap(), PathBuf::from("/abs"));
-    assert_eq!(
-        expand_hint(base, "$HOME/${TOKEN}").unwrap(),
-        base.join("$HOME/${TOKEN}")
-    );
-    assert_eq!(expand_hint(base, "~").unwrap(), home);
-    assert_eq!(
-        expand_hint(base, "~/sub/file").unwrap(),
-        home.join("sub/file")
-    );
+    for (hint, expected) in [
+        ("sub/file", base.join("sub/file")),
+        ("/abs", PathBuf::from("/abs")),
+        ("$HOME/${TOKEN}", base.join("$HOME/${TOKEN}")),
+        ("~", home.clone()),
+        ("~/sub/file", home.join("sub/file")),
+    ] {
+        assert_eq!(expand_hint(base, hint).unwrap(), expected, "{hint}");
+    }
 }
 
 #[test]

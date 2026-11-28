@@ -259,15 +259,8 @@ fn bail_shim_missing<T>(category: &str) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{make_temp_dir, test_config};
     use tokio::fs;
-
-    async fn make_temp_dir() -> std::path::PathBuf {
-        crate::test_support::make_temp_dir("shine-shim-test").await
-    }
-
-    fn config_in(dir: &std::path::Path) -> Config {
-        crate::test_support::test_config(dir)
-    }
 
     #[test]
     fn shim_diagnostics_encode_controls_without_changing_target_parsing() {
@@ -312,22 +305,18 @@ mod tests {
 
     #[test]
     fn classify_shim_resolution_handles_all_match_shapes() {
-        assert_eq!(
-            classify_shim_resolution(true, false),
-            ShimResolution::Found(PresetKind::Shell)
-        );
-        assert_eq!(
-            classify_shim_resolution(false, true),
-            ShimResolution::Found(PresetKind::App)
-        );
-        assert_eq!(
-            classify_shim_resolution(true, true),
-            ShimResolution::Conflict
-        );
-        assert_eq!(
-            classify_shim_resolution(false, false),
-            ShimResolution::Missing
-        );
+        for (shell, app, expected) in [
+            (true, false, ShimResolution::Found(PresetKind::Shell)),
+            (false, true, ShimResolution::Found(PresetKind::App)),
+            (true, true, ShimResolution::Conflict),
+            (false, false, ShimResolution::Missing),
+        ] {
+            assert_eq!(
+                classify_shim_resolution(shell, app),
+                expected,
+                "shell={shell}, app={app}"
+            );
+        }
     }
 
     #[test]
@@ -366,43 +355,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_shim_category_matches_embedded_shell_category() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        let resolution = resolve_shim_category(&config, "proxy").await.unwrap();
-
-        assert_eq!(resolution, ShimResolution::Found(PresetKind::Shell));
-        fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn resolve_shim_category_matches_embedded_app_category() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        let resolution = resolve_shim_category(&config, "starship").await.unwrap();
-
-        assert_eq!(resolution, ShimResolution::Found(PresetKind::App));
-        fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn resolve_shim_category_reports_missing_category() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        let resolution = resolve_shim_category(&config, "does-not-exist")
-            .await
-            .unwrap();
-
-        assert_eq!(resolution, ShimResolution::Missing);
+    async fn resolve_shim_category_distinguishes_embedded_shell_app_and_missing_categories() {
+        let dir = make_temp_dir("shine-shim-test").await;
+        let config = test_config(&dir);
+        for (name, expected) in [
+            ("proxy", ShimResolution::Found(PresetKind::Shell)),
+            ("starship", ShimResolution::Found(PresetKind::App)),
+            ("does-not-exist", ShimResolution::Missing),
+        ] {
+            assert_eq!(
+                resolve_shim_category(&config, name).await.unwrap(),
+                expected,
+                "{name}"
+            );
+        }
         fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn resolve_shim_category_matches_overlay_only_categories_with_embedded_base() {
-        let dir = make_temp_dir().await;
+        let dir = make_temp_dir("shine-shim-test").await;
         let overlay = dir.join("overlay");
         fs::create_dir_all(overlay.join("shell/custom-shell"))
             .await
@@ -431,7 +403,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let config = config_in(&dir).with_presets_overlay_dir_override(Some(overlay));
+        let config = test_config(&dir).with_presets_overlay_dir_override(Some(overlay));
 
         assert_eq!(
             resolve_shim_category(&config, "custom-shell")
@@ -449,8 +421,8 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_shell_command_target_installs_and_uninstalls_one_command() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
+        let dir = make_temp_dir("shine-shim-test").await;
+        let config = test_config(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         handle_install_shim_approved(&config, "shell/utils/shine-env-export", false, true)

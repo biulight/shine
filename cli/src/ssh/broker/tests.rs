@@ -60,6 +60,12 @@ struct TestInteraction {
     displays: Mutex<Vec<String>>,
     prompts: Mutex<Vec<String>>,
 }
+impl TestInteraction {
+    fn confirmation_count(&self) -> usize {
+        self.confirmations.load(Ordering::SeqCst)
+    }
+}
+
 struct GuardFile(PathBuf);
 impl Drop for GuardFile {
     fn drop(&mut self) {
@@ -138,26 +144,21 @@ async fn direct_requests_confirm_even_with_session_trust_and_rejections_consume_
     let (session, interaction) = test_session(&root, BrokerMode::Serve, true).await;
     interaction.reject.store(true, Ordering::SeqCst);
     let nonce = "direct-rejected-nonce-0001";
-    let error = session
-        .handle_direct(&["TOKEN".into()], &[], nonce)
-        .await
-        .unwrap_err();
+    let request = async || session.handle_direct(&["TOKEN".into()], &[], nonce).await;
+    let error = request().await.unwrap_err();
     assert_eq!(error.to_string(), "test confirmation rejected");
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
+    assert_eq!(interaction.confirmation_count(), 1);
     assert!(!interaction.guard_path.exists());
-    let replay = session
-        .handle_direct(&["TOKEN".into()], &[], nonce)
-        .await
-        .unwrap_err();
+    let replay = request().await.unwrap_err();
     assert!(replay.to_string().contains("already been used"));
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
+    assert_eq!(interaction.confirmation_count(), 1);
     assert!(
         session
             .handle_direct(&["TOKEN=OTHER".into()], &[], "unauthorized-nonce-0001")
             .await
             .is_err()
     );
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
+    assert_eq!(interaction.confirmation_count(), 1);
     tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
@@ -193,7 +194,7 @@ async fn workspace_policy_match_precedes_confirmation_and_trusted_session_only_s
             .to_string()
             .contains("no SSH secret broker policy")
     );
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 0);
+    assert_eq!(interaction.confirmation_count(), 0);
     assert!(
         session
             .handle_workspace(&snapshot, &argv, "workspace-trusted-0001")
@@ -201,7 +202,7 @@ async fn workspace_policy_match_precedes_confirmation_and_trusted_session_only_s
             .unwrap()
             .is_empty()
     );
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 0);
+    assert_eq!(interaction.confirmation_count(), 0);
     Arc::get_mut(&mut session).unwrap().trust_remote_session = false;
     interaction.reject.store(true, Ordering::SeqCst);
     assert_eq!(
@@ -212,7 +213,7 @@ async fn workspace_policy_match_precedes_confirmation_and_trusted_session_only_s
             .to_string(),
         "test confirmation rejected"
     );
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
+    assert_eq!(interaction.confirmation_count(), 1);
     tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
@@ -255,9 +256,9 @@ async fn inspect_and_enroll_remain_metadata_only_and_enrollment_requires_confirm
         assert!(!interaction.guard_path.exists());
         if mode == BrokerMode::Inspect {
             assert_eq!(interaction.displays.lock().unwrap().len(), 1);
-            assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 0);
+            assert_eq!(interaction.confirmation_count(), 0);
         } else {
-            assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 2);
+            assert_eq!(interaction.confirmation_count(), 2);
             assert_eq!(
                 broker::load_store(&session.config)
                     .await
@@ -306,13 +307,14 @@ async fn enrollment_review_keeps_long_diff_tails_and_requires_fresh_confirmation
     Arc::get_mut(&mut session).unwrap().enroll_update_policy = Some(initial.name);
     let mut changed = original.clone();
     changed.sources[0].path = format!("{prefix}NEW.toml");
-    interaction.reject.store(true, Ordering::SeqCst);
-    assert!(
+    let describe = async |nonce: &str| {
         session
-            .handle_description(&changed, &release, &argv, "long-review-rejected-0001")
+            .handle_description(&changed, &release, &argv, nonce)
             .await
-            .is_err()
-    );
+    };
+    let rejected_nonce = "long-review-rejected-0001";
+    interaction.reject.store(true, Ordering::SeqCst);
+    assert!(describe(rejected_nonce).await.is_err());
     assert_eq!(tokio::fs::read(&path).await.unwrap(), before);
     {
         let prompts = interaction.prompts.lock().unwrap();
@@ -336,19 +338,11 @@ async fn enrollment_review_keeps_long_diff_tails_and_requires_fresh_confirmation
     }
     interaction.reject.store(false, Ordering::SeqCst);
     // A rejected request's nonce cannot be reused to reach approval or mutation.
-    assert!(
-        session
-            .handle_description(&changed, &release, &argv, "long-review-rejected-0001")
-            .await
-            .is_err()
-    );
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
+    assert!(describe(rejected_nonce).await.is_err());
+    assert_eq!(interaction.confirmation_count(), 1);
     assert_eq!(tokio::fs::read(&path).await.unwrap(), before);
-    session
-        .handle_description(&changed, &release, &argv, "long-review-accepted-0001")
-        .await
-        .unwrap();
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 2);
+    describe("long-review-accepted-0001").await.unwrap();
+    assert_eq!(interaction.confirmation_count(), 2);
     let stored = broker::load_store(&config).await.unwrap();
     assert_eq!(
         stored.policies[0].allow[0].sources[0].path,
@@ -424,12 +418,11 @@ async fn confirmation_guard_covers_real_decryption_success_failure_and_cancellat
         std::fs::remove_file(&seen).unwrap();
     }
     write_backend("exec /bin/sleep 60");
-    let task_session = session.clone();
-    let task = tokio::spawn(async move {
-        task_session
-            .handle_direct(&["TOKEN".into()], &[], "decrypt-cancel-nonce-0001")
-            .await
-    });
+    let spawn_request = |nonce: &'static str| {
+        let session = session.clone();
+        tokio::spawn(async move { session.handle_direct(&["TOKEN".into()], &[], nonce).await })
+    };
+    let task = spawn_request("decrypt-cancel-nonce-0001");
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while !seen.exists() {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -438,18 +431,13 @@ async fn confirmation_guard_covers_real_decryption_success_failure_and_cancellat
     .await
     .unwrap();
     assert!(interaction.guard_path.exists());
-    let waiting_session = session.clone();
-    let mut waiting = tokio::spawn(async move {
-        waiting_session
-            .handle_direct(&["TOKEN".into()], &[], "serialized-waiting-nonce-0001")
-            .await
-    });
+    let mut waiting = spawn_request("serialized-waiting-nonce-0001");
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(50), &mut waiting)
             .await
             .is_err()
     );
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 3);
+    assert_eq!(interaction.confirmation_count(), 3);
     assert!(
         session
             .handle_direct(&["TOKEN".into()], &[], "decrypt-cancel-nonce-0001")
@@ -472,7 +460,7 @@ async fn confirmation_guard_covers_real_decryption_success_failure_and_cancellat
         "test confirmation rejected"
     );
     assert!(!interaction.guard_path.exists());
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 4);
+    assert_eq!(interaction.confirmation_count(), 4);
     tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
@@ -503,7 +491,7 @@ async fn file_release_requires_separate_policy_and_rejection_consumes_nonce() {
         .err()
         .unwrap();
     assert!(error.to_string().contains("matching local file policy"));
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 0);
+    assert_eq!(interaction.confirmation_count(), 0);
     Arc::get_mut(&mut session)
         .unwrap()
         .policies
@@ -514,18 +502,17 @@ async fn file_release_requires_separate_policy_and_rejection_consumes_nonce() {
             descriptor: super::super::file_broker::descriptor(&request).unwrap(),
         });
     interaction.reject.store(true, Ordering::SeqCst);
-    let error = session
-        .handle_files(&request, false, "file-rejected-0001")
-        .await
-        .err()
-        .unwrap();
+    let rejected_request = async || {
+        session
+            .handle_files(&request, false, "file-rejected-0001")
+            .await
+            .err()
+            .expect("file release should be denied")
+    };
+    let error = rejected_request().await;
     assert_eq!(error.to_string(), "test confirmation rejected");
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
-    let error = session
-        .handle_files(&request, false, "file-rejected-0001")
-        .await
-        .err()
-        .unwrap();
+    assert_eq!(interaction.confirmation_count(), 1);
+    let error = rejected_request().await;
     assert!(error.to_string().contains("already been used"));
     Arc::get_mut(&mut session).unwrap().trust_remote_session = true;
     let mut changed = request;
@@ -536,7 +523,7 @@ async fn file_release_requires_separate_policy_and_rejection_consumes_nonce() {
             .await
             .is_err()
     );
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
+    assert_eq!(interaction.confirmation_count(), 1);
     tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
@@ -552,7 +539,7 @@ async fn file_inspection_never_releases_plaintext() {
             .unwrap(),
         FileResult::Description(_)
     ));
-    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 0);
+    assert_eq!(interaction.confirmation_count(), 0);
     assert!(
         session
             .handle_files(&request, false, "file-inspect-0002")

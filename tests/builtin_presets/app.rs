@@ -1,6 +1,4 @@
 use std::path::Path;
-#[cfg(unix)]
-use std::path::PathBuf;
 
 #[tokio::test]
 async fn surge_install_plan_binds_only_enabled_subscription_generators() {
@@ -165,41 +163,24 @@ fn embedded_destination_runtime(
     )
 }
 
-#[cfg(windows)]
+#[cfg(any(unix, windows))]
 #[test]
-fn install_resolves_windows_docker_engine_destination_on_windows() {
-    let dir = std::env::temp_dir().join("shine-apps-win-dest");
+fn docker_engine_destination_matches_the_host_platform() {
+    let dir = std::env::temp_dir().join("shine-apps-docker-dest");
     let runtime = embedded_destination_runtime(&dir);
     let categories = runtime.app_categories(Some("docker-engine")).unwrap();
     let docker = categories
         .iter()
         .find(|c| c.name == "docker-engine")
         .unwrap();
-    let file = docker.files.first().unwrap();
-
-    let destination = runtime.app_destination(docker, file).unwrap();
-
-    assert_eq!(destination, dir.join(".docker").join("daemon.json"));
-}
-
-#[cfg(unix)]
-#[test]
-fn install_accepts_unix_metadata_destination_on_unix() {
-    let dir = std::env::temp_dir().join("shine-apps-unix-dest");
-    let runtime = embedded_destination_runtime(&dir);
-    let categories = runtime.app_categories(Some("docker-engine")).unwrap();
-    let docker = categories
-        .iter()
-        .find(|c| c.name == "docker-engine")
+    let destination = runtime
+        .app_destination(docker, docker.files.first().unwrap())
         .unwrap();
-    let file = docker.files.first().unwrap();
-
-    let destination = runtime.app_destination(docker, file).unwrap();
-
-    assert_eq!(
-        destination,
-        PathBuf::from("/etc/docker").join("daemon.json")
-    );
+    #[cfg(unix)]
+    let expected = Path::new("/etc/docker").join("daemon.json");
+    #[cfg(windows)]
+    let expected = dir.join(".docker").join("daemon.json");
+    assert_eq!(destination, expected);
 }
 
 #[test]
@@ -208,27 +189,26 @@ fn per_file_destination_overrides_category_root() {
     let runtime = embedded_destination_runtime(&dir);
     let categories = runtime.app_categories(Some("clash-verge")).unwrap();
     let clash = categories.first().unwrap();
-    let merge = clash
-        .files
-        .iter()
-        .find(|file| file.source_rel == Path::new("merge.yaml"))
-        .unwrap();
-    let local_rule = clash
-        .files
-        .iter()
-        .find(|file| file.source_rel == Path::new("rules/lan.list"))
-        .unwrap();
-
-    assert_eq!(
-        runtime.app_destination(clash, merge).unwrap(),
-        dir.join(".shine/clash-verge/merge.yaml")
-    );
-    assert_eq!(
-        runtime.app_destination(clash, local_rule).unwrap(),
-        runtime
-            .context()
-            .data_dir
-            .join("io.github.clash-verge-rev.clash-verge-rev")
-            .join("ruleset/shine-source/lan.list")
-    );
+    for (source, expected) in [
+        ("merge.yaml", dir.join(".shine/clash-verge/merge.yaml")),
+        (
+            "rules/lan.list",
+            runtime
+                .context()
+                .data_dir
+                .join("io.github.clash-verge-rev.clash-verge-rev")
+                .join("ruleset/shine-source/lan.list"),
+        ),
+    ] {
+        let file = clash
+            .files
+            .iter()
+            .find(|file| file.source_rel == Path::new(source))
+            .unwrap();
+        assert_eq!(
+            runtime.app_destination(clash, file).unwrap(),
+            expected,
+            "{source}"
+        );
+    }
 }

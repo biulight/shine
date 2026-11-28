@@ -78,21 +78,24 @@ fn parse(bytes: &[u8]) -> Result<BTreeMap<String, EnvMetadata>> {
 mod tests {
     use super::*;
 
+    async fn write_catalog(dir: &std::path::Path, contents: &str) {
+        fs::create_dir_all(dir).await.unwrap();
+        fs::write(dir.join("env.toml"), contents).await.unwrap();
+    }
+
     #[tokio::test]
     async fn catalogs_follow_each_config_including_replaced_overlay_and_managed_availability() {
         let root = crate::test_support::make_temp_dir("shine-catalog").await;
         let a = root.join("a");
         let b = root.join("b");
         for (dir, key) in [(&a, "ONLY_A"), (&b, "ONLY_B")] {
-            fs::create_dir_all(dir).await.unwrap();
-            fs::write(
-                dir.join("env.toml"),
-                format!(
+            write_catalog(
+                dir,
+                &format!(
                     "[[variables]]\nkey = \"{key}\"\ndescription = \"overlay\"\nsensitive = true\n"
                 ),
             )
-            .await
-            .unwrap();
+            .await;
         }
         let base = Config::new_for_test(&root);
         let config_a = base
@@ -126,36 +129,23 @@ mod tests {
         let mut config = Config::new_for_test(&root);
         config.is_external_presets = true;
         assert!(load(&config).await.unwrap().is_empty());
-        fs::create_dir_all(config.presets_dir()).await.unwrap();
-        fs::write(
-            config.presets_dir().join("env.toml"),
+        write_catalog(
+            config.presets_dir(),
             "[[variables]]\nkey = \"EXTERNAL\"\ndescription = \"external\"\n",
         )
-        .await
-        .unwrap();
+        .await;
         assert!(load(&config).await.unwrap().contains_key("EXTERNAL"));
         let overlay = root.join("overlay");
-        fs::create_dir_all(&overlay).await.unwrap();
-        fs::write(overlay.join("env.toml"), "invalid TOML [")
-            .await
-            .unwrap();
-        let config = config.with_presets_overlay_dir_override(Some(overlay));
-        assert!(
-            load(&config)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("failed to parse env.toml")
-        );
-        let mut builtin = config;
-        builtin.is_external_presets = false;
-        assert!(
-            load(&builtin)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("failed to parse env.toml")
-        );
+        write_catalog(&overlay, "invalid TOML [").await;
+        let mut config = config.with_presets_overlay_dir_override(Some(overlay));
+        for external in [true, false] {
+            config.is_external_presets = external;
+            let error = load(&config).await.unwrap_err();
+            assert!(
+                error.to_string().contains("failed to parse env.toml"),
+                "external={external}: {error:#}"
+            );
+        }
         fs::remove_dir_all(root).await.unwrap();
     }
 

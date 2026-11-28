@@ -692,53 +692,52 @@ mod tests {
     }
 
     #[test]
-    fn diff_at_inline_limit_is_rendered() {
+    fn inline_diff_renders_at_the_limit_and_reports_the_size_above_it() {
         let mut current = vec![b'a'; 256 * 1024];
         let mut expected = current.clone();
         current[0] = b'b';
         expected[0] = b'c';
-
         let diff = render_diff_or_note(&current, &expected, "current", "expected");
         assert!(diff.contains("--- current"));
         assert!(!diff.contains("omitted"));
-    }
 
-    #[test]
-    fn oversized_diff_is_omitted() {
-        let current = vec![b'a'; 256 * 1024 + 1];
-        let expected = vec![b'b'; 256 * 1024 + 1];
-
+        current.push(b'a');
+        expected.push(b'b');
         let diff = render_diff_or_note(&current, &expected, "current", "expected");
         assert!(diff.contains("inline diff limit is 256 KiB"));
         assert!(diff.contains("262145 bytes"));
     }
 
     #[test]
-    fn nul_byte_diff_is_omitted() {
-        let diff = render_diff_or_note(b"old\0", b"new\0", "current", "expected");
-        assert!(diff.contains("binary content contains NUL bytes"));
-    }
-
-    #[test]
-    fn invalid_utf8_diff_is_omitted() {
-        let diff = render_diff_or_note(&[0xff], &[0xfe], "current", "expected");
-        assert!(diff.contains("content is not valid UTF-8"));
+    fn omitted_binary_diffs_explain_the_reason() {
+        for (current, expected, reason) in [
+            (
+                b"old\0".as_slice(),
+                b"new\0".as_slice(),
+                "binary content contains NUL bytes",
+            ),
+            (&[0xff], &[0xfe], "content is not valid UTF-8"),
+        ] {
+            let diff = render_diff_or_note(current, expected, "current", "expected");
+            assert!(diff.contains(reason), "{diff}");
+        }
     }
 
     #[tokio::test]
     async fn embedded_shell_diff_ignores_stale_extracted_source() {
-        let dir = std::env::temp_dir().join(format!("shine-info-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let dir = crate::test_support::make_temp_dir("shine-info").await;
         let config = Config::new_for_test(&dir);
         let runtime = crate::core_runtime::from_config(&config).await.unwrap();
-        let selected_source = runtime
-            .inspect_shells()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|item| item.category.name == "proxy" && item.file.command_name == "setproxy")
-            .map(|item| item.source_path)
-            .expect("embedded proxy source should exist");
+        let inspect_proxy = async || {
+            runtime
+                .inspect_shells()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|item| item.category.name == "proxy" && item.file.command_name == "setproxy")
+                .expect("embedded proxy source should exist")
+        };
+        let selected_source = inspect_proxy().await.source_path;
         tokio::fs::create_dir_all(selected_source.parent().unwrap())
             .await
             .unwrap();
@@ -746,13 +745,7 @@ mod tests {
             .await
             .unwrap();
 
-        let item = runtime
-            .inspect_shells()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|item| item.category.name == "proxy" && item.file.command_name == "setproxy")
-            .expect("embedded proxy source should exist");
+        let item = inspect_proxy().await;
         assert_eq!(item.source_path, selected_source);
         let expected = String::from_utf8(item.desired_content.unwrap()).unwrap();
 

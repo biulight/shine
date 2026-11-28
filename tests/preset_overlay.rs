@@ -1,5 +1,9 @@
 //! Overlay scope and persistence through separate CLI invocations.
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::PathBuf,
+    process::{Command, Output},
+};
 
 struct Fixture(PathBuf);
 
@@ -52,7 +56,15 @@ impl Fixture {
         command
     }
 
-    fn link_git(&self, project: bool) -> std::process::Output {
+    fn read(&self, path: &str) -> Vec<u8> {
+        fs::read(self.0.join(path)).unwrap_or_else(|error| panic!("{path}: {error}"))
+    }
+
+    fn run(&self, project: bool, args: &[&str]) -> Output {
+        self.command(project).args(args).output().unwrap()
+    }
+
+    fn link_git(&self, project: bool) -> Output {
         self.command(project)
             .args(["preset", "overlay", "link", "--git"])
             .arg(self.0.join("remote"))
@@ -71,7 +83,7 @@ impl Drop for Fixture {
 fn project_git_overlay_rejection_does_not_initialize_global_state() {
     let fixture = Fixture::new();
     fs::remove_dir_all(fixture.0.join("state")).unwrap();
-    let project = fs::read(fixture.0.join("project/shine.config.toml")).unwrap();
+    let project = fixture.read("project/shine.config.toml");
     let output = fixture.link_git(true);
     assert!(!output.status.success(), "{output:?}");
     assert!(
@@ -79,10 +91,7 @@ fn project_git_overlay_rejection_does_not_initialize_global_state() {
         "{output:?}"
     );
     assert!(!fixture.0.join("state").exists());
-    assert_eq!(
-        fs::read(fixture.0.join("project/shine.config.toml")).unwrap(),
-        project
-    );
+    assert_eq!(fixture.read("project/shine.config.toml"), project);
 }
 
 #[test]
@@ -95,26 +104,17 @@ fn project_git_overlay_link_preserves_configs_and_absent_or_existing_mirror() {
             // This untracked file would be removed if a rejected project link synced the mirror.
             fs::write(fixture.0.join("state/overlay/local-edit"), "retain\n").unwrap();
         }
-        let global = fs::read(fixture.0.join("state/config.toml")).unwrap();
-        let project = fs::read(fixture.0.join("project/shine.config.toml")).unwrap();
+        let global = fixture.read("state/config.toml");
+        let project = fixture.read("project/shine.config.toml");
         let output = fixture.link_git(true);
         assert!(!output.status.success(), "{output:?}");
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(error.contains("global-only"), "{output:?}");
         assert!(error.contains("outside"), "{output:?}");
-        assert_eq!(
-            fs::read(fixture.0.join("state/config.toml")).unwrap(),
-            global
-        );
-        assert_eq!(
-            fs::read(fixture.0.join("project/shine.config.toml")).unwrap(),
-            project
-        );
+        assert_eq!(fixture.read("state/config.toml"), global);
+        assert_eq!(fixture.read("project/shine.config.toml"), project);
         if existing {
-            assert_eq!(
-                fs::read(fixture.0.join("state/overlay/local-edit")).unwrap(),
-                b"retain\n"
-            );
+            assert_eq!(fixture.read("state/overlay/local-edit"), b"retain\n");
         } else {
             assert!(!fixture.0.join("state/overlay").exists());
         }
@@ -127,11 +127,7 @@ fn global_git_overlay_survives_reload_and_pull_and_project_manual_link_still_wor
     let output = fixture.link_git(false);
     assert!(output.status.success(), "{output:?}");
     for project in [false, true] {
-        let output = fixture
-            .command(project)
-            .args(["preset", "overlay", "info"])
-            .output()
-            .unwrap();
+        let output = fixture.run(project, &["preset", "overlay", "info"]);
         assert!(output.status.success(), "{output:?}");
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("Overlay Git source:"),
@@ -140,18 +136,11 @@ fn global_git_overlay_survives_reload_and_pull_and_project_manual_link_still_wor
     }
     fs::write(fixture.0.join("remote/marker"), "updated\n").unwrap();
     fixture.git(&["commit", "-qam", "update"]);
-    let output = fixture
-        .command(false)
-        .args(["preset", "pull"])
-        .output()
-        .unwrap();
+    let output = fixture.run(false, &["preset", "pull"]);
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(
-        fs::read(fixture.0.join("state/overlay/marker")).unwrap(),
-        b"updated\n"
-    );
+    assert_eq!(fixture.read("state/overlay/marker"), b"updated\n");
 
-    let global = fs::read(fixture.0.join("state/config.toml")).unwrap();
+    let global = fixture.read("state/config.toml");
     let output = fixture
         .command(true)
         .args(["preset", "overlay", "link"])
@@ -164,46 +153,26 @@ fn global_git_overlay_survives_reload_and_pull_and_project_manual_link_still_wor
             .unwrap();
     assert!(saved.contains_key("presets_overlay_dir"));
     assert!(!saved.contains_key("presets_overlay_git"));
-    assert_eq!(
-        fs::read(fixture.0.join("state/config.toml")).unwrap(),
-        global
-    );
+    assert_eq!(fixture.read("state/config.toml"), global);
 
     fs::write(
         fixture.0.join("manual/shine.env.toml"),
         "OVERLAY_SOURCE = 'project-local'\n",
     )
     .unwrap();
-    let project_config = fs::read(fixture.0.join("project/shine.config.toml")).unwrap();
-    let info = fixture
-        .command(true)
-        .args(["preset", "overlay", "info"])
-        .output()
-        .unwrap();
+    let project_config = fixture.read("project/shine.config.toml");
+    let info = fixture.run(true, &["preset", "overlay", "info"]);
     assert_eq!(info.status.code(), Some(0), "{info:?}");
     assert!(info.stderr.is_empty(), "{info:?}");
     let stdout = String::from_utf8_lossy(&info.stdout);
     assert!(stdout.contains("manual"), "{info:?}");
     assert!(stdout.contains("Active"), "{info:?}");
     assert!(!stdout.contains("Overlay Git source:"), "{info:?}");
-    let value = fixture
-        .command(true)
-        .args(["env", "get", "OVERLAY_SOURCE"])
-        .output()
-        .unwrap();
+    let value = fixture.run(true, &["env", "get", "OVERLAY_SOURCE"]);
     assert_eq!(value.status.code(), Some(0), "{value:?}");
     assert_eq!(value.stdout, b"project-local\n");
     assert!(value.stderr.is_empty(), "{value:?}");
-    assert_eq!(
-        fs::read(fixture.0.join("project/shine.config.toml")).unwrap(),
-        project_config
-    );
-    assert_eq!(
-        fs::read(fixture.0.join("state/config.toml")).unwrap(),
-        global
-    );
-    assert_eq!(
-        fs::read(fixture.0.join("state/overlay/marker")).unwrap(),
-        b"updated\n"
-    );
+    assert_eq!(fixture.read("project/shine.config.toml"), project_config);
+    assert_eq!(fixture.read("state/config.toml"), global);
+    assert_eq!(fixture.read("state/overlay/marker"), b"updated\n");
 }
