@@ -1,17 +1,19 @@
 """Run with python3 scripts/test-install-path-hints.py; no downloads or real profiles."""
 
 import io
-import errno
 import os
 from pathlib import Path
-import pty
 import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
-import threading
 import unittest
+
+if __package__:
+    from .installer_test_support import captured_terminal
+else:
+    from installer_test_support import captured_terminal
 
 
 INSTALLER = Path(__file__).resolve().parents[1] / "install.sh"
@@ -71,6 +73,17 @@ class PathHints(unittest.TestCase):
 
     def apply_bash_hint(self, command):
         subprocess.run(["bash", "-c", command], env=self.env, check=True)
+
+    def run_bash_startup(self, flags, command, *, env=None, timeout=None):
+        result = subprocess.run(
+            ["bash", flags, command],
+            env=self.env if env is None else env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
 
     def assert_no_bash_hint(self, directory):
         output = self.install("/bin/bash", directory)
@@ -191,13 +204,9 @@ class PathHints(unittest.TestCase):
                     self.apply_bash_hint(command)
                     self.assert_no_bash_hint(directory)
                     for flags in ("-ic", "-lic"):
-                        result = subprocess.run(
-                            ["bash", flags, 'shine && printf "\\n%s" "$PATH"'],
-                            env=self.env,
-                            text=True,
-                            capture_output=True,
+                        result = self.run_bash_startup(
+                            flags, 'shine && printf "\\n%s" "$PATH"'
                         )
-                        self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertTrue(
                             result.stdout.startswith("installed-binary\n"), result
                         )
@@ -237,22 +246,14 @@ class PathHints(unittest.TestCase):
                 "\nrc_count=$(( ${rc_count:-0} + 1 ))\nalias cat='bat'\nalias ls='eza --icons'\n"
             )
         for flags in ("-ic", "-lic"):
-            result = subprocess.run(
-                ["bash", flags, 'alias cat; alias ls; test "$rc_count" = 1'],
+            result = self.run_bash_startup(
+                flags,
+                'alias cat; alias ls; test "$rc_count" = 1',
                 env={**self.env, "HISTFILE": "/dev/null"},
-                text=True,
-                capture_output=True,
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("cat='bat'", result.stdout)
             self.assertIn("ls='eza --icons'", result.stdout)
-        result = subprocess.run(
-            ["bash", "-lc", 'test -z "${rc_count:-}"'],
-            env=self.env,
-            text=True,
-            capture_output=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.run_bash_startup("-lc", 'test -z "${rc_count:-}"')
         self.assertEqual(result.stdout, "")
 
     def test_existing_empty_or_path_only_login_file_keeps_startup_logic(self):
@@ -290,13 +291,7 @@ class PathHints(unittest.TestCase):
         self.assertEqual(profile.read_text(), original)
         self.assertEqual(profile.read_text().count('. "$HOME/.bashrc"'), 1)
         self.assertFalse((self.home / ".bash_profile").exists())
-        result = subprocess.run(
-            ["bash", "-lic", 'alias cat; test "$rc_count" = 1'],
-            env=self.env,
-            text=True,
-            capture_output=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.run_bash_startup("-lic", 'alias cat; test "$rc_count" = 1')
         self.assertIn("cat='bat'", result.stdout)
 
     def test_existing_path_has_no_hint(self):
@@ -335,13 +330,7 @@ class PathHints(unittest.TestCase):
                     self.apply_bash_hint(command)
                     self.assertEqual(profile.read_text(), loader + "\n")
                     for flags in ("-ic", "-lic"):
-                        result = subprocess.run(
-                            ["bash", flags, "shine"],
-                            env=self.env,
-                            capture_output=True,
-                            text=True,
-                        )
-                        self.assertEqual(result.returncode, 0, result.stderr)
+                        result = self.run_bash_startup(flags, "shine")
                         self.assertEqual(result.stdout, "installed-binary")
                     self.assert_no_bash_hint(directory)
                 finally:
@@ -396,13 +385,9 @@ class PathHints(unittest.TestCase):
                 else:
                     self.assertTrue(profile.read_text().startswith(loader + "\n"))
                     self.assertEqual(profile.read_text().count("export PATH="), 1)
-                result = subprocess.run(
-                    ["bash", "-lic", 'shine && printf "\\n%s" "$loader_seen"'],
-                    env=self.env,
-                    capture_output=True,
-                    text=True,
+                result = self.run_bash_startup(
+                    "-lic", 'shine && printf "\\n%s" "$loader_seen"'
                 )
-                self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(
                     result.stdout,
                     "installed-binary\n" + ("rc" if loads_rc else "alternate"),
@@ -475,10 +460,7 @@ class PathHints(unittest.TestCase):
         self.assertEqual(target.read_text().count("export PATH="), 1)
         for name in (".bashrc", ".profile"):
             self.assertTrue((self.home / name).is_symlink())
-        result = subprocess.run(
-            ["bash", "-lic", "shine"], env=self.env, text=True, capture_output=True
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.run_bash_startup("-lic", "shine")
         self.assertEqual(result.stdout, "installed-binary")
 
     def test_bash_hint_deduplicates_hard_link_targets(self):
@@ -603,51 +585,24 @@ class PathHints(unittest.TestCase):
         env = {**self.env, "TERM": "xterm-256color", "SHELL": "/bin/bash"}
         env.pop("NO_COLOR", None)
         env.update(overrides)
-        master, slave = pty.openpty()
-        chunks = []
-        read_errors = []
-
-        def drain():
-            while True:
-                try:
-                    chunk = os.read(master, 4096)
-                except OSError as error:
-                    if error.errno != errno.EIO:
-                        read_errors.append(error)
-                    return
-                if not chunk:
-                    return
-                chunks.append(chunk)
-
-        reader = threading.Thread(target=drain, daemon=True)
-        reader.start()
-        try:
-            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-                try:
-                    result = subprocess.run(
-                        ["/bin/sh"],
-                        input=INSTALLER.read_bytes(),
-                        env=env,
-                        stdout=slave if terminal_stream == "stdout" else stdout,
-                        stderr=slave if terminal_stream == "stderr" else stderr,
-                        timeout=10,
-                    )
-                finally:
-                    os.close(slave)
-                    reader.join(timeout=5)
-                self.assertFalse(reader.is_alive(), "PTY reader did not finish")
-                self.assertEqual(read_errors, [])
-                terminal = b"".join(chunks)
-                stdout.seek(0)
-                stderr.seek(0)
-                return result.returncode, tuple(
-                    (terminal if terminal_stream == stream else file.read())
-                    .decode()
-                    .replace("\r\n", "\n")
-                    for stream, file in (("stdout", stdout), ("stderr", stderr))
+        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+            with captured_terminal(terminal_stream) as (slave, terminal):
+                result = subprocess.run(
+                    ["/bin/sh"],
+                    input=INSTALLER.read_bytes(),
+                    env=env,
+                    stdout=slave if terminal_stream == "stdout" else stdout,
+                    stderr=slave if terminal_stream == "stderr" else stderr,
+                    timeout=10,
                 )
-        finally:
-            os.close(master)
+            stdout.seek(0)
+            stderr.seek(0)
+            return result.returncode, tuple(
+                (terminal if terminal_stream == stream else file.read())
+                .decode()
+                .replace("\r\n", "\n")
+                for stream, file in (("stdout", stdout), ("stderr", stderr))
+            )
 
     def test_colors_follow_stdout_and_highlight_copy_commands(self):
         code, (plain, errors) = self.color_output()
@@ -730,14 +685,7 @@ class PathHints(unittest.TestCase):
         for name in (".bashrc", ".bash_profile"):
             self.assertEqual((self.home / name).read_text().count("export PATH="), 1)
         for flags in ("-ic", "-lic"):
-            result = subprocess.run(
-                ["bash", flags, "shine"],
-                env=self.env,
-                text=True,
-                capture_output=True,
-                timeout=10,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
+            result = self.run_bash_startup(flags, "shine", timeout=10)
             self.assertEqual(result.stdout, "installed-binary")
 
     def test_bash_rejects_unusable_profiles_without_partial_writes(self):

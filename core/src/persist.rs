@@ -282,10 +282,10 @@ pub async fn save_toml_atomic<T: serde::Serialize>(
 mod tests {
     use super::*;
 
-    async fn assert_concurrent_winner(
+    async fn assert_create_only_publication(
         path: &Path,
         publish: impl AsyncFn(&Path, &[u8]) -> Result<()>,
-    ) -> &'static [u8] {
+    ) {
         let (first, second) = tokio::join!(publish(path, b"first"), publish(path, b"second"));
         let (expected, error) = match (first, second) {
             (Ok(()), Err(error)) => (b"first".as_slice(), error),
@@ -297,7 +297,12 @@ mod tests {
             std::io::ErrorKind::AlreadyExists
         );
         assert_eq!(tokio::fs::read(path).await.unwrap(), expected);
-        expected
+        assert!(publish(path, b"replacement").await.is_err());
+        assert_eq!(tokio::fs::read(path).await.unwrap(), expected);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
     }
 
     #[cfg(unix)]
@@ -315,19 +320,9 @@ mod tests {
     async fn atomic_write_private_new_preserves_the_concurrent_winner_and_cleans_staging() {
         let root = make_temp_dir("shine-private-new").await;
         let path = root.join("nested/secret.env");
-        let expected = assert_concurrent_winner(&path, atomic_write_private_new).await;
+        assert_create_only_publication(&path, atomic_write_private_new).await;
         #[cfg(unix)]
         assert_owner_only(&path).await;
-        assert!(
-            atomic_write_private_new(&path, b"replacement")
-                .await
-                .is_err()
-        );
-        assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
-        assert_eq!(
-            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
-            1
-        );
         // Publication failure for a directory also removes only the staged file.
         assert!(
             atomic_write_private_new(path.parent().unwrap(), b"secret")
@@ -342,13 +337,7 @@ mod tests {
     async fn atomic_write_new_never_replaces_a_concurrent_or_existing_file() {
         let root = std::env::temp_dir().join(format!("shine-new-write-{}", uuid::Uuid::new_v4()));
         let path = root.join("nested/output");
-        let expected = assert_concurrent_winner(&path, atomic_write_new).await;
-        assert!(atomic_write_new(&path, b"replacement").await.is_err());
-        assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
-        assert_eq!(
-            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
-            1
-        );
+        assert_create_only_publication(&path, atomic_write_new).await;
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
 
@@ -390,24 +379,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn atomic_write_creates_missing_parent_directories() {
+    async fn atomic_write_creates_parents_and_replaces_contents_without_leaving_temp_files() {
         let dir = make_temp_dir("shine-persist").await;
-        let path = dir.join("nested/deep/file.txt");
-
-        atomic_write(&path, b"hello").await.unwrap();
-
-        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"hello");
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn atomic_write_creates_then_replaces_without_leaving_temp_files() {
-        let dir = make_temp_dir("shine-persist").await;
-        let path = dir.join("file.txt");
+        let parent = dir.join("nested/deep");
+        let path = parent.join("file.txt");
         for contents in [b"old".as_slice(), b"new"] {
             atomic_write(&path, contents).await.unwrap();
             assert_eq!(tokio::fs::read(&path).await.unwrap(), contents);
-            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+            assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 1);
         }
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -478,20 +457,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_toml_or_default_returns_default_when_file_missing() {
+    async fn missing_toml_defaults_and_saved_values_round_trip() {
         let dir = make_temp_dir("shine-persist").await;
         let path = dir.join("sample.toml");
+        let missing: SampleToml = load_toml_or_default(&path, "sample").await.unwrap();
+        assert_eq!(missing, SampleToml::default());
+        let nested = dir.join("nested/sample.toml");
+        save_toml_atomic(&missing, &nested, "sample").await.unwrap();
+        assert!(nested.is_file());
 
-        let value: SampleToml = load_toml_or_default(&path, "sample").await.unwrap();
-
-        assert_eq!(value, SampleToml::default());
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn save_then_load_toml_round_trips() {
-        let dir = make_temp_dir("shine-persist").await;
-        let path = dir.join("sample.toml");
         let value = SampleToml {
             name: "hi".to_string(),
             count: 3,
@@ -501,18 +475,6 @@ mod tests {
         let loaded: SampleToml = load_toml_or_default(&path, "sample").await.unwrap();
 
         assert_eq!(loaded, value);
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn save_toml_atomic_creates_missing_parent_directory() {
-        let dir = make_temp_dir("shine-persist").await;
-        let path = dir.join("nested/sample.toml");
-        let value = SampleToml::default();
-
-        save_toml_atomic(&value, &path, "sample").await.unwrap();
-
-        assert!(path.exists());
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }

@@ -112,40 +112,39 @@ mod tests {
         toml.parse().unwrap()
     }
 
-    fn make_target(toml: &str) -> toml::Table {
+    fn parse_table(toml: &str) -> toml::Table {
         toml::from_str(toml).unwrap()
     }
 
     #[test]
-    fn sync_table_adds_new_keys() {
-        let mut doc = make_doc("");
-        let target = make_target("name = \"shine\"\nversion = 1\n");
-        sync_table(doc.as_table_mut(), &target);
-        assert_eq!(doc["name"].as_str(), Some("shine"));
-        assert_eq!(doc["version"].as_integer(), Some(1));
-    }
-
-    #[test]
-    fn sync_table_removes_stale_keys() {
-        let mut doc = make_doc("old = \"gone\"\nkeep = true\n");
-        let target = make_target("keep = true");
-        sync_table(doc.as_table_mut(), &target);
-        assert!(doc.get("old").is_none());
-        assert!(doc.get("keep").is_some());
-    }
-
-    #[test]
-    fn sync_table_updates_changed_value() {
-        let mut doc = make_doc("version = 1");
-        let target = make_target("version = 2");
-        sync_table(doc.as_table_mut(), &target);
-        assert_eq!(doc["version"].as_integer(), Some(2));
+    fn sync_table_matches_target_keys_and_values_at_each_depth() {
+        for (original, desired) in [
+            ("", "name = \"shine\"\nversion = 1\n"),
+            ("old = \"gone\"\nkeep = true\n", "keep = true"),
+            ("version = 1", "version = 2"),
+            (
+                "[db]\nhost = \"old\"\nport = 5432\n",
+                "[db]\nhost = \"new\"\nport = 5432\n",
+            ),
+            ("[section]\nkeep = 1\nstale = 2\n", "[section]\nkeep = 1\n"),
+            ("a = 1\nb = 2\n", ""),
+            ("", "x = true\ny = 3.14\n"),
+        ] {
+            let mut doc = make_doc(original);
+            let target = parse_table(desired);
+            sync_table(doc.as_table_mut(), &target);
+            assert_eq!(
+                parse_table(&doc.to_string()),
+                target,
+                "{original:?} -> {desired:?}"
+            );
+        }
     }
 
     #[test]
     fn sync_table_preserves_unchanged_value() {
         let mut doc = make_doc(r#"name = "shine" # important comment"#);
-        let target = make_target(r#"name = "shine""#);
+        let target = parse_table(r#"name = "shine""#);
         let before = doc.to_string();
         sync_table(doc.as_table_mut(), &target);
         assert_eq!(doc.to_string(), before);
@@ -158,48 +157,13 @@ mod tests {
 TOKEN = { value = "old", description = "API token" }
 "#,
         );
-        let target = make_target("[env]\nTOKEN = \"new\"\n");
+        let target = parse_table("[env]\nTOKEN = \"new\"\n");
 
         sync_table(doc.as_table_mut(), &target);
 
         let inline = doc["env"]["TOKEN"].as_inline_table().unwrap();
         assert_eq!(inline["value"].as_str(), Some("new"));
         assert_eq!(inline["description"].as_str(), Some("API token"));
-    }
-
-    #[test]
-    fn sync_table_recurses_into_nested_tables() {
-        let mut doc = make_doc("[db]\nhost = \"old\"\nport = 5432\n");
-        let target = make_target("[db]\nhost = \"new\"\nport = 5432\n");
-        sync_table(doc.as_table_mut(), &target);
-        assert_eq!(doc["db"]["host"].as_str(), Some("new"));
-        assert_eq!(doc["db"]["port"].as_integer(), Some(5432));
-    }
-
-    #[test]
-    fn sync_table_removes_nested_stale_keys() {
-        let mut doc = make_doc("[section]\nkeep = 1\nstale = 2\n");
-        let target = make_target("[section]\nkeep = 1\n");
-        sync_table(doc.as_table_mut(), &target);
-        assert!(doc["section"].get("stale").is_none());
-        assert_eq!(doc["section"]["keep"].as_integer(), Some(1));
-    }
-
-    #[test]
-    fn sync_table_empty_target_clears_doc() {
-        let mut doc = make_doc("a = 1\nb = 2\n");
-        let target = make_target("");
-        sync_table(doc.as_table_mut(), &target);
-        assert!(doc.get("a").is_none());
-        assert!(doc.get("b").is_none());
-    }
-
-    #[test]
-    fn sync_table_empty_doc_fills_from_target() {
-        let mut doc = make_doc("");
-        let target = make_target("x = true\ny = 3.14\n");
-        sync_table(doc.as_table_mut(), &target);
-        assert_eq!(doc["x"].as_bool(), Some(true));
     }
 
     #[test]

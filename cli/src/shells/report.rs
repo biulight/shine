@@ -411,25 +411,15 @@ mod info_tests {
     use super::*;
 
     #[tokio::test]
-    async fn embedded_shell_info_accepts_category_command_and_canonical_target() {
+    async fn embedded_shell_info_resolves_valid_targets_and_rejects_invalid_ones() {
         let dir = crate::test_support::make_temp_dir("shine-shell-info").await;
         let config = crate::test_support::test_config(&dir);
-
-        handle_info(&config, "proxy").await.unwrap();
-        handle_info(&config, "setproxy").await.unwrap();
-        handle_info(&config, "proxy/setproxy").await.unwrap();
-
-        tokio::fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn shell_info_rejects_unknown_and_empty_targets() {
-        let dir = crate::test_support::make_temp_dir("shine-shell-info-errors").await;
-        let config = crate::test_support::test_config(&dir);
-
-        assert!(handle_info(&config, "").await.is_err());
-        assert!(handle_info(&config, "not-a-preset").await.is_err());
-
+        for target in ["proxy", "setproxy", "proxy/setproxy"] {
+            handle_info(&config, target).await.unwrap();
+        }
+        for target in ["", "not-a-preset"] {
+            assert!(handle_info(&config, target).await.is_err(), "{target:?}");
+        }
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }

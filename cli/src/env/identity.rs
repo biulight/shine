@@ -829,7 +829,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extracts_recipient_from_identity_comment() {
+    async fn extracting_recipient_requires_a_public_key_comment() {
         let dir = make_temp_dir("shine-identity").await;
         let path = dir.join("identity.txt");
         tokio::fs::write(
@@ -842,13 +842,6 @@ mod tests {
         let recipient = extract_recipient(&path).await.unwrap();
         assert_eq!(recipient, "age1qexampleexampleexample");
 
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn extract_recipient_errors_without_recipient_comment() {
-        let dir = make_temp_dir("shine-identity").await;
-        let path = dir.join("identity.txt");
         tokio::fs::write(&path, "AGE-SECRET-KEY-1EXAMPLE\n")
             .await
             .unwrap();

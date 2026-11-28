@@ -467,48 +467,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn save_resolves_and_persists_fixed_cwd() {
+    async fn save_persists_canonical_home_and_current_directory_paths() {
         let (dir, config) = task_config().await;
         let project = config.home_dir.join("project");
         tokio::fs::create_dir_all(&project).await.unwrap();
-
-        handle_save(
-            &config,
-            "build",
-            false,
-            Some(Path::new("~/project")),
-            vec!["cargo".to_string(), "build".to_string()],
-        )
-        .await
-        .unwrap();
-
-        let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
-        assert_eq!(
-            manifest.get("build").unwrap().cwd.as_ref(),
-            Some(&std::fs::canonicalize(&project).unwrap())
-        );
-        handle_info(&config, "build").await.unwrap();
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn save_resolves_relative_cwd_from_current_directory() {
-        let (dir, config) = task_config().await;
-        let expected = std::fs::canonicalize(".").unwrap();
-
-        handle_save(
-            &config,
-            "here",
-            false,
-            Some(Path::new(".")),
-            vec!["echo".to_string()],
-        )
-        .await
-        .unwrap();
-
-        let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
-        assert_eq!(manifest.get("here").unwrap().cwd.as_ref(), Some(&expected));
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
+        for (name, input, expected) in [
+            ("build", "~/project", project.as_path()),
+            ("here", ".", Path::new(".")),
+        ] {
+            handle_save(
+                &config,
+                name,
+                false,
+                Some(Path::new(input)),
+                vec!["cargo".into(), "build".into()],
+            )
+            .await
+            .unwrap();
+            let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
+            assert_eq!(
+                manifest.get(name).unwrap().cwd,
+                Some(std::fs::canonicalize(expected).unwrap()),
+                "{input}"
+            );
+            handle_info(&config, name).await.unwrap();
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]
@@ -621,26 +605,14 @@ mod tests {
         });
         tokio::fs::write(&file, "x").await.unwrap();
 
-        let missing = handle_save(
-            &config,
-            "missing-cwd",
-            false,
-            Some(&dir.join("missing")),
-            vec!["echo".to_string()],
-        )
-        .await
-        .unwrap_err();
+        let save_error = async |cwd: &Path| {
+            handle_save(&config, "test-cwd", false, Some(cwd), vec!["echo".into()])
+                .await
+                .unwrap_err()
+        };
+        let missing = save_error(&dir.join("missing")).await;
         assert!(missing.to_string().contains("does not exist"));
-
-        let not_dir = handle_save(
-            &config,
-            "file-cwd",
-            false,
-            Some(&file),
-            vec!["echo".to_string()],
-        )
-        .await
-        .unwrap_err();
+        let not_dir = save_error(&file).await;
         assert!(not_dir.to_string().contains("not a directory"));
         let run_error = validate_run_cwd("demo", &file).unwrap_err();
         let disappeared = dir.join("missing\nFORGED\r\t\u{1b}");

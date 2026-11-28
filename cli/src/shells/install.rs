@@ -1626,36 +1626,6 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[tokio::test]
-    async fn installed_source_commands_for_categories_are_scoped() {
-        let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
-        fs::create_dir_all(config.presets_dir()).await.unwrap();
-        fs::create_dir_all(config.bin_dir()).await.unwrap();
-
-        handle_install_approved(&config, Some("agent"), false, true)
-            .await
-            .unwrap();
-        handle_install_approved(&config, Some("proxy"), false, true)
-            .await
-            .unwrap();
-
-        let commands = crate::core_runtime::from_config(&config)
-            .await
-            .unwrap()
-            .installed_shell_source_commands(Some("proxy"))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            commands,
-            vec!["setproxy".to_string(), "usetproxy".to_string()]
-        );
-        assert!(!commands.contains(&"ccenv".to_string()));
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
     #[cfg(unix)]
     #[tokio::test]
     async fn external_presets_install_links_disk_scripts_without_extraction() {
@@ -1879,7 +1849,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_agent_installs_bun_launcher_without_rendering_credentials() {
+    async fn embedded_agent_uses_a_bun_launcher_and_proxy_source_commands_stay_scoped() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
@@ -1915,6 +1885,23 @@ mod tests {
             .await
             .unwrap();
         assert!(!source_commands.contains(&"ccenv".to_string()));
+
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
+
+        let commands = crate::core_runtime::from_config(&config)
+            .await
+            .unwrap()
+            .installed_shell_source_commands(Some("proxy"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            commands,
+            vec!["setproxy".to_string(), "usetproxy".to_string()]
+        );
+        assert!(!commands.contains(&"ccenv".to_string()));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

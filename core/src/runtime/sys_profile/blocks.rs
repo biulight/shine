@@ -608,61 +608,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_sys_shell_profile_blocks_inserts_ordered_blocks_once() {
+    async fn bash_profile_inserts_ordered_blocks_and_preserves_lf_and_crlf_on_reapply() {
         let dir = make_temp_dir("shine-sys-profile").await;
         let config = profile_config(&dir, ShellType::Bash);
         let path = dir.join(".bashrc");
-
-        let updated = update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
-            .await
-            .unwrap();
-
-        assert!(updated.updated);
+        let apply = || update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash");
+        assert!(apply().await.unwrap().updated);
         let content = tokio::fs::read_to_string(&path).await.unwrap();
-        assert!(content.contains("shine ubuntu sys pre"));
-        assert!(content.contains("shine ubuntu sys post"));
-        // Pre block must come before the post block.
-        assert!(content.find("sys pre").unwrap() < content.find("sys post").unwrap());
-
-        // Second call against the now-converged file must report no change.
         assert!(
-            !update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
-                .await
-                .unwrap()
-                .updated
+            content.find("shine ubuntu sys pre").unwrap()
+                < content.find("shine ubuntu sys post").unwrap()
         );
 
-        assert!(path.is_file());
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
+        assert!(!apply().await.unwrap().updated);
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), content);
 
-    #[tokio::test]
-    async fn update_sys_shell_profile_blocks_ignores_crlf_and_preserves_endings() {
-        let dir = make_temp_dir("shine-sys-profile").await;
-        let config = profile_config(&dir, ShellType::Bash);
-        let path = dir.join(".bashrc");
-
-        // Install (writes the block LF).
-        update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
-            .await
-            .unwrap();
-
-        // Simulate a Windows editor re-saving the whole file with CRLF endings.
-        let lf = tokio::fs::read_to_string(&path).await.unwrap();
-        let crlf = lf.replace('\n', "\r\n");
+        // Simulate a Windows editor re-saving the same blocks with CRLF.
+        let crlf = content.replace('\n', "\r\n");
         tokio::fs::write(&path, &crlf).await.unwrap();
-
-        // Only the endings differ, so this must report no change...
-        assert!(
-            !update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
-                .await
-                .unwrap()
-                .updated
-        );
-        // ...and leave the user's CRLF file untouched (no silent LF rewrite).
-        let after = tokio::fs::read_to_string(&path).await.unwrap();
-        assert_eq!(after, crlf);
-
+        assert!(!apply().await.unwrap().updated);
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), crlf);
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 

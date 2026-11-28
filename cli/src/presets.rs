@@ -724,9 +724,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_shell_metadata_finds_categories_from_disk() {
+    async fn external_shell_metadata_discovers_scripts_and_ignores_non_script_assets() {
         let dir = make_temp_dir().await;
-        // Create presets/shell/myplugin/hello.sh
         let cat_dir = dir.join("shell/myplugin");
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
@@ -736,6 +735,9 @@ mod tests {
         .await
         .unwrap();
 
+        fs::write(cat_dir.join("readme.md"), b"# readme\n")
+            .await
+            .unwrap();
         let cats = external_shell_runtime(&dir)
             .await
             .shell_categories(None)
@@ -746,34 +748,6 @@ mod tests {
         assert_eq!(cats[0].files.len(), 1);
         assert_eq!(cats[0].files[0].source_rel, Path::new("hello.sh"));
         assert_eq!(cats[0].files[0].description, vec!["Says hello."]);
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn external_shell_metadata_ignores_non_script_files() {
-        let dir = make_temp_dir().await;
-        let cat_dir = dir.join("shell/extras");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(cat_dir.join("readme.md"), b"# readme\n")
-            .await
-            .unwrap();
-        fs::write(cat_dir.join("script.sh"), b"#!/bin/bash\n# A script.\n")
-            .await
-            .unwrap();
-
-        let cats = external_shell_runtime(&dir)
-            .await
-            .shell_categories(None)
-            .unwrap();
-
-        assert_eq!(cats.len(), 1);
-        assert_eq!(
-            cats[0].files.len(),
-            1,
-            "non-script assets must not become commands"
-        );
-        assert_eq!(cats[0].files[0].source_rel, Path::new("script.sh"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

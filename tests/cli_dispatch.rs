@@ -17,8 +17,25 @@ impl Fixture {
     fn command(&self) -> Command {
         self.configure(Command::new(env!("CARGO_BIN_EXE_shine")))
     }
+    fn run_with_presets(&self, presets: &std::path::Path, args: &[&str]) -> Output {
+        self.command()
+            .env("SHINE_PRESETS", presets)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
     fn run_no_color(&self, args: &[&str]) -> Output {
         self.command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    fn run_without_sudo_user(&self, args: &[&str]) -> Output {
+        self.command()
+            .env_remove("SUDO_USER")
             .env("NO_COLOR", "1")
             .args(args)
             .output()
@@ -48,6 +65,25 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn configure_color(command: &mut Command, no_color: bool, force_color: Option<&str>) {
+    command.env("TERM", "xterm-256color");
+    for key in [
+        "NO_COLOR",
+        "FORCE_COLOR",
+        "CLICOLOR_FORCE",
+        "CLICOLOR",
+        "IGNORE_IS_TERMINAL",
+    ] {
+        command.env_remove(key);
+    }
+    if no_color {
+        command.env("NO_COLOR", "1");
+    }
+    if let Some(key) = force_color {
+        command.env(key, "1");
     }
 }
 
@@ -617,19 +653,8 @@ fn migration_diff_colors_follow_stdout_and_leave_json_and_sources_unchanged() {
         command
             .args(["preset", "migrate"])
             .arg(&root)
-            .arg("--dry-run")
-            .env("TERM", "xterm-256color")
-            .env_remove("NO_COLOR")
-            .env_remove("FORCE_COLOR")
-            .env_remove("CLICOLOR")
-            .env_remove("CLICOLOR_FORCE")
-            .env_remove("IGNORE_IS_TERMINAL");
-        if no_color {
-            command.env("NO_COLOR", "1");
-        }
-        if let Some(key) = force_color {
-            command.env(key, "1");
-        }
+            .arg("--dry-run");
+        configure_color(&mut command, no_color, force_color);
         if json {
             command.args(["--format", "json"]);
         }
@@ -1099,19 +1124,8 @@ fn sys_bootstrap_numbered_review_keeps_color_modes_and_requires_approval() {
             let mut command = fixture.command();
             command
                 .args(["sys", "bootstrap", "--", "--help"])
-                .env("SHELL", "/bin/bash")
-                .env("TERM", "xterm-256color")
-                .env_remove("NO_COLOR")
-                .env_remove("FORCE_COLOR")
-                .env_remove("CLICOLOR_FORCE")
-                .env_remove("CLICOLOR")
-                .env_remove("IGNORE_IS_TERMINAL");
-            if no_color {
-                command.env("NO_COLOR", "1");
-            }
-            if force_color {
-                command.env("FORCE_COLOR", "1");
-            }
+                .env("SHELL", "/bin/bash");
+            configure_color(&mut command, no_color, force_color.then_some("FORCE_COLOR"));
             // stdin stays closed: the real handler must render review and refuse
             // execution, even when stdout is a terminal or color is forced.
             let (output, terminal) = output_with_terminal(command, terminal_stdout);
@@ -2598,13 +2612,7 @@ fn app_catalog_queries_escape_metadata_without_changing_source_or_install_state(
         fs::write(sibling.join("other.txt"), "sibling").unwrap();
         fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
         let query = |args: &[&str]| {
-            let result = fixture
-                .command()
-                .env_remove("SUDO_USER")
-                .env("NO_COLOR", "1")
-                .args(args)
-                .output()
-                .unwrap();
+            let result = fixture.run_without_sudo_user(args);
             assert_eq!(result.status.code(), Some(0), "{args:?}: {result:?}");
             assert!(result.stderr.is_empty(), "{result:?}");
             let text = String::from_utf8(result.stdout).unwrap();
@@ -2750,13 +2758,7 @@ fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_po
         fs::write(category.join(comment), comments).unwrap();
         fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
         let run = |args: &[&str], code| {
-            let result = fixture
-                .command()
-                .env_remove("SUDO_USER")
-                .env("NO_COLOR", "1")
-                .args(args)
-                .output()
-                .unwrap();
+            let result = fixture.run_without_sudo_user(args);
             assert_eq!(result.status.code(), Some(code), "{args:?}: {result:?}");
             if code == 0 {
                 assert!(result.stderr.is_empty(), "{result:?}");
@@ -2929,13 +2931,7 @@ fn installed_info_encodes_metadata_but_preserves_explicit_content_and_receipts()
         fs::write(category.join(source), content).unwrap();
         fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
         let run = |args: &[&str]| {
-            let result = fixture
-                .command()
-                .env_remove("SUDO_USER")
-                .env("NO_COLOR", "1")
-                .args(args)
-                .output()
-                .unwrap();
+            let result = fixture.run_without_sudo_user(args);
             assert_eq!(result.status.code(), Some(0), "{args:?}: {result:?}");
             assert!(result.stderr.is_empty(), "{result:?}");
             String::from_utf8(result.stdout).unwrap()
@@ -5377,14 +5373,7 @@ fn targeted_upgrade_keeps_category_scope_consent_and_summary_contracts() {
             fs::write(preset.join(file), "v1").unwrap();
         }
     }
-    let run = |args: &[&str]| {
-        fixture
-            .command()
-            .env("SHINE_PRESETS", &presets)
-            .args(args)
-            .output()
-            .unwrap()
-    };
+    let run = |args: &[&str]| fixture.run_with_presets(&presets, args);
     for category in ["demo", "other"] {
         let installed = run(&["app", "install", category, "--yes"]);
         assert!(installed.status.success(), "{installed:?}");
@@ -5527,14 +5516,7 @@ fn targeted_upgrade_distinguishes_nonfatal_hook_and_generator_failures() {
         fs::write(&script, body).unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     };
-    let run = |args: &[&str]| {
-        fixture
-            .command()
-            .env("SHINE_PRESETS", &presets)
-            .args(args)
-            .output()
-            .unwrap()
-    };
+    let run = |args: &[&str]| fixture.run_with_presets(&presets, args);
     write_script("#!/bin/sh\nprintf v1\n");
     let trusted = run(&["trust", "grant", "app/demo", "--yes"]);
     assert!(trusted.status.success(), "{trusted:?}");
@@ -7595,19 +7577,7 @@ fn broker_policy_diffs_encode_controls_and_preserve_update_approval() {
     for operation in ["diff", "update"] {
         for &(terminal_stdout, no_color, force_color) in &modes {
             let mut command = input(operation, "changed\targument");
-            command
-                .env("TERM", "xterm-256color")
-                .env_remove("NO_COLOR")
-                .env_remove("FORCE_COLOR")
-                .env_remove("CLICOLOR_FORCE")
-                .env_remove("CLICOLOR")
-                .env_remove("IGNORE_IS_TERMINAL");
-            if no_color {
-                command.env("NO_COLOR", "1");
-            }
-            if let Some(key) = force_color {
-                command.env(key, "1");
-            }
+            configure_color(&mut command, no_color, force_color);
             #[cfg(unix)]
             let (output, terminal) = if terminal_stdout {
                 output_with_terminal(command, true)
@@ -8394,14 +8364,7 @@ fn app_uninstall_review_uses_the_installed_strategy_after_a_preset_edit() {
             fs::write(app.join("shine.toml"), format!("{base}{mode}")).unwrap();
             fs::write(&source, if merge { json } else { "text" }).unwrap();
         };
-        let run = |args: &[&str]| {
-            fixture
-                .command()
-                .env("SHINE_PRESETS", &presets)
-                .args(args)
-                .output()
-                .unwrap()
-        };
+        let run = |args: &[&str]| fixture.run_with_presets(&presets, args);
         configure(installed_json);
         let installed = run(&["app", "install", "demo", "--yes"]);
         assert!(installed.status.success(), "{installed:?}");
@@ -9144,17 +9107,9 @@ fn top_level_error_colors_follow_stderr_and_preserve_diagnostics() {
                 command.args(["--config-dir", "", "list"]);
             }
             command
-                .env("TERM", "xterm-256color")
                 .env("RUST_BACKTRACE", "0")
-                .env("RUST_LIB_BACKTRACE", "0")
-                .env_remove("NO_COLOR")
-                .env_remove("FORCE_COLOR")
-                .env_remove("CLICOLOR_FORCE")
-                .env_remove("CLICOLOR")
-                .env_remove("IGNORE_IS_TERMINAL");
-            if no_color {
-                command.env("NO_COLOR", "1");
-            }
+                .env("RUST_LIB_BACKTRACE", "0");
+            configure_color(&mut command, no_color, None);
             let (output, terminal) = output_with_terminal(command, !terminal_stderr);
             assert_eq!(output.status.code(), Some(1));
             assert!(output.stdout.is_empty());

@@ -701,25 +701,22 @@ mod tests {
     }
 
     #[test]
-    fn age_identities_are_empty_with_no_default_and_unset_or_blank_path() {
+    fn age_identities_resolve_configured_paths_without_a_default_file() {
         let dir =
             std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
         let mut config = Config::new_for_test(&dir);
         assert!(config.resolved_age_identities().is_empty());
-        config.age_identity = Some("   ".to_string());
+        config.age_identity = Some("   ".into());
         assert!(config.resolved_age_identities().is_empty());
-    }
 
-    #[test]
-    fn age_identities_uses_configured_path_when_set() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
-        let mut config = Config::new_for_test(&dir);
-        config.age_identity = Some("/tmp/my-identity.txt".to_string());
-
+        let primary = "/tmp/my-identity.txt";
+        let additional = "/tmp/additional.txt";
+        config.age_identity = Some(primary.into());
+        assert_eq!(config.resolved_age_identities(), [PathBuf::from(primary)]);
+        config.age_identities = vec![additional.into(), primary.into(), "  ".into()];
         assert_eq!(
             config.resolved_age_identities(),
-            vec![PathBuf::from("/tmp/my-identity.txt")]
+            [PathBuf::from(primary), PathBuf::from(additional)]
         );
     }
 
@@ -739,26 +736,5 @@ mod tests {
         assert_eq!(config.resolved_age_identities(), vec![default_path]);
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[test]
-    fn resolved_age_identities_merges_and_deduplicates_paths() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
-        let mut config = Config::new_for_test(&dir);
-        config.age_identity = Some("/tmp/primary.txt".to_string());
-        config.age_identities = vec![
-            "/tmp/additional.txt".to_string(),
-            "/tmp/primary.txt".to_string(),
-            "  ".to_string(),
-        ];
-
-        assert_eq!(
-            config.resolved_age_identities(),
-            vec![
-                PathBuf::from("/tmp/primary.txt"),
-                PathBuf::from("/tmp/additional.txt"),
-            ]
-        );
     }
 }

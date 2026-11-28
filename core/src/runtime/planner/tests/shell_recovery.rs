@@ -15,6 +15,40 @@ fn fail_next_shell_manifest_write(runtime: &CoreRuntime<InMemoryHost>) {
         .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
 }
 
+async fn install_with_failing_receipt(
+    runtime: &CoreRuntime<InMemoryHost>,
+    request: ShellPlanRequest,
+    approval: &PlanApprovalV1,
+) {
+    fail_next_shell_manifest_write(runtime);
+    let error = runtime
+        .install_shells_approved(request, approval)
+        .await
+        .err()
+        .expect("injected shell manifest write failure");
+    assert!(
+        format!("{error:#}").contains("failed to write shell manifest"),
+        "{error:#}"
+    );
+}
+
+async fn uninstall_with_failing_receipt(
+    runtime: &CoreRuntime<InMemoryHost>,
+    request: ShellPlanRequest,
+    approval: &PlanApprovalV1,
+) {
+    fail_next_shell_manifest_write(runtime);
+    let error = runtime
+        .uninstall_shells_approved(request, approval)
+        .await
+        .err()
+        .expect("injected shell manifest write failure");
+    assert!(
+        format!("{error:#}").contains("failed to write shell manifest"),
+        "{error:#}"
+    );
+}
+
 async fn approve_and_recover_shell(
     runtime: &CoreRuntime<InMemoryHost>,
     plan: &PlanV1,
@@ -490,12 +524,7 @@ async fn embedded_shell_cache_receipt_failure_removes_created_files_on_recovery(
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .install_shells_approved(request, &approval)
-        .await
-        .err()
-        .expect("Shell receipt write should fail");
+    install_with_failing_receipt(&runtime, request, &approval).await;
     let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
     assert_eq!(
         runtime.host().read(&source).await.unwrap(),
@@ -598,12 +627,7 @@ async fn rendered_shell_receipt_failure_removes_created_output_on_recovery() {
     let request = shell_install_request();
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .install_shells_approved(request, &approval)
-        .await
-        .err()
-        .expect("Shell receipt write should fail");
+    install_with_failing_receipt(&runtime, request, &approval).await;
     let rendered = runtime
         .context()
         .shine_dir
@@ -839,12 +863,7 @@ async fn shell_profile_recovery_preserves_unrelated_post_interruption_edits() {
                 .contains(&"shell_profile_reconcile_transaction".to_string())
     }));
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .uninstall_shells_approved(request, &approval)
-        .await
-        .err()
-        .expect("Shell receipt removal should fail");
+    uninstall_with_failing_receipt(&runtime, request, &approval).await;
     runtime
         .host()
         .put_file(&config, b"before\nuser-after-interruption\n".to_vec());
@@ -889,12 +908,7 @@ async fn live_render_refuses_to_run_while_shell_recovery_is_pending() {
     let install = shell_install_request();
     let plan = runtime.plan_shells(install.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .install_shells_approved(install, &approval)
-        .await
-        .err()
-        .expect("Shell receipt write should fail");
+    install_with_failing_receipt(&runtime, install, &approval).await;
 
     let error = runtime
         .render_live_shell("shell/demo/demo")
@@ -989,12 +1003,7 @@ async fn external_shell_snapshot_uninstall_receipt_failure_restores_tree_and_rec
         ],
     );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .uninstall_shells_approved(request, &approval)
-        .await
-        .err()
-        .expect("Shell receipt removal should fail");
+    uninstall_with_failing_receipt(&runtime, request, &approval).await;
     assert!(runtime.host().metadata(&destination).await.is_err());
     assert_eq!(
         runtime
@@ -1143,12 +1152,7 @@ async fn shell_recovery_preserves_a_launcher_changed_after_interruption() {
     let request = shell_install_request();
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .install_shells_approved(request, &approval)
-        .await
-        .err()
-        .expect("Shell receipt write should fail");
+    install_with_failing_receipt(&runtime, request, &approval).await;
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
     runtime
         .host()
@@ -1232,12 +1236,7 @@ async fn shell_launcher_update_receipt_failure_recovers_previous_resource() {
     let previous = launcher_state(&runtime, &launcher).await;
     let plan = runtime.plan_shells(install.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .install_shells_approved(install, &approval)
-        .await
-        .err()
-        .expect("replacement receipt write should fail");
+    install_with_failing_receipt(&runtime, install, &approval).await;
     let rollback = managed_file_rollback_path(&launcher);
     assert!(runtime.host().metadata(&rollback).await.is_ok());
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
@@ -1328,12 +1327,7 @@ async fn shell_launcher_update_recovery_blocks_modified_replacement() {
     let install = shell_install_request();
     let plan = runtime.plan_shells(install.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .install_shells_approved(install, &approval)
-        .await
-        .err()
-        .expect("replacement receipt write should fail");
+    install_with_failing_receipt(&runtime, install, &approval).await;
     let rollback = managed_file_rollback_path(&launcher);
     runtime
         .host()
@@ -1357,12 +1351,7 @@ async fn shell_launcher_removal_receipt_failure_restores_moved_launcher() {
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
     let rollback = managed_file_rollback_path(&launcher);
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .uninstall_shells_approved(request, &approval)
-        .await
-        .err()
-        .expect("Shell receipt removal should fail");
+    uninstall_with_failing_receipt(&runtime, request, &approval).await;
     assert!(runtime.host().metadata(&launcher).await.is_err());
     assert!(runtime.host().metadata(&rollback).await.is_ok());
 
@@ -1389,12 +1378,7 @@ async fn legacy_shell_launcher_manifest_failure_restores_without_creating_a_rece
     assert_plan_diagnostic(&plan, "shell_legacy_launcher_remove_transaction");
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let rollback = managed_file_rollback_path(&launcher);
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .uninstall_shells_approved(request, &approval)
-        .await
-        .err()
-        .expect("Shell manifest write should fail");
+    uninstall_with_failing_receipt(&runtime, request, &approval).await;
     assert!(runtime.host().metadata(&launcher).await.is_err());
     assert!(runtime.host().metadata(&rollback).await.is_ok());
 
@@ -1479,12 +1463,7 @@ async fn shell_launcher_removal_recovery_blocks_modified_rollback_material() {
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
     let rollback = managed_file_rollback_path(&launcher);
-    fail_next_shell_manifest_write(&runtime);
-    runtime
-        .uninstall_shells_approved(request, &approval)
-        .await
-        .err()
-        .expect("Shell receipt removal should fail");
+    uninstall_with_failing_receipt(&runtime, request, &approval).await;
     runtime
         .host()
         .put_file(&rollback, b"user-changed rollback".to_vec());

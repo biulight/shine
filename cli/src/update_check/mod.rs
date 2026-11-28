@@ -449,32 +449,18 @@ mod tests {
     }
 
     #[test]
-    fn compare_versions_is_up_to_date_when_latest_is_not_newer() {
-        let current = Version::parse("0.2.0").unwrap();
-        let latest = Version::parse("0.2.0").unwrap();
-
-        assert_eq!(compare_versions(&current, &latest), UpdateStatus::UpToDate);
-    }
-
-    #[test]
-    fn compare_versions_requires_update_for_newer_patch_release() {
-        let current = Version::parse("0.2.0").unwrap();
-        let latest = Version::parse("0.2.1").unwrap();
-
+    fn compares_equal_patch_and_minor_releases() {
+        let current = Version::new(0, 2, 0);
+        let patch = Version::new(0, 2, 1);
+        let minor = Version::new(0, 3, 0);
+        assert_eq!(compare_versions(&current, &current), UpdateStatus::UpToDate);
         assert_eq!(
-            compare_versions(&current, &latest),
-            UpdateStatus::UpdateRequired { latest }
+            compare_versions(&current, &patch),
+            UpdateStatus::UpdateRequired { latest: patch }
         );
-    }
-
-    #[test]
-    fn compare_versions_warns_for_newer_minor_release() {
-        let current = Version::parse("0.2.0").unwrap();
-        let latest = Version::parse("0.3.0").unwrap();
-
         assert_eq!(
-            compare_versions(&current, &latest),
-            UpdateStatus::UpdateAvailable { latest }
+            compare_versions(&current, &minor),
+            UpdateStatus::UpdateAvailable { latest: minor }
         );
     }
 
@@ -487,19 +473,6 @@ mod tests {
     #[test]
     fn parse_release_tag_rejects_prerelease_versions() {
         assert!(parse_release_tag("v1.2.3-beta.1").is_err());
-    }
-
-    #[tokio::test]
-    async fn load_cached_version_returns_none_when_cache_missing() {
-        let dir = make_temp_dir().await;
-        let cache_path = dir.join(UPDATE_CACHE_FILE);
-
-        let cached = load_cached_version_if_fresh(&cache_path, UPDATE_CACHE_TTL.as_secs())
-            .await
-            .unwrap();
-        assert_eq!(cached, None);
-
-        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]
@@ -517,36 +490,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_cached_version_supports_legacy_cache_shape() {
-        let dir = make_temp_dir().await;
-        let cache_path = dir.join(UPDATE_CACHE_FILE);
-        fs::write(
-            &cache_path,
-            br#"{"latest_version":"0.2.3","checked_at_unix_secs":1000}"#,
-        )
-        .await
-        .unwrap();
-
-        let cached = load_cached_version_if_fresh(&cache_path, 1_001)
-            .await
-            .unwrap();
-        assert_eq!(cached, Some(Version::new(0, 2, 3)));
-
-        fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn load_cached_version_ignores_invalid_cache_contents() {
-        let dir = make_temp_dir().await;
-        let cache_path = dir.join(UPDATE_CACHE_FILE);
-        fs::write(&cache_path, b"{not valid json").await.unwrap();
-
-        let cached = load_cached_version_if_fresh(&cache_path, UPDATE_CACHE_TTL.as_secs())
-            .await
-            .unwrap();
-        assert_eq!(cached, None);
-
-        fs::remove_dir_all(dir).await.unwrap();
+    async fn cached_version_handles_absent_invalid_and_legacy_files() {
+        let ttl = UPDATE_CACHE_TTL.as_secs();
+        for (contents, now, expected) in [
+            (None, ttl, None),
+            (Some("{not valid json"), ttl, None),
+            (
+                Some(r#"{"latest_version":"0.2.3","checked_at_unix_secs":1000}"#),
+                1_001,
+                Some(Version::new(0, 2, 3)),
+            ),
+        ] {
+            let dir = make_temp_dir().await;
+            let path = dir.join(UPDATE_CACHE_FILE);
+            if let Some(contents) = contents {
+                fs::write(&path, contents).await.unwrap();
+            }
+            assert_eq!(
+                load_cached_version_if_fresh(&path, now).await.unwrap(),
+                expected,
+                "{contents:?}"
+            );
+            fs::remove_dir_all(dir).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -562,25 +528,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cached, Some(Version::new(0, 2, 3)));
-
-        fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn rate_limit_cooldown_skips_same_auth_mode() {
-        let dir = make_temp_dir().await;
-        let cache_path = dir.join(UPDATE_CACHE_FILE);
-        store_rate_limit_cache(&cache_path, 2_000, AuthMode::Anonymous)
-            .await
-            .unwrap();
-
-        let err = guard_rate_limit_cooldown(&cache_path, 1_000, AuthMode::Anonymous)
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("GitHub version check skipped until Unix timestamp 2000")
-        );
 
         fs::remove_dir_all(dir).await.unwrap();
     }
@@ -607,6 +554,14 @@ mod tests {
         store_rate_limit_cache(&cache_path, 2_000, AuthMode::Anonymous)
             .await
             .unwrap();
+        let err = guard_rate_limit_cooldown(&cache_path, 1_000, AuthMode::Anonymous)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("GitHub version check skipped until Unix timestamp 2000")
+        );
+
         store_cache(&cache_path, &Version::new(0, 2, 3), 1_000)
             .await
             .unwrap();
@@ -620,12 +575,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalidate_update_cache_removes_existing_cache_file() {
+    async fn invalidate_update_cache_handles_absent_and_existing_files() {
         use crate::config::Config;
 
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         let cache_path = dir.join(UPDATE_CACHE_FILE);
+
+        invalidate_update_cache(&config).await;
+        assert!(!cache_path.exists());
 
         store_cache(&cache_path, &Version::new(0, 2, 3), 1_000)
             .await
@@ -640,19 +598,6 @@ mod tests {
             !cache_path.exists(),
             "cache file should be removed after invalidation"
         );
-
-        fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn invalidate_update_cache_is_a_no_op_when_cache_absent() {
-        use crate::config::Config;
-
-        let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
-
-        // Should not return an error when the cache file does not exist.
-        invalidate_update_cache(&config).await;
 
         fs::remove_dir_all(dir).await.unwrap();
     }

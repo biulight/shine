@@ -624,25 +624,22 @@ fn seal_encryption_gpg_recipients_priority_is_cli_workspace_config() {
         ..Default::default()
     };
 
-    let cli = resolve_seal_encryption(
-        None,
-        &["cli".to_string()],
-        Some(&workspace_encryption),
-        &config,
-    )
-    .unwrap();
-    assert!(matches!(cli, Some(EncryptRecipients::Gpg(values)) if values == ["cli"]));
-
-    let workspace =
-        resolve_seal_encryption(None, &[], Some(&workspace_encryption), &config).unwrap();
-    assert!(
-        matches!(workspace, Some(EncryptRecipients::Gpg(values)) if values == ["workspace-one", "workspace-two"])
-    );
-
-    let global = resolve_seal_encryption(None, &[], None, &config).unwrap();
-    assert!(
-        matches!(global, Some(EncryptRecipients::Gpg(values)) if values == ["global-one", "global-two"])
-    );
+    let cli = ["cli".to_string()];
+    for (overrides, workspace, expected) in [
+        (cli.as_slice(), Some(&workspace_encryption), &["cli"][..]),
+        (
+            &[],
+            Some(&workspace_encryption),
+            &["workspace-one", "workspace-two"],
+        ),
+        (&[], None, &["global-one", "global-two"]),
+    ] {
+        let resolved = resolve_seal_encryption(None, overrides, workspace, &config).unwrap();
+        let Some(EncryptRecipients::Gpg(values)) = resolved else {
+            panic!("expected GPG recipients {expected:?}, got {resolved:?}");
+        };
+        assert_eq!(values, expected);
+    }
 }
 
 #[test]
@@ -717,6 +714,20 @@ async fn plain_sources_merge_in_declared_order() {
     assert_eq!(values.get("A").map(String::as_str), Some("base"));
     assert_eq!(values.get("B").map(String::as_str), Some("local"));
     tokio::fs::remove_dir_all(directory).await.unwrap();
+}
+
+#[cfg(unix)]
+fn captured_sources(snapshot: &WorkspaceSnapshot) -> CapturedSources {
+    snapshot
+        .sources
+        .iter()
+        .map(|source| {
+            (
+                PathBuf::from(&source.path),
+                Some(Zeroizing::new(source.contents.clone())),
+            )
+        })
+        .collect()
 }
 
 #[cfg(unix)]
@@ -824,16 +835,7 @@ fn broker_preserves_source_precedence_and_releases_only_winning_secrets() {
                 .await
                 .is_err()
         );
-        let captured = snapshot
-            .sources
-            .iter()
-            .map(|source| {
-                (
-                    PathBuf::from(&source.path),
-                    Some(Zeroizing::new(source.contents.clone())),
-                )
-            })
-            .collect();
+        let captured = captured_sources(&snapshot);
         let local = compile_captured_sources(&captured, &config).await.unwrap();
         for (key, value) in &merged {
             assert_eq!(local.get(key), Some(value));
@@ -950,15 +952,16 @@ async fn plain_only_source_can_be_sealed_without_recipient() {
 }
 
 #[cfg(unix)]
+fn shell_command(script: &str) -> [OsString; 3] {
+    ["sh", "-c", script].map(OsString::from)
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn run_command_injects_workspace_values() {
     let values = BTreeMap::from([("SHINE_RUN_TEST".to_string(), "injected".to_string())]);
     run_command(
-        &[
-            OsString::from("sh"),
-            OsString::from("-c"),
-            OsString::from("test \"$SHINE_RUN_TEST\" = injected"),
-        ],
+        &shell_command("test \"$SHINE_RUN_TEST\" = injected"),
         values.into(),
         true,
         SensitiveValues::default(),
@@ -982,17 +985,6 @@ async fn explicit_values_support_aliases_and_multiple_keys() {
     assert_eq!(values.get("OTHER_TOKEN").map(String::as_str), Some("beta"));
 }
 
-#[tokio::test]
-async fn explicit_values_reject_duplicate_targets_before_resolution() {
-    let config = isolated_config();
-
-    let error = resolve_explicit_values(&config, &["TOKEN_A=TOKEN".into(), "TOKEN_B=TOKEN".into()])
-        .await
-        .unwrap_err();
-
-    assert!(error.to_string().contains("duplicate target variable"));
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn no_workspace_injects_explicit_without_discovery() {
@@ -1008,11 +1000,7 @@ async fn no_workspace_injects_explicit_without_discovery() {
         &["SHINE_NOWS_TOKEN".into()],
         false,
         &[],
-        &[
-            OsString::from("sh"),
-            OsString::from("-c"),
-            OsString::from("test \"$SHINE_NOWS_TOKEN\" = alpha"),
-        ],
+        &shell_command("test \"$SHINE_NOWS_TOKEN\" = alpha"),
     )
     .await
     .unwrap();
@@ -1031,37 +1019,32 @@ async fn no_workspace_allows_empty_with() {
         &[],
         false,
         &[],
-        &[
-            OsString::from("sh"),
-            OsString::from("-c"),
-            OsString::from("true"),
-        ],
+        &shell_command("true"),
     )
     .await
     .unwrap();
 }
 
 #[tokio::test]
-async fn explicit_values_reject_invalid_or_missing_keys() {
+async fn explicit_values_reject_invalid_missing_or_duplicate_keys() {
     let config = isolated_config();
-
-    let invalid = resolve_explicit_values(&config, &["BAD-KEY".into()])
-        .await
-        .unwrap_err();
-    assert!(
-        invalid
-            .to_string()
-            .contains("invalid environment variable name")
-    );
-
-    let missing = resolve_explicit_values(&config, &["MISSING".into()])
-        .await
-        .unwrap_err();
-    assert!(
-        missing
-            .to_string()
-            .contains("MISSING_SECRET or MISSING is not set")
-    );
+    for (keys, diagnostic) in [
+        (vec!["BAD-KEY".into()], "invalid environment variable name"),
+        (
+            vec!["MISSING".into()],
+            "MISSING_SECRET or MISSING is not set",
+        ),
+        (
+            vec!["TOKEN_A=TOKEN".into(), "TOKEN_B=TOKEN".into()],
+            "duplicate target variable",
+        ),
+    ] {
+        let error = resolve_explicit_values(&config, &keys).await.unwrap_err();
+        assert!(
+            error.to_string().contains(diagnostic),
+            "{keys:?}: {error:#}"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -1081,11 +1064,7 @@ async fn explicit_values_override_workspace_and_process_values() {
     )]);
 
     run_command(
-        &[
-            OsString::from("sh"),
-            OsString::from("-c"),
-            OsString::from("test \"$SHINE_RUN_OVERRIDE_TEST\" = explicit"),
-        ],
+        &shell_command("test \"$SHINE_RUN_OVERRIDE_TEST\" = explicit"),
         workspace.into(),
         false,
         explicit.into(),
@@ -1189,16 +1168,7 @@ fn local_and_broker_validate_every_secret_source_and_redact_failures() {
                     },
                 ],
             };
-            let captured = snapshot
-                .sources
-                .iter()
-                .map(|source| {
-                    (
-                        PathBuf::from(&source.path),
-                        Some(Zeroizing::new(source.contents.clone())),
-                    )
-                })
-                .collect();
+            let captured = captured_sources(&snapshot);
             for broker in [false, true] {
                 let _ = std::fs::remove_file(root.join("gpg.calls"));
                 values::take_wipe_events();

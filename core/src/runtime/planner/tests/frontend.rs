@@ -16,7 +16,7 @@ async fn assert_user_edit_blocks_recovery(
 
 #[tokio::test]
 async fn frontend_app_operation_state_preserves_post_interruption_user_changes() {
-    let runtime = runtime(static_copy_app_snapshot());
+    let runtime = runtime(static_copy_app_snapshot(b"managed"));
     let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -279,7 +279,7 @@ install = { kind = 'package', provider = 'homebrew', package = 'recorded' }
 #[tokio::test]
 async fn frontend_observation_only_inspection_retains_safe_manifest_errors() {
     use crate::frontend::FrontendService;
-    let (reader, host) = observation_runtime(static_copy_app_snapshot());
+    let (reader, host) = observation_runtime(static_copy_app_snapshot(b"managed"));
     let rich = FrontendService::new(CoreRuntime::new(
         host.clone(),
         reader.context().clone(),

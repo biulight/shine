@@ -95,30 +95,19 @@ mod tests {
     }
 
     #[test]
-    #[cfg(windows)]
-    fn formats_paths_with_forward_slashes() {
-        assert_eq!(
-            format(Path::new(r"C:\Users\alice\file.txt")),
-            "C:/Users/alice/file.txt"
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn strips_windows_verbatim_disk_prefix() {
-        assert_eq!(
-            format(Path::new(r"\\?\C:\Users\alice\file.txt")),
-            "C:/Users/alice/file.txt"
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn strips_windows_verbatim_unc_prefix() {
-        assert_eq!(
-            format(Path::new(r"\\?\UNC\server\share\file.txt")),
-            "//server/share/file.txt"
-        );
+    fn windows_path_spellings_follow_native_display_rules() {
+        for (input, windows_display) in [
+            (r"C:\Users\alice\file.txt", "C:/Users/alice/file.txt"),
+            (r"\\?\C:\Users\alice\file.txt", "C:/Users/alice/file.txt"),
+            (r"\\?\UNC\server\share\file.txt", "//server/share/file.txt"),
+        ] {
+            let expected = if cfg!(windows) {
+                windows_display
+            } else {
+                input
+            };
+            assert_eq!(format(Path::new(input)), expected, "{input}");
+        }
     }
 
     #[test]

@@ -1,6 +1,5 @@
 """Offline end-to-end installer checks; run with python3 on Unix or Windows."""
 
-import errno
 import io
 from itertools import product
 import os
@@ -10,8 +9,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import threading
 import unittest
+
+if __package__:
+    from .installer_test_support import captured_terminal
+else:
+    from installer_test_support import captured_terminal
 
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == "nt"
@@ -209,50 +212,18 @@ cp "$TEST_ARCHIVE" "$2"
                 if term is None:
                     # Some /bin/sh implementations initialize absent TERM to dumb.
                     installer_input = "unset TERM\n" + installer_input
-            master = slave = None
-            chunks = []
-            read_errors = []
+            with captured_terminal(terminal) as (slave, output):
+                result = subprocess.run(
+                    argv,
+                    env=env,
+                    input=installer_input,
+                    stdout=slave if terminal == "stdout" else subprocess.PIPE,
+                    stderr=slave if terminal == "stderr" else subprocess.PIPE,
+                    text=True,
+                    timeout=30,
+                )
             if terminal:
-                import pty
-
-                master, slave = pty.openpty()
-
-                def drain():
-                    while True:
-                        try:
-                            chunk = os.read(master, 4096)
-                        except OSError as error:
-                            if error.errno != errno.EIO:
-                                read_errors.append(error)
-                            return
-                        if not chunk:
-                            return
-                        chunks.append(chunk)
-
-                reader = threading.Thread(target=drain, daemon=True)
-                reader.start()
-            try:
-                try:
-                    result = subprocess.run(
-                        argv,
-                        env=env,
-                        input=installer_input,
-                        stdout=slave if terminal == "stdout" else subprocess.PIPE,
-                        stderr=slave if terminal == "stderr" else subprocess.PIPE,
-                        text=True,
-                        timeout=30,
-                    )
-                finally:
-                    if terminal:
-                        os.close(slave)
-                        reader.join(timeout=5)
-                if terminal:
-                    self.assertFalse(reader.is_alive(), "PTY reader did not finish")
-                    self.assertEqual(read_errors, [])
-                    setattr(result, terminal, b"".join(chunks).decode())
-            finally:
-                if terminal:
-                    os.close(master)
+                setattr(result, terminal, output.decode())
             self.assertEqual(list(scratch.iterdir()), [], result.stdout + result.stderr)
             urls = requests.read_text(encoding="utf-8-sig").splitlines()
             repo = "example/shine" if custom else "biulight/shine"

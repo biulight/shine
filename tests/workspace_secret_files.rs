@@ -170,6 +170,16 @@ impl Fixture {
         .arg(mode);
         cmd
     }
+    #[track_caller]
+    fn run_with_exit_code(&self, mode: &str, code: i32) -> Output {
+        let output = self
+            .run(mode)
+            .env("PROBE_EXIT", code.to_string())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(code), "{mode}: {output:?}");
+        output
+    }
     fn export_groups(&self, mode: &str, groups: &[&str]) -> Command {
         let mut cmd = self.command();
         cmd.args([
@@ -297,17 +307,7 @@ fn error(output: Output, expected: &str) {
 fn file_groups_clean_unreadable_owned_plaintext_before_propagating_child_status() {
     for code in [0, 42] {
         let f = Fixture::sealed();
-        let output = f
-            .run("unreadable")
-            .env("PROBE_EXIT", code.to_string())
-            .output()
-            .unwrap();
-        assert_eq!(
-            output.status.code(),
-            Some(code),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        f.run_with_exit_code("unreadable", code);
         assert!(!f.root.join(".signing/key").exists());
         f.assert_plaintext_dirs_absent();
     }
@@ -382,8 +382,7 @@ fn file_groups_seal_and_run_binary_empty_multiple_modes_and_exit_codes() {
     f.prepare();
     good(f.run("check").output().unwrap());
     f.assert_plaintext_dirs_absent();
-    let out = f.run("check").env("PROBE_EXIT", "23").output().unwrap();
-    assert_eq!(out.status.code(), Some(23));
+    f.run_with_exit_code("check", 23);
     assert!(!f.root.join(".signing/key").exists());
     let out = f
         .command()
@@ -656,17 +655,7 @@ fn file_groups_accept_targets_removed_by_child_and_keep_exit_status() {
     for mode in ["remove", "remove-parent"] {
         for code in [0, 42] {
             let f = Fixture::sealed();
-            let output = f
-                .run(mode)
-                .env("PROBE_EXIT", code.to_string())
-                .output()
-                .unwrap();
-            assert_eq!(
-                output.status.code(),
-                Some(code),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let output = f.run_with_exit_code(mode, code);
             assert!(!String::from_utf8_lossy(&output.stderr).contains("cleanup failed"));
             assert!(!f.root.join(".signing").exists());
             // A child-removed target must not prevent cleanup of another mapping.
@@ -1193,8 +1182,7 @@ fn file_groups_roll_back_partial_materialization_and_keep_failed_child_status() 
     let root = f.root.with_extension("display\nFORGED=path\r\t\u{1b}中文");
     fs::rename(&f.root, &root).unwrap();
     f.root = root;
-    let output = f.run("replace").env("PROBE_EXIT", "42").output().unwrap();
-    assert_eq!(output.status.code(), Some(42));
+    let output = f.run_with_exit_code("replace", 42);
     assert!(output.stdout.is_empty(), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("cleanup failed"));

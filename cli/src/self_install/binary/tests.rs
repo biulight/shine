@@ -95,38 +95,34 @@ async fn self_install_errors_when_source_is_destination() {
 
 #[test]
 fn sync_warning_preserves_nested_permission_error_and_platform_hint() {
-    let error = anyhow::Error::new(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        "permission sentinel",
-    ))
-    .context("copy context");
-    let warning = self_install_sync_warning(std::path::Path::new("installed-shine"), &error);
-    assert!(warning.starts_with("Warning: failed to sync system copy at installed-shine:"));
-    assert!(
-        warning.contains("copy context: permission sentinel"),
-        "{warning}"
-    );
-    assert_eq!(
-        warning.contains("elevated terminal"),
-        cfg!(windows),
-        "{warning}"
-    );
-    let error = anyhow::Error::new(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        "permission\nsentinel\r\t\u{1b}",
-    ))
-    .context("copy context");
-    let warning = self_install_sync_warning(std::path::Path::new("installed\nshine\u{1b}"), &error);
-    assert!(
-        !warning.contains(['\n', '\r', '\t', '\u{1b}']),
-        "{warning:?}"
-    );
-    assert!(warning.contains("installed\\nshine\\u{1b}"), "{warning}");
-    assert!(
-        warning.contains("copy context: permission\\nsentinel\\r\\t\\u{1b}"),
-        "{warning}"
-    );
-    assert_eq!(warning.contains("elevated terminal"), cfg!(windows));
+    use std::io::{Error, ErrorKind::PermissionDenied};
+
+    for (dest, cause, expected) in [
+        (
+            "installed-shine",
+            "permission sentinel",
+            "installed-shine: copy context: permission sentinel",
+        ),
+        (
+            "installed\nshine\u{1b}",
+            "permission\nsentinel\r\t\u{1b}",
+            r"installed\nshine\u{1b}: copy context: permission\nsentinel\r\t\u{1b}",
+        ),
+    ] {
+        let error = anyhow::Error::new(Error::new(PermissionDenied, cause)).context("copy context");
+        let warning = self_install_sync_warning(std::path::Path::new(dest), &error);
+        let prefix = format!("Warning: failed to sync system copy at {expected}");
+        assert!(warning.starts_with(&prefix), "{warning:?}");
+        assert!(
+            !warning.contains(['\n', '\r', '\t', '\u{1b}']),
+            "{warning:?}"
+        );
+        assert_eq!(
+            warning.contains("elevated terminal"),
+            cfg!(windows),
+            "{warning}"
+        );
+    }
 }
 
 #[tokio::test]

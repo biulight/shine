@@ -187,37 +187,13 @@ fn cli_parses_all_declared_broker_release() {
 
 #[test]
 fn cli_rejects_mixed_or_missing_broker_release_selection() {
-    assert!(
-        Cli::try_parse_from([
-            "shine",
-            "env",
-            "broker",
-            "describe",
-            "--mode",
-            "production",
-            "--release",
-            "TOKEN",
-            "--release-all-declared",
-            "--",
-            "bun",
-            "start",
-        ])
-        .is_err()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "shine",
-            "env",
-            "broker",
-            "describe",
-            "--mode",
-            "production",
-            "--",
-            "bun",
-            "start",
-        ])
-        .is_err()
-    );
+    for selection in [&["--release", "TOKEN", "--release-all-declared"][..], &[]] {
+        let args = ["shine", "env", "broker", "describe", "--mode", "production"]
+            .into_iter()
+            .chain(selection.iter().copied())
+            .chain(["--", "bun", "start"]);
+        assert!(Cli::try_parse_from(args).is_err(), "{selection:?}");
+    }
 }
 
 #[test]
@@ -454,49 +430,48 @@ fn lifecycle_commands_accept_yes_and_reject_dry_run_conflicts() {
     }
 }
 
+fn parse_preset(args: &[&str]) -> std::result::Result<PresetCommands, clap::Error> {
+    let cli = Cli::try_parse_from(["shine", "preset"].into_iter().chain(args.iter().copied()))?;
+    let Commands::Preset { command } = cli.command else {
+        panic!("expected preset command for {args:?}")
+    };
+    Ok(command)
+}
+
 #[test]
 fn cli_accepts_preset_commands() {
-    let cli = Cli::try_parse_from(["shine", "preset", "pull"]).unwrap();
+    use commands::PresetReportFormat::{Json, Text};
+    use std::path::Path;
+
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Pull
-        }
+        parse_preset(&["pull"]).unwrap(),
+        PresetCommands::Pull
     ));
 
-    let cli = Cli::try_parse_from(["shine", "preset", "export"]).unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Export(commands::ExportCommand {
-                dir: None,
-                force: false
-            })
-        }
+        parse_preset(&["export"]).unwrap(),
+        PresetCommands::Export(commands::ExportCommand {
+            dir: None,
+            force: false
+        })
     ));
 
-    let cli = Cli::try_parse_from(["shine", "preset", "copy", "app/surge"]).unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Copy(commands::CopyCommand {
-                target,
-                force: false
-            })
-        } if target == "app/surge"
+        parse_preset(&["copy", "app/surge"]).unwrap(),
+        PresetCommands::Copy(commands::CopyCommand {
+            target,
+            force: false
+        }) if target == "app/surge"
     ));
 
-    let cli = Cli::try_parse_from(["shine", "preset", "copy", "shell/proxy", "--force"]).unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Copy(commands::CopyCommand {
-                target,
-                force: true
-            })
-        } if target == "shell/proxy"
+        parse_preset(&["copy", "shell/proxy", "--force"]).unwrap(),
+        PresetCommands::Copy(commands::CopyCommand {
+            target,
+            force: true
+        }) if target == "shell/proxy"
     ));
-    assert!(Cli::try_parse_from(["shine", "preset", "copy"]).is_err());
+    assert!(parse_preset(&["copy"]).is_err());
     for invalid in [
         "surge",
         "app/",
@@ -506,77 +481,47 @@ fn cli_accepts_preset_commands() {
         "other/surge",
     ] {
         assert!(
-            Cli::try_parse_from(["shine", "preset", "copy", invalid]).is_err(),
+            parse_preset(&["copy", invalid]).is_err(),
             "target should be rejected during CLI parsing: {invalid}"
         );
     }
 
-    let cli = Cli::try_parse_from(["shine", "preset", "link", "/tmp/presets", "--create"]).unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Link(commands::LinkCommand { create: true, .. })
-        }
+        parse_preset(&["link", "/tmp/presets", "--create"]).unwrap(),
+        PresetCommands::Link(commands::LinkCommand { create: true, .. })
     ));
 
-    let cli = Cli::try_parse_from(["shine", "preset", "link", "/tmp/presets", "--live"]).unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Link(commands::LinkCommand { live: true, .. })
-        }
+        parse_preset(&["link", "/tmp/presets", "--live"]).unwrap(),
+        PresetCommands::Link(commands::LinkCommand { live: true, .. })
     ));
 
-    let cli = Cli::try_parse_from(["shine", "preset", "unlink"]).unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Unlink
-        }
+        parse_preset(&["unlink"]).unwrap(),
+        PresetCommands::Unlink
     ));
 
-    let cli = Cli::try_parse_from(["shine", "preset", "schema", "--format", "json"]).unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Schema {
-                format: commands::PresetReportFormat::Json,
-            }
-        }
+        parse_preset(&["schema", "--format", "json"]).unwrap(),
+        PresetCommands::Schema { format: Json }
     ));
 
-    let cli = Cli::try_parse_from(["shine", "preset", "validate"]).unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Validate {
-                path,
-                format: commands::PresetReportFormat::Text,
-            }
-        } if path == std::path::Path::new(".")
+        parse_preset(&["validate"]).unwrap(),
+        PresetCommands::Validate {
+            path,
+            format: Text,
+        } if path == Path::new(".")
     ));
-    let cli = Cli::try_parse_from([
-        "shine",
-        "preset",
-        "validate",
-        "presets/app/git/shine.toml",
-        "--format",
-        "json",
-    ])
-    .unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Validate {
-                path,
-                format: commands::PresetReportFormat::Json,
-            }
-        } if path == std::path::Path::new("presets/app/git/shine.toml")
+        parse_preset(&["validate", "presets/app/git/shine.toml", "--format", "json"]).unwrap(),
+        PresetCommands::Validate {
+            path,
+            format: Json,
+        } if path == Path::new("presets/app/git/shine.toml")
     ));
 
-    let cli = Cli::try_parse_from([
-        "shine",
-        "preset",
+    let command = parse_preset(&[
         "lint",
         "presets/shell/agent",
         "--format",
@@ -585,19 +530,15 @@ fn cli_accepts_preset_commands() {
     ])
     .unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Lint {
-                path,
-                format: commands::PresetReportFormat::Json,
-                deny_warnings: true,
-            }
-        } if path == std::path::Path::new("presets/shell/agent")
+        command,
+        PresetCommands::Lint {
+            path,
+            format: Json,
+            deny_warnings: true,
+        } if path == Path::new("presets/shell/agent")
     ));
 
-    let cli = Cli::try_parse_from([
-        "shine",
-        "preset",
+    let command = parse_preset(&[
         "plan",
         "presets/app/git",
         "--platform",
@@ -607,39 +548,24 @@ fn cli_accepts_preset_commands() {
     ])
     .unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Plan {
-                path,
-                platform: commands::PresetPlatform::Linux,
-                format: commands::PresetReportFormat::Json,
-            }
-        } if path == std::path::Path::new("presets/app/git")
+        command,
+        PresetCommands::Plan {
+            path,
+            platform: commands::PresetPlatform::Linux,
+            format: Json,
+        } if path == Path::new("presets/app/git")
     ));
-    assert!(Cli::try_parse_from(["shine", "preset", "plan", "presets/app/git"]).is_err());
+    assert!(parse_preset(&["plan", "presets/app/git"]).is_err());
 
-    let cli = Cli::try_parse_from([
-        "shine",
-        "preset",
-        "test",
-        "presets/app/git",
-        "--format",
-        "json",
-    ])
-    .unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Test {
-                path,
-                format: commands::PresetReportFormat::Json,
-            }
-        } if path == std::path::Path::new("presets/app/git")
+        parse_preset(&["test", "presets/app/git", "--format", "json"]).unwrap(),
+        PresetCommands::Test {
+            path,
+            format: Json,
+        } if path == Path::new("presets/app/git")
     ));
 
-    let cli = Cli::try_parse_from([
-        "shine",
-        "preset",
+    let command = parse_preset(&[
         "pack",
         "presets/app/git",
         "--output",
@@ -649,16 +575,14 @@ fn cli_accepts_preset_commands() {
     ])
     .unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Pack {
-                path,
-                output,
-                force: false,
-                format: commands::PresetReportFormat::Json,
-            }
-        } if path == std::path::Path::new("presets/app/git")
-            && output == std::path::Path::new("/tmp/git.shine-preset.tar.gz")
+        command,
+        PresetCommands::Pack {
+            path,
+            output,
+            force: false,
+            format: Json,
+        } if path == Path::new("presets/app/git")
+            && output == Path::new("/tmp/git.shine-preset.tar.gz")
     ));
 
     for legacy in ["export", "link", "unlink", "overlay", "pull"] {
@@ -668,46 +592,25 @@ fn cli_accepts_preset_commands() {
 
 #[test]
 fn cli_accepts_overlay_commands() {
-    let cli = Cli::try_parse_from(["shine", "preset", "overlay", "link", "/tmp/presets"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Overlay {
-                command: OverlayCommands::Link(OverlayLinkCommand {
-                    ref path,
-                    git: None,
-                    create: false,
-                    ..
-                })
-            }
-        } if path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
-    ));
+    for create in [false, true] {
+        let mut args = vec!["overlay", "link", "/tmp/presets"];
+        if create {
+            args.push("--create");
+        }
+        assert!(
+            matches!(
+                parse_preset(&args).unwrap(),
+                PresetCommands::Overlay {
+                    command: OverlayCommands::Link(OverlayLinkCommand {
+                        path, git: None, create: parsed_create, ..
+                    })
+                } if parsed_create == create && path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
+            ),
+            "{args:?}"
+        );
+    }
 
-    let cli = Cli::try_parse_from([
-        "shine",
-        "preset",
-        "overlay",
-        "link",
-        "/tmp/presets",
-        "--create",
-    ])
-    .unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Overlay {
-                command: OverlayCommands::Link(OverlayLinkCommand {
-                    ref path,
-                    create: true,
-                    ..
-                })
-            }
-        } if path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
-    ));
-
-    let cli = Cli::try_parse_from([
-        "shine",
-        "preset",
+    let command = parse_preset(&[
         "overlay",
         "link",
         "--git",
@@ -717,28 +620,23 @@ fn cli_accepts_overlay_commands() {
     ])
     .unwrap();
     assert!(matches!(
-        cli.command,
-        Commands::Preset {
-            command: PresetCommands::Overlay {
-                command: OverlayCommands::Link(OverlayLinkCommand {
-                    path: None,
-                    git: Some(ref url),
-                    branch: Some(ref branch),
-                    ..
-                })
-            }
+        command,
+        PresetCommands::Overlay {
+            command: OverlayCommands::Link(OverlayLinkCommand {
+                path: None,
+                git: Some(ref url),
+                branch: Some(ref branch),
+                ..
+            })
         } if url == "https://example.com/overlay.git" && branch == "main"
     ));
 
     // A local PATH and --git are mutually exclusive.
-    assert!(
-        Cli::try_parse_from(["shine", "preset", "overlay", "link", "/tmp/x", "--git", "u"])
-            .is_err()
-    );
+    assert!(parse_preset(&["overlay", "link", "/tmp/x", "--git", "u"]).is_err());
 
-    assert!(Cli::try_parse_from(["shine", "preset", "overlay", "unlink"]).is_ok());
-    assert!(Cli::try_parse_from(["shine", "preset", "overlay", "info"]).is_ok());
-    assert!(Cli::try_parse_from(["shine", "preset", "overlay", "show"]).is_err());
+    assert!(parse_preset(&["overlay", "unlink"]).is_ok());
+    assert!(parse_preset(&["overlay", "info"]).is_ok());
+    assert!(parse_preset(&["overlay", "show"]).is_err());
 }
 
 #[test]
@@ -1440,60 +1338,37 @@ fn cli_accepts_app_refresh_commands() {
 }
 
 #[test]
-fn cli_accepts_explicit_app_recovery() {
-    let cli = Cli::try_parse_from(["shine", "app", "recover"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::App {
-            command: AppCommands::Recover { yes: false, .. }
+fn cli_parses_recovery_consent_for_each_domain() {
+    for domain in ["app", "shell", "sys"] {
+        for consent in [false, true] {
+            let args = ["shine", domain, "recover"]
+                .into_iter()
+                .chain(consent.then_some("--yes"));
+            let cli = Cli::try_parse_from(args).unwrap();
+            let parsed_yes = match (domain, cli.command) {
+                (
+                    "app",
+                    Commands::App {
+                        command: AppCommands::Recover { yes, .. },
+                    },
+                ) => yes,
+                (
+                    "shell",
+                    Commands::Shell {
+                        command: ShellCommands::Recover { yes, .. },
+                    },
+                ) => yes,
+                (
+                    "sys",
+                    Commands::Sys {
+                        command: SysCommands::Recover { yes, .. },
+                    },
+                ) => yes,
+                _ => panic!("expected {domain} recover"),
+            };
+            assert_eq!(parsed_yes, consent, "{domain}");
         }
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "app", "recover", "--yes"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::App {
-            command: AppCommands::Recover { yes: true, .. }
-        }
-    ));
-}
-
-#[test]
-fn cli_accepts_explicit_shell_recovery() {
-    let cli = Cli::try_parse_from(["shine", "shell", "recover"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Shell {
-            command: ShellCommands::Recover { yes: false, .. }
-        }
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "shell", "recover", "--yes"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Shell {
-            command: ShellCommands::Recover { yes: true, .. }
-        }
-    ));
-}
-
-#[test]
-fn cli_accepts_explicit_sys_recovery() {
-    let cli = Cli::try_parse_from(["shine", "sys", "recover"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Recover { yes: false, .. }
-        }
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "sys", "recover", "--yes"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Recover { yes: true, .. }
-        }
-    ));
+    }
 }
 
 #[test]

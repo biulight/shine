@@ -33,6 +33,14 @@ fn report_for_sources(
 fn has(report: &Report, code: &str) -> bool {
     report.diagnostics.iter().any(|d| d.code == code)
 }
+#[track_caller]
+fn assert_allowed_unknown_call(code: &str) {
+    let result = report(code, None);
+    assert!(
+        result.allowed && has(&result, "code_analysis_call_unknown"),
+        "{code}: {result:?}"
+    );
+}
 fn differences(report: &Report) -> usize {
     report
         .diagnostics
@@ -128,26 +136,9 @@ fn transparent_wrappers_preserve_mutations_and_captured_functions() {
         "const request=(fetch); request=other; (request)('https://example.org');",
         "(Object.assign)((globalThis), {[key]:other}); (fetch)('https://example.org');",
         "import fs from 'node:fs'; (fs).readFileSync=other; fs.readFileSync('in');",
-    ] {
-        let r = report(code, None);
-        assert!(
-            r.allowed && has(&r, "code_analysis_call_unknown"),
-            "{code}: {r:?}"
-        );
-    }
-}
-
-#[test]
-fn transparent_wrappers_do_not_hide_member_replacements() {
-    for code in [
-        "import fs from 'node:fs'; (fs).readFileSync=other; fs.readFileSync('in');",
         "import fs from 'node:fs'; (Object.assign)(fs, {readFileSync:other}); fs.readFileSync('in');",
     ] {
-        let r = report(code, None);
-        assert!(
-            r.allowed && has(&r, "code_analysis_call_unknown"),
-            "{code}: {r:?}"
-        );
+        assert_allowed_unknown_call(code);
     }
 }
 
@@ -603,11 +594,7 @@ fn quoted_import_names_preserve_lexical_and_member_identity_boundaries() {
         r#"import {'*' as read} from 'node:fs'; read('in');"#,
         r#"import {'get\0' as request} from 'node:https'; request('https://example.org');"#,
     ] {
-        let r = report(code, None);
-        assert!(
-            r.allowed && has(&r, "code_analysis_call_unknown"),
-            "{code}: {r:?}"
-        );
+        assert_allowed_unknown_call(code);
     }
     let r = report(
         r#"import {type Other, 'get' as request} from 'node:https'; request('https://example.org');"#,
@@ -670,11 +657,7 @@ fn escaped_binding_names_and_writes_preserve_shadowing() {
         r"globalThis['f\\u0065tch']('https://example.org')",
         r"const request=fetch; r\u0065quest=other; request('https://example.org')",
     ] {
-        let r = report(code, None);
-        assert!(
-            r.allowed && has(&r, "code_analysis_call_unknown"),
-            "{code}: {r:?}"
-        );
+        assert_allowed_unknown_call(code);
     }
     let r = report(
         r"const r\u0065quest=fetch; globalThis.f\u0065tch=other; request('https://example.org')",
@@ -845,11 +828,7 @@ fn qualified_fetch_respects_shadowing_and_shared_global_writes() {
         "globalThis.fetch=other; const saved=globalThis.fetch; saved('https://example.org');",
         "const g=globalThis; delete g[key]; globalThis.fetch('https://example.org');",
     ] {
-        let r = report(code, None);
-        assert!(
-            r.allowed && has(&r, "code_analysis_call_unknown"),
-            "{code}: {r:?}"
-        );
+        assert_allowed_unknown_call(code);
     }
     for code in [
         "function f(fetch) { globalThis.fetch('https://example.org'); }",
@@ -2447,11 +2426,7 @@ fn saved_bun_file_requires_the_original_receiver_and_method() {
         "Object.assign(Bun,{file:fake}); const f=Bun.file('in'); f.text();",
         "const f=other.file('in'); f.text();",
     ] {
-        let r = report(source, None);
-        assert!(
-            r.allowed && has(&r, "code_analysis_call_unknown"),
-            "{source}: {r:?}"
-        );
+        assert_allowed_unknown_call(source);
     }
     let r = report(
         "const f=Bun.file('in'); const alias=f; const g=Bun.file('in'); Object.assign(f,{text:other});\nalias.text();\nalias.json();\ng.text();",
@@ -2520,11 +2495,7 @@ fn copy_and_rename_compare_both_paths_independently() {
         "import fs from 'node:fs'; Object.assign(fs, {renameSync: fn}); fs.renameSync('a','b');",
         "import fs from 'node:fs/promises'; fs.copyFileSync('a','b');",
     ] {
-        let r = report(code, None);
-        assert!(
-            r.allowed && has(&r, "code_analysis_call_unknown"),
-            "{code}: {r:?}"
-        );
+        assert_allowed_unknown_call(code);
     }
 }
 

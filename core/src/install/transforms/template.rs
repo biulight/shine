@@ -76,75 +76,56 @@ fn is_valid_var_name(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
     #[test]
-    fn substitutes_known_variable() {
-        let v = vars(&[("PORT", "6152")]);
-        let out = apply(b"http://127.0.0.1:@@PORT@@", &v).unwrap();
-        assert_eq!(out, b"http://127.0.0.1:6152");
-    }
-
-    #[test]
-    fn substitutes_multiple_occurrences() {
-        let v = vars(&[("PORT", "7890")]);
-        let out = apply(b"@@PORT@@ and @@PORT@@", &v).unwrap();
-        assert_eq!(out, b"7890 and 7890");
-    }
-
-    #[test]
-    fn substitutes_multiple_distinct_variables() {
-        let v = vars(&[("HTTP", "6152"), ("SOCKS5", "6153")]);
-        let out = apply(b"@@HTTP@@ @@SOCKS5@@", &v).unwrap();
-        assert_eq!(out, b"6152 6153");
-    }
-
-    #[test]
-    fn errors_on_undefined_variable() {
-        let v = vars(&[]);
-        let err = apply(b"@@MISSING@@", &v).unwrap_err();
-        assert!(err.to_string().contains("MISSING"), "{err}");
-        assert!(err.is::<MissingTemplateVariables>());
+    fn substitutes_known_variables_and_preserves_plain_text() {
+        let render = |input: &[u8], bindings: &[(&str, &str)]| {
+            let vars = bindings
+                .iter()
+                .map(|&(k, v)| (k.into(), v.into()))
+                .collect();
+            apply(input, &vars).unwrap()
+        };
+        assert_eq!(
+            render(b"http://127.0.0.1:@@PORT@@", &[("PORT", "6152")]),
+            b"http://127.0.0.1:6152"
+        );
+        assert_eq!(
+            render(b"@@PORT@@ and @@PORT@@", &[("PORT", "7890")]),
+            b"7890 and 7890"
+        );
+        assert_eq!(
+            render(
+                b"@@HTTP@@ @@SOCKS5@@",
+                &[("HTTP", "6152"), ("SOCKS5", "6153")]
+            ),
+            b"6152 6153"
+        );
+        assert_eq!(render(b"plain text", &[("X", "1")]), b"plain text");
     }
 
     #[test]
     fn reports_all_missing_variables() {
-        let v = vars(&[]);
-        let err = apply(b"@@A@@ @@B@@", &v).unwrap_err();
-        assert!(err.to_string().contains("A"), "{err}");
-        assert!(err.to_string().contains("B"), "{err}");
-    }
-
-    #[test]
-    fn preserves_incomplete_or_invalid_placeholders() {
-        let v = vars(&[]);
-        for input in [b"hello @@ world".as_slice(), b"@@has space@@", b"@@@@"] {
-            assert_eq!(apply(input, &v).unwrap(), input, "{input:?}");
+        for (input, missing) in [
+            ("@@MISSING@@", &["MISSING"][..]),
+            ("@@A@@ @@B@@", &["A", "B"]),
+        ] {
+            let err = apply(input.as_bytes(), &BTreeMap::new()).unwrap_err();
+            assert!(err.is::<MissingTemplateVariables>(), "{err}");
+            for name in missing {
+                assert!(err.to_string().contains(name), "{err}");
+            }
         }
     }
 
     #[test]
-    fn no_placeholders_passthrough() {
-        let v = vars(&[("X", "1")]);
-        let out = apply(b"plain text", &v).unwrap();
-        assert_eq!(out, b"plain text");
-    }
-
-    #[test]
-    fn empty_input_returns_empty() {
-        let v = vars(&[]);
-        let out = apply(b"", &v).unwrap();
-        assert!(out.is_empty());
+    fn preserves_empty_input_and_invalid_placeholders() {
+        for input in [b"".as_slice(), b"hello @@ world", b"@@has space@@", b"@@@@"] {
+            assert_eq!(apply(input, &BTreeMap::new()).unwrap(), input, "{input:?}");
+        }
     }
 
     #[test]
     fn errors_on_non_utf8_input() {
-        let v = vars(&[]);
-        assert!(apply(&[0xFF, 0xFE], &v).is_err());
+        assert!(apply(&[0xFF, 0xFE], &BTreeMap::new()).is_err());
     }
 }

@@ -941,14 +941,21 @@ mod tests {
         assert!(error.to_string().contains("NUL"));
     }
 
-    #[tokio::test]
-    async fn forwarded_plain_env_uses_exact_key_and_alias() {
+    fn forwarding_config(entries: &[(&str, &str)]) -> Config {
         let dir = std::env::temp_dir().join(format!("shine-ssh-env-{}", uuid::Uuid::new_v4()));
         let mut config = Config::new_for_test(&dir);
-        config.env.insert("LOCAL_NAME".into(), "local value".into());
+        for &(key, value) in entries {
+            config.env.insert(key.into(), value.into());
+        }
         config
-            .env
-            .insert("LOCAL_NAME_SECRET".into(), "encrypted value".into());
+    }
+
+    #[tokio::test]
+    async fn forwarded_plain_env_uses_exact_key_and_alias() {
+        let config = forwarding_config(&[
+            ("LOCAL_NAME", "local value"),
+            ("LOCAL_NAME_SECRET", "encrypted value"),
+        ]);
 
         let resolved = resolve_forwarded_env(&config, &["LOCAL_NAME=REMOTE_NAME".to_string()], &[])
             .await
@@ -962,11 +969,7 @@ mod tests {
 
     #[tokio::test]
     async fn forwarded_plain_env_requires_explicit_secret_opt_in() {
-        let dir = std::env::temp_dir().join(format!("shine-ssh-env-{}", uuid::Uuid::new_v4()));
-        let mut config = Config::new_for_test(&dir);
-        config
-            .env
-            .insert("API_TOKEN_SECRET".into(), "ciphertext".into());
+        let config = forwarding_config(&[("API_TOKEN_SECRET", "ciphertext")]);
 
         let error = resolve_forwarded_env(&config, &["API_TOKEN".to_string()], &[])
             .await
@@ -977,12 +980,8 @@ mod tests {
 
     #[tokio::test]
     async fn forwarded_secret_requires_base_key_and_encrypted_storage() {
-        let dir = std::env::temp_dir().join(format!("shine-ssh-env-{}", uuid::Uuid::new_v4()));
-        let mut config = Config::new_for_test(&dir);
-        config.env.insert("API_TOKEN".into(), "plaintext".into());
-        config
-            .env
-            .insert("OTHER_SECRET".into(), "ciphertext".into());
+        let config =
+            forwarding_config(&[("API_TOKEN", "plaintext"), ("OTHER_SECRET", "ciphertext")]);
 
         let plaintext_only = resolve_forwarded_env(&config, &[], &["API_TOKEN".to_string()])
             .await
@@ -1005,10 +1004,7 @@ mod tests {
 
     #[tokio::test]
     async fn forwarded_env_rejects_duplicate_and_reserved_targets() {
-        let dir = std::env::temp_dir().join(format!("shine-ssh-env-{}", uuid::Uuid::new_v4()));
-        let mut config = Config::new_for_test(&dir);
-        config.env.insert("ONE".into(), "1".into());
-        config.env.insert("TWO".into(), "2".into());
+        let config = forwarding_config(&[("ONE", "1"), ("TWO", "2")]);
 
         let duplicate = resolve_forwarded_env(
             &config,

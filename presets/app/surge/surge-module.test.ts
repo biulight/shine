@@ -99,7 +99,7 @@ describe("Surge native General module", () => {
   });
 
   for (const shape of inventoryShapes) {
-    test(`apply and remove use raw inventory ${shape} at every native state check`, async () => {
+    test(`apply and repeatable removal verify native state using raw inventory ${shape}`, async () => {
       const f = await fixture(shape);
       await f.run("build");
       expect(f.enabled()).toBe(true);
@@ -111,6 +111,12 @@ describe("Surge native General module", () => {
       expect(f.enabled()).toBe(false);
       expect(await readFile(f.profile, "utf8")).toBe(original);
       expect(f.calls).toEqual([moduleList, "module disable shine-general", moduleList, "reload", "reload"]);
+
+      f.calls.length = 0;
+      await f.run("unbuild");
+      expect(f.calls).not.toContain(`module disable ${moduleName}`);
+      expect(await readFile(f.profile, "utf8")).toBe(original);
+      expect(await readFile(f.installedModule, "utf8")).toContain("#!name=shine-general");
     });
   }
 
@@ -141,19 +147,6 @@ describe("Surge native General module", () => {
     expect(await readFile(f.profile, "utf8")).toContain("# >>> shine");
   });
 
-  test("remove reverses includes and is repeatable; it does not delete the managed module file", async () => {
-    const f = await fixture();
-    await f.run("build");
-    await f.run("unbuild");
-    expect(f.enabled()).toBe(false);
-    expect(await readFile(f.profile, "utf8")).toBe(original);
-    f.calls.length = 0;
-    await f.run("unbuild");
-    expect(f.calls).not.toContain(`module disable ${moduleName}`);
-    expect(await readFile(f.profile, "utf8")).toBe(original);
-    expect(await readFile(f.installedModule, "utf8")).toContain("#!name=shine-general");
-  });
-
   for (const problem of ["missing", "modified", "symlink", "undiscovered", "offline", "invalid-profile"]) {
     test(`apply preflight leaves Profile and native state unchanged: ${problem}`, async () => {
       const f = await fixture();
@@ -179,18 +172,6 @@ describe("Surge native General module", () => {
     const renamed = custom.replace("shine-general", "renamed");
     await writeFile(f.installedModule, renamed);
     await expect(validateGeneralModule(f.installedModule, renamed)).rejects.toThrow("#!name=shine-general");
-  });
-
-  test("a failed disable preserves includes; retry finishes cleanup", async () => {
-    const f = await fixture();
-    await f.run("build");
-    const applied = await readFile(f.profile, "utf8");
-    f.failAt(`module disable ${moduleName}`);
-    await expect(f.run("unbuild")).rejects.toThrow();
-    expect(await readFile(f.profile, "utf8")).toBe(applied);
-    f.failAt("");
-    await f.run("unbuild");
-    expect(await readFile(f.profile, "utf8")).toBe(original);
   });
 
   for (const failedCommand of [`module enable ${moduleName}`, "reload"]) {
@@ -246,16 +227,20 @@ describe("Surge native General module", () => {
     expect(f.calls).toContain("reload");
   });
 
-  test("a failed removal reload preserves includes for retry", async () => {
+  test.each([
+    [`module disable ${moduleName}`, true],
+    ["reload", false],
+  ] as const)("failed %s during removal preserves includes for retry", async (operation, stillEnabled) => {
     const f = await fixture();
     await f.run("build");
     const applied = await readFile(f.profile, "utf8");
-    f.failAt("reload");
+    f.failAt(operation);
     await expect(f.run("unbuild")).rejects.toThrow();
-    expect(f.enabled()).toBe(false);
+    expect(f.enabled()).toBe(stillEnabled);
     expect(await readFile(f.profile, "utf8")).toBe(applied);
     f.failAt("");
     await f.run("unbuild");
+    expect(f.enabled()).toBe(false);
     expect(await readFile(f.profile, "utf8")).toBe(original);
   });
 

@@ -540,46 +540,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_overlay_override_records_unmanaged_source() {
+    async fn overlay_source_records_whether_the_checkout_is_managed() {
         let dir = make_temp_dir().await;
         let overlay_dir = dir.join("overlay");
         write_env_file(&overlay_dir, "TOKEN = \"overlay\"\n").await;
+        for managed in [false, true] {
+            let mut config = config_in(&dir);
+            if managed {
+                config.managed_overlay_dir = Some(overlay_dir.clone());
+            } else {
+                config.presets_overlay_dir_override = Some(overlay_dir.clone());
+            }
+            config.resolve_env_layers().await.unwrap();
 
-        let mut config = config_in(&dir);
-        config.presets_overlay_dir_override = Some(overlay_dir.clone());
-        config.resolve_env_layers().await.unwrap();
-
-        let source = config.env_override_source("TOKEN").unwrap();
-        assert_eq!(source.path, overlay_dir.join(PROJECT_ENV_FILE));
-        assert_eq!(source.kind, EnvOverrideKind::Overlay);
-        assert!(
-            !source.is_managed_overlay,
-            "a manual overlay dir must not be reported as the managed mirror"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn managed_git_overlay_override_records_managed_source() {
-        let dir = make_temp_dir().await;
-        let overlay_dir = dir.join("overlay");
-        write_env_file(&overlay_dir, "TOKEN = \"overlay\"\n").await;
-
-        let mut config = config_in(&dir);
-        // No manual override configured; the managed checkout existing on disk
-        // is what `active_presets_overlay_dir()` falls back to.
-        config.managed_overlay_dir = Some(overlay_dir.clone());
-        config.resolve_env_layers().await.unwrap();
-
-        let source = config.env_override_source("TOKEN").unwrap();
-        assert_eq!(source.path, overlay_dir.join(PROJECT_ENV_FILE));
-        assert_eq!(source.kind, EnvOverrideKind::Overlay);
-        assert!(
-            source.is_managed_overlay,
-            "the shine-managed Git overlay mirror must be flagged as managed"
-        );
-
+            let source = config.env_override_source("TOKEN").unwrap();
+            assert_eq!(source.path, overlay_dir.join(PROJECT_ENV_FILE));
+            assert_eq!(source.kind, EnvOverrideKind::Overlay);
+            assert_eq!(source.is_managed_overlay, managed);
+        }
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -631,130 +609,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_env_override_entry_inserts_new_plain_key() {
+    async fn write_env_override_entry_creates_missing_parents_and_private_plain_file() {
         let dir = make_temp_dir().await;
-        let path = dir.join(PROJECT_ENV_FILE);
+        for path in [
+            dir.join(PROJECT_ENV_FILE),
+            dir.join("nested").join(PROJECT_ENV_FILE),
+        ] {
+            write_env_override_entry(&path, "TOKEN", Some("secret"))
+                .await
+                .unwrap();
 
-        write_env_override_entry(&path, "TOKEN", Some("secret"))
-            .await
-            .unwrap();
+            let content = fs::read_to_string(&path).await.unwrap();
+            let table: toml::Table = toml::from_str(&content).unwrap();
+            assert_eq!(
+                table.get("TOKEN").and_then(toml::Value::as_str),
+                Some("secret")
+            );
 
-        let content = fs::read_to_string(&path).await.unwrap();
-        let table: toml::Table = toml::from_str(&content).unwrap();
-        assert_eq!(
-            table.get("TOKEN").and_then(toml::Value::as_str),
-            Some("secret")
-        );
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            for previous_mode in [0o600, 0o644] {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
                 assert_eq!(
                     fs::metadata(&path).await.unwrap().permissions().mode() & 0o777,
                     0o600
                 );
-                fs::set_permissions(&path, std::fs::Permissions::from_mode(previous_mode))
-                    .await
-                    .unwrap();
-                write_env_override_entry(&path, "OTHER", Some("value"))
-                    .await
-                    .unwrap();
-                assert_eq!(
-                    fs::metadata(&path).await.unwrap().permissions().mode() & 0o777,
-                    0o600
-                );
+                for previous_mode in [0o600, 0o644] {
+                    fs::set_permissions(&path, std::fs::Permissions::from_mode(previous_mode))
+                        .await
+                        .unwrap();
+                    write_env_override_entry(&path, "OTHER", Some("value"))
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        fs::metadata(&path).await.unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
+                }
             }
         }
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[tokio::test]
-    async fn write_env_override_entry_updates_existing_plain_key_and_keeps_comments() {
+    async fn edit_token(initial: &str, value: Option<&str>) -> String {
         let dir = make_temp_dir().await;
         let path = dir.join(PROJECT_ENV_FILE);
-        // The comment guards an *unchanged* key: sync_table only preserves
-        // formatting/comments for entries it doesn't have to touch.
-        fs::write(
-            &path,
-            "TOKEN = \"old\"\n# keep this comment\nOTHER = \"unchanged\"\n",
-        )
-        .await
-        .unwrap();
-
-        write_env_override_entry(&path, "TOKEN", Some("new"))
+        fs::write(&path, initial).await.unwrap();
+        write_env_override_entry(&path, "TOKEN", value)
             .await
             .unwrap();
-
         let content = fs::read_to_string(&path).await.unwrap();
+        fs::remove_dir_all(dir).await.unwrap();
+        content
+    }
+
+    #[tokio::test]
+    async fn write_env_override_entry_updates_existing_plain_key_and_keeps_comments() {
+        // Preserve the comment on the untouched key when updating its neighbor.
+        let content = edit_token(
+            "TOKEN = \"old\"\n# keep this comment\nOTHER = \"unchanged\"\n",
+            Some("new"),
+        )
+        .await;
         assert!(content.contains("# keep this comment"));
         assert!(content.contains("TOKEN = \"new\""));
         assert!(content.contains("OTHER = \"unchanged\""));
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn write_env_override_entry_updates_value_and_preserves_description() {
-        let dir = make_temp_dir().await;
-        let path = dir.join(PROJECT_ENV_FILE);
-        fs::write(
-            &path,
+        let content = edit_token(
             "TOKEN = { value = \"old\", description = \"Internal token\" }\n",
+            Some("new"),
         )
-        .await
-        .unwrap();
-
-        write_env_override_entry(&path, "TOKEN", Some("new"))
-            .await
-            .unwrap();
-
-        let content = fs::read_to_string(&path).await.unwrap();
+        .await;
         assert!(content.contains("TOKEN = { value = \"new\", description = \"Internal token\" }"));
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn write_env_override_entry_removes_key() {
-        let dir = make_temp_dir().await;
-        let path = dir.join(PROJECT_ENV_FILE);
-        fs::write(&path, "TOKEN = \"secret\"\nOTHER = \"unchanged\"\n")
-            .await
-            .unwrap();
-
-        write_env_override_entry(&path, "TOKEN", None)
-            .await
-            .unwrap();
-
-        let content = fs::read_to_string(&path).await.unwrap();
+        let content = edit_token("TOKEN = \"secret\"\nOTHER = \"unchanged\"\n", None).await;
         let table: toml::Table = toml::from_str(&content).unwrap();
         assert!(!table.contains_key("TOKEN"));
         assert_eq!(
             table.get("OTHER").and_then(toml::Value::as_str),
             Some("unchanged")
         );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn write_env_override_entry_creates_missing_file_and_parent_dir() {
-        let dir = make_temp_dir().await;
-        let path = dir.join("nested").join(PROJECT_ENV_FILE);
-
-        write_env_override_entry(&path, "TOKEN", Some("secret"))
-            .await
-            .unwrap();
-
-        let content = fs::read_to_string(&path).await.unwrap();
-        let table: toml::Table = toml::from_str(&content).unwrap();
-        assert_eq!(
-            table.get("TOKEN").and_then(toml::Value::as_str),
-            Some("secret")
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 }

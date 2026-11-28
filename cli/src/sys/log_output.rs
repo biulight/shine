@@ -432,14 +432,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn control_only_fragments_preserve_progress_replacement() {
-        let surface = Surface {
+    fn dynamic_terminal(columns: usize, color: bool) -> Surface {
+        Surface {
             terminal: true,
             dynamic: true,
-            color: true,
-            columns: 289,
-        };
+            columns,
+            color,
+        }
+    }
+
+    #[test]
+    fn control_only_fragments_preserve_progress_replacement() {
+        let surface = dynamic_terminal(289, true);
         // Cargo writes a padded progress row + CR, then erase-line and a status.
         // Timer flushes may split the erase or SGR sequence into empty fragments.
         for fragments in [vec!["\x1b[K"], vec!["\x1b[", "K", "\x1b[1m", "\x1b[92m"]] {
@@ -524,12 +528,7 @@ mod tests {
 
     #[test]
     fn progress_rewrites_current_row_and_commits_before_results() {
-        let surface = Surface {
-            terminal: true,
-            dynamic: true,
-            color: false,
-            columns: 40,
-        };
+        let surface = dynamic_terminal(40, false);
         let mut capture = OutputCapture::default();
         capture.emit(&surface, event("stdout", "10%", PROGRESS));
         capture.emit(&surface, event("stdout", "20%", PROGRESS));
@@ -546,12 +545,7 @@ mod tests {
 
     #[test]
     fn control_only_suffix_does_not_lose_the_last_progress_or_its_newline() {
-        let surface = Surface {
-            terminal: true,
-            dynamic: true,
-            color: true,
-            columns: 80,
-        };
+        let surface = dynamic_terminal(80, true);
         let mut capture = OutputCapture::default();
         capture.emit(&surface, event("stdout", "10%", PROGRESS));
         capture.emit(&surface, event("stdout", "\x1b[0m", PARTIAL));
@@ -562,12 +556,7 @@ mod tests {
 
     #[test]
     fn normal_stderr_logs_do_not_overwrite_stdout_progress() {
-        let surface = Surface {
-            terminal: true,
-            dynamic: true,
-            color: true,
-            columns: 60,
-        };
+        let surface = dynamic_terminal(60, true);
         let mut capture = OutputCapture::default();
         capture.emit(&surface, event("stdout", "\x1b[31mDownloading", PROGRESS));
         capture.emit(&surface, event("stderr", "warning", LINE));
@@ -594,12 +583,7 @@ mod tests {
         }
         capture.finish(&surface);
         assert_eq!(capture.text(), "    [yazi] 10%\n    [yazi] 20%\n");
-        let surface = Surface {
-            terminal: true,
-            dynamic: true,
-            color: false,
-            columns: 80,
-        };
+        let surface = dynamic_terminal(80, false);
         capture.bytes.clear();
         for _ in 0..20 {
             capture.emit(&surface, event("stdout", &"x".repeat(8192), PARTIAL));
@@ -610,12 +594,7 @@ mod tests {
 
     #[test]
     fn live_rows_clip_wide_text_and_colors_on_resize_and_preserve_crlf_completion() {
-        let mut surface = Surface {
-            terminal: true,
-            dynamic: true,
-            color: true,
-            columns: 22,
-        };
+        let mut surface = dynamic_terminal(22, true);
         let mut capture = OutputCapture::default();
         capture.emit(
             &surface,

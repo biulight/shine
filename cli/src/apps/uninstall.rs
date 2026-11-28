@@ -361,9 +361,9 @@ mod tests {
     use super::super::install::handle_install_approved;
     use super::*;
     use crate::apps::tests::{external_app_config, load_manifest, make_temp_dir};
-    use crate::install_core::manifest::AppInstallStrategy;
     #[cfg(unix)]
-    use crate::test_support::env_lock;
+    use crate::apps::tests::{temp_home, write_external_sample_app};
+    use crate::install_core::manifest::AppInstallStrategy;
     use tokio::fs;
 
     use crate::test_support::RecordingReporter;
@@ -572,24 +572,10 @@ mod tests {
     }
 
     #[cfg(unix)]
-    async fn write_external_sample_app(dir: &std::path::Path, body: &[u8]) {
-        let cat_dir = dir.join("presets/app/sample");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        let manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
-        fs::write(cat_dir.join("shine.toml"), manifest)
-            .await
-            .unwrap();
-        fs::write(cat_dir.join("daemon.jsonc"), body).await.unwrap();
-    }
-
-    #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_dry_run_leaves_everything_intact() {
         let _admin_guard = crate::test_support::admin_category_test_lock().await;
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
@@ -665,10 +651,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_force_removes_user_modified_file_and_manifest_entry() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         write_external_sample_app(&dir, b"{\n  \"debug\": true\n}\n").await;
         let config = external_app_config(&dir).await;
@@ -707,10 +690,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_specific_category_only_removes_that_category() {
         let _admin_guard = crate::test_support::admin_category_test_lock().await;
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
@@ -1032,10 +1012,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_unknown_category_returns_early() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let (_guard, dir) = temp_home().await;
 
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();

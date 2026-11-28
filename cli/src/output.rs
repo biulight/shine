@@ -421,10 +421,11 @@ mod tests {
     }
 
     #[test]
-    fn columns_fall_back_to_one_item_per_line_without_a_terminal() {
-        let items = vec!["alpha".to_string(), "beta".to_string()];
-
-        assert_eq!(format_columns(&items, None), "alpha\nbeta\n");
+    fn columns_fall_back_to_one_item_per_line_without_enough_terminal_width() {
+        let items = ["alpha", "beta"].map(str::to_owned);
+        for width in [None, Some(7)] {
+            assert_eq!(format_columns(&items, width), "alpha\nbeta\n", "{width:?}");
+        }
     }
 
     #[test]
@@ -437,13 +438,6 @@ mod tests {
             format_columns(&items, Some(20)),
             "alpha      gamma\nbeta       delta\n"
         );
-    }
-
-    #[test]
-    fn columns_fall_back_when_the_terminal_is_too_narrow() {
-        let items = vec!["alpha".to_string(), "beta".to_string()];
-
-        assert_eq!(format_columns(&items, Some(7)), "alpha\nbeta\n");
     }
 
     #[test]

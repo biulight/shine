@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, mock, onTestFinished, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -14,15 +14,11 @@ import {
   type BoundFiles,
 } from "./build";
 
-const tempDirs: string[] = [];
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "shine-clash-verge-"));
-  tempDirs.push(dir);
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 function writeYamlFixture(name: string, contents: string, dir = tempDir()): string {
   const file = join(dir, name);
@@ -168,52 +164,30 @@ test("refreshProviders skips an empty provider set", async () => {
   expect(await refreshProviders([])).toBe("skipped");
 });
 
+const controller = "http://127.0.0.1:9097";
+const authorization = { Authorization: "Bearer controller-secret" };
+
 test("refreshProviders authenticates and reports partial controller failure", async () => {
-  const requests: Array<{ input: string; init: RequestInit }> = [];
-  const result = await refreshProviders(
-    ["lan", "office"],
-    async (input, init) => {
-      requests.push({ input, init });
-      return new Response(null, { status: input.endsWith("/lan") ? 204 : 401 });
-    },
-    "http://127.0.0.1:9097/",
-    "controller-secret",
+  const fetcher = mock(async (input: string, _init: RequestInit) =>
+    new Response(null, { status: input.endsWith("/lan") ? 204 : 401 })
   );
+  const result = await refreshProviders(["lan", "office"], fetcher, controller + "/", "controller-secret");
 
   expect(result).toBe("failed");
-  expect(requests).toEqual([
-    {
-      input: "http://127.0.0.1:9097/providers/rules/lan",
-      init: { method: "PUT", headers: { Authorization: "Bearer controller-secret" } },
-    },
-    {
-      input: "http://127.0.0.1:9097/providers/rules/office",
-      init: { method: "PUT", headers: { Authorization: "Bearer controller-secret" } },
-    },
+  const put = { method: "PUT", headers: authorization };
+  expect(fetcher.mock.calls).toEqual([
+    [controller + "/providers/rules/lan", put],
+    [controller + "/providers/rules/office", put],
   ]);
 });
 
-test("closeConnections drops existing traffic through the authenticated controller", async () => {
-  const requests: Array<{ input: string; init: RequestInit }> = [];
-  const result = await closeConnections("http://127.0.0.1:9097", "controller-secret", async (input, init) => {
-    requests.push({ input, init });
-    return new Response(null, { status: 204 });
-  });
-
-  expect(result).toBe("closed");
-  expect(requests).toEqual([
-    {
-      input: "http://127.0.0.1:9097/connections",
-      init: { method: "DELETE", headers: { Authorization: "Bearer controller-secret" } },
-    },
-  ]);
-});
-
-test("closeConnections reports a controller rejection", async () => {
-  const result = await closeConnections("http://127.0.0.1:9097", "", async () =>
-    new Response(null, { status: 401 }),
-  );
-  expect(result).toBe("failed");
+test.each([
+  [204, "controller-secret", authorization, "closed"],
+  [401, "", {}, "failed"],
+] as const)("closeConnections sends DELETE and handles HTTP %i", async (status, token, headers, expected) => {
+  const fetcher = mock(async (_input: string, _init: RequestInit) => new Response(null, { status }));
+  expect(await closeConnections(controller, token, fetcher)).toBe(expected);
+  expect(fetcher.mock.calls).toEqual([[controller + "/connections", { method: "DELETE", headers }]]);
 });
 
 function bindingFixture(merge: string) {
@@ -241,48 +215,16 @@ test("installPayload is idempotent and marks every managed copy", () => {
   expect(installPayload(payload, targets)).toBe("current");
 });
 
-test("syncPayload refreshes current providers and closes existing connections", async () => {
+test.each([
+  { current: true, provider: "lan", result: "refreshed", paths: ["/providers/rules/lan", "/connections"] },
+  { current: false, provider: "new-provider", result: "bindings-updated", paths: [] },
+])("syncPayload returns $result for $provider", async ({ current, provider, result, paths }) => {
   const { targets, payload } = bindingFixture("rule-providers: {}\n");
-  expect(installPayload(payload, targets)).toBe("changed");
-  const requests: string[] = [];
+  if (current) expect(installPayload(payload, targets)).toBe("changed");
+  const fetcher = mock(async (_input: string) => new Response(null, { status: 204 }));
 
-  expect(
-    await syncPayload(
-      payload,
-      ["lan"],
-      targets,
-      async (input) => {
-        requests.push(input);
-        return new Response(null, { status: 204 });
-      },
-      "http://127.0.0.1:9097",
-      "",
-    ),
-  ).toBe("refreshed");
-  expect(requests).toEqual([
-    "http://127.0.0.1:9097/providers/rules/lan",
-    "http://127.0.0.1:9097/connections",
-  ]);
-});
-
-test("syncPayload writes changed bindings without contacting unloaded providers", async () => {
-  const { targets, payload } = bindingFixture("rule-providers: {}\n");
-  let requests = 0;
-
-  expect(
-    await syncPayload(
-      payload,
-      ["new-provider"],
-      targets,
-      async () => {
-        requests += 1;
-        return new Response(null, { status: 204 });
-      },
-      "http://127.0.0.1:9097",
-      "",
-    ),
-  ).toBe("bindings-updated");
-  expect(requests).toBe(0);
+  expect(await syncPayload(payload, [provider], targets, fetcher, controller, "")).toBe(result);
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual(paths.map((path) => controller + path));
 });
 
 test("the example exposes the composite source keys", () => {

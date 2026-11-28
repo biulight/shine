@@ -79,13 +79,7 @@ async fn app_approval_rejects_only_executable_intent_changing() {
 
 #[tokio::test]
 async fn app_plan_is_pure_ready_and_payload_free() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"secret-looking-content".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"secret-looking-content");
     let runtime = runtime(snapshot);
     let host = runtime.host().clone();
     let plan = runtime
@@ -510,13 +504,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sen
 
 #[tokio::test]
 async fn app_user_modification_is_preserved_unless_force_is_bound() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     runtime
@@ -562,13 +550,7 @@ async fn app_user_modification_is_preserved_unless_force_is_bound() {
 
 #[tokio::test]
 async fn app_plan_fingerprint_binds_manifest_and_live_state() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let request = app_request(LifecycleOperation::Install, Some("demo"));
     let initial = runtime.plan_apps(request.clone()).await.unwrap();
@@ -688,13 +670,7 @@ async fn app_upgrade_permissions_exclude_current_files_and_bind_their_state() {
 
 #[tokio::test]
 async fn app_managed_update_blocks_an_occupied_transaction_rollback_path() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"next-managed".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"next-managed");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     runtime
@@ -1005,13 +981,7 @@ source = 'config.toml'
 
 #[tokio::test]
 async fn app_target_plan_ignores_unrelated_manifest_and_live_state() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let demo_destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let other_destination = runtime.context().home_dir.join(".config/other/config.toml");
@@ -1257,7 +1227,7 @@ async fn preserved_privileged_app_file_does_not_request_admin() {
 
 #[tokio::test]
 async fn forced_app_remove_blocks_an_occupied_transaction_rollback_path() {
-    let runtime = runtime(static_copy_app_snapshot());
+    let runtime = runtime(static_copy_app_snapshot(b"managed"));
     let (destination, _) = seed_static_copy_app(&runtime, b"user-modified", None).await;
     runtime.host().put_file(
         crate::action::managed_file_rollback_path(&destination),
@@ -1277,7 +1247,7 @@ async fn forced_app_remove_blocks_an_occupied_transaction_rollback_path() {
 
 #[tokio::test]
 async fn app_managed_remove_blocks_an_occupied_transaction_rollback_path() {
-    let runtime = runtime(static_copy_app_snapshot());
+    let runtime = runtime(static_copy_app_snapshot(b"managed"));
     let (destination, _) = seed_static_copy_app(&runtime, b"managed", None).await;
     runtime.host().put_file(
         crate::action::managed_file_rollback_path(&destination),

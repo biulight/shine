@@ -578,13 +578,7 @@ async fn app_relocation_recovers_created_destination_when_previous_file_was_miss
 
 #[tokio::test]
 async fn app_install_receipt_failure_leaves_journal_for_explicit_recovery() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -630,13 +624,7 @@ async fn app_install_receipt_failure_leaves_journal_for_explicit_recovery() {
 
 #[tokio::test]
 async fn backup_install_receipt_failure_recovers_the_original_file() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let backup = crate::install::backup_path(&destination);
@@ -673,8 +661,8 @@ async fn backup_install_receipt_failure_recovers_the_original_file() {
     assert!(runtime.host().read(&backup).await.is_err());
 }
 
-#[tokio::test]
-async fn rendered_uninstall_receipt_failure_restores_file_on_recovery() {
+async fn prepare_rendered_shell_uninstall()
+-> (CoreRuntime<InMemoryHost>, ShellPlanRequest, PlanApprovalV1) {
     let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
     let install = shell_install_request();
     let approval =
@@ -687,6 +675,12 @@ async fn rendered_uninstall_receipt_failure_restores_file_on_recovery() {
     let request = shell_uninstall_request();
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    (runtime, request, approval)
+}
+
+#[tokio::test]
+async fn rendered_uninstall_receipt_failure_restores_file_on_recovery() {
+    let (runtime, request, approval) = prepare_rendered_shell_uninstall().await;
     let rendered = runtime
         .context()
         .shine_dir
@@ -736,18 +730,7 @@ async fn rendered_uninstall_receipt_failure_restores_file_on_recovery() {
 
 #[tokio::test]
 async fn rendered_uninstall_recovery_blocks_modified_rollback() {
-    let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
-    let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    runtime
-        .install_shells_approved(install, &approval)
-        .await
-        .unwrap();
-    let request = shell_uninstall_request();
-    let plan = runtime.plan_shells(request.clone()).await.unwrap();
-    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    let (runtime, request, approval) = prepare_rendered_shell_uninstall().await;
     runtime
         .host()
         .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
@@ -776,18 +759,7 @@ async fn rendered_uninstall_recovery_blocks_modified_rollback() {
 
 #[tokio::test]
 async fn rendered_uninstall_marker_failure_reconstructs_receipt_before_restore() {
-    let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
-    let install = shell_install_request();
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
-            .unwrap();
-    runtime
-        .install_shells_approved(install, &approval)
-        .await
-        .unwrap();
-    let request = shell_uninstall_request();
-    let plan = runtime.plan_shells(request.clone()).await.unwrap();
-    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    let (runtime, request, approval) = prepare_rendered_shell_uninstall().await;
     let journal = runtime
         .context()
         .shine_dir

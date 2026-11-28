@@ -699,24 +699,6 @@ mod tests {
     }
 
     #[test]
-    fn env_export_uses_alias_as_variable_name() {
-        let value = "secret123";
-        assert_eq!(
-            format_env_export(&shells::ShellType::Zsh, "MY_ALIAS", value),
-            "export MY_ALIAS='secret123'"
-        );
-    }
-
-    #[test]
-    fn env_export_alias_formats_powershell_correctly() {
-        let value = "secret123";
-        assert_eq!(
-            format_env_export(&shells::ShellType::PowerShell, "MY_ALIAS", value),
-            "$env:MY_ALIAS = 'secret123'"
-        );
-    }
-
-    #[test]
     fn env_export_secret_key_appends_secret_suffix() {
         assert_eq!(
             env_export_secret_key("DEEPSEEK_API_KEY"),
@@ -726,43 +708,24 @@ mod tests {
     }
 
     #[test]
-    fn env_export_resolves_secret_when_present() {
-        let mut env = EnvConfig::default();
-        env.set("MY_TOKEN_SECRET", "encrypted");
-
+    fn env_export_prefers_the_secret_and_falls_back_to_plaintext() {
+        let mut plain = EnvConfig::default();
+        plain.set("MY_TOKEN", "plain");
         assert_eq!(
-            resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
-            EnvExportValue::Secret {
-                key: "MY_TOKEN_SECRET".to_string(),
-                value: "encrypted"
-            }
-        );
-    }
-
-    #[test]
-    fn env_export_falls_back_to_plaintext_value() {
-        let mut env = EnvConfig::default();
-        env.set("MY_TOKEN", "plain");
-
-        assert_eq!(
-            resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
+            resolve_env_export_value(&plain, "MY_TOKEN").unwrap(),
             EnvExportValue::Plaintext("plain")
         );
-    }
 
-    #[test]
-    fn env_export_secret_wins_over_plaintext_value() {
-        let mut env = EnvConfig::default();
-        env.set("MY_TOKEN", "plain");
-        env.set("MY_TOKEN_SECRET", "encrypted");
-
-        assert_eq!(
-            resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
-            EnvExportValue::Secret {
-                key: "MY_TOKEN_SECRET".to_string(),
-                value: "encrypted"
-            }
-        );
+        for mut env in [EnvConfig::default(), plain] {
+            env.set("MY_TOKEN_SECRET", "encrypted");
+            assert_eq!(
+                resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
+                EnvExportValue::Secret {
+                    key: "MY_TOKEN_SECRET".to_string(),
+                    value: "encrypted",
+                }
+            );
+        }
     }
 
     #[test]
@@ -796,30 +759,41 @@ mod tests {
     }
 
     #[test]
-    fn env_export_formats_posix_shell_code_safely() {
-        let value = "abc def'ghi$HOME\nnext; rm -rf /";
-        assert_eq!(
-            format_env_export(&shells::ShellType::Zsh, "TOKEN", value),
-            "export TOKEN='abc def'\\''ghi$HOME\nnext; rm -rf /'"
-        );
-    }
-
-    #[test]
-    fn env_export_formats_fish_shell_code_safely() {
-        let value = "abc def'ghi\\path\nnext; rm -rf /";
-        assert_eq!(
-            format_env_export(&shells::ShellType::Fish, "TOKEN", value),
-            "set -gx TOKEN 'abc def\\'ghi\\\\path\nnext; rm -rf /'"
-        );
-    }
-
-    #[test]
-    fn env_export_formats_powershell_code_safely() {
-        let value = "abc def'ghi$HOME; Remove-Item /";
-        assert_eq!(
-            format_env_export(&shells::ShellType::PowerShell, "TOKEN", value),
-            "$env:TOKEN = 'abc def''ghi$HOME; Remove-Item /'"
-        );
+    fn env_export_formats_aliases_and_literal_values_for_each_shell() {
+        use shells::ShellType::{Fish, PowerShell, Zsh};
+        for (shell, key, value, expected) in [
+            (Zsh, "MY_ALIAS", "secret123", "export MY_ALIAS='secret123'"),
+            (
+                PowerShell,
+                "MY_ALIAS",
+                "secret123",
+                "$env:MY_ALIAS = 'secret123'",
+            ),
+            (
+                Zsh,
+                "TOKEN",
+                "abc def'ghi$HOME\nnext; rm -rf /",
+                "export TOKEN='abc def'\\''ghi$HOME\nnext; rm -rf /'",
+            ),
+            (
+                Fish,
+                "TOKEN",
+                "abc def'ghi\\path\nnext; rm -rf /",
+                "set -gx TOKEN 'abc def\\'ghi\\\\path\nnext; rm -rf /'",
+            ),
+            (
+                PowerShell,
+                "TOKEN",
+                "abc def'ghi$HOME; Remove-Item /",
+                "$env:TOKEN = 'abc def''ghi$HOME; Remove-Item /'",
+            ),
+        ] {
+            assert_eq!(
+                format_env_export(&shell, key, value),
+                expected,
+                "{shell:?}: {key}"
+            );
+        }
     }
 
     #[test]

@@ -528,10 +528,13 @@ async fn unlink_returns_empty_report_when_bin_dir_missing() {
 
 #[test]
 fn link_stem_strips_bun_extensions() {
-    assert_eq!(link_stem(Path::new("tool.ts")), OsString::from("tool"));
-    assert_eq!(link_stem(Path::new("tool.js")), OsString::from("tool"));
-    assert_eq!(link_stem(Path::new("tool.mts")), OsString::from("tool"));
-    assert_eq!(link_stem(Path::new("tool.mjs")), OsString::from("tool"));
+    for source in ["tool.ts", "tool.js", "tool.mts", "tool.mjs"] {
+        assert_eq!(
+            link_stem(Path::new(source)),
+            OsString::from("tool"),
+            "{source}"
+        );
+    }
 }
 
 fn bun_spec(source: &Path, name: &str) -> LinkSpec {
@@ -561,12 +564,18 @@ fn bun_spec_with_env(source: &Path, name: &str, env: Vec<String>) -> LinkSpec {
 }
 
 #[cfg(unix)]
+async fn make_bun_script(src: &Path) -> PathBuf {
+    let script = src.join("tool.ts");
+    fs::write(&script, b"console.log('hi')\n").await.unwrap();
+    script
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn creates_bun_launcher_as_marked_executable_regular_file() {
     use std::os::unix::fs::PermissionsExt;
     let (src, bin) = make_dirs().await;
-    let script = src.join("tool.ts");
-    fs::write(&script, b"console.log('hi')\n").await.unwrap();
+    let script = make_bun_script(&src).await;
 
     let report = link(&bin, &[bun_spec(&script, "tool")], false).await;
 
@@ -586,6 +595,10 @@ async fn creates_bun_launcher_as_marked_executable_regular_file() {
         "exec bun --no-install '{}' \"$@\"",
         script.display()
     )));
+    assert!(
+        !content.contains("shine env run"),
+        "no-env launcher must not depend on shine: {content}"
+    );
     let mode = fs::metadata(&launcher).await.unwrap().permissions().mode();
     assert!(mode & 0o111 != 0, "launcher must be executable");
 
@@ -597,8 +610,7 @@ async fn creates_bun_launcher_as_marked_executable_regular_file() {
 #[tokio::test]
 async fn bun_launcher_is_idempotent_and_refreshes_when_stale() {
     let (src, bin) = make_dirs().await;
-    let script = src.join("tool.ts");
-    fs::write(&script, b"console.log('hi')\n").await.unwrap();
+    let script = make_bun_script(&src).await;
 
     link(&bin, &[bun_spec(&script, "tool")], false).await;
     let again = link(&bin, &[bun_spec(&script, "tool")], false).await;
@@ -642,8 +654,7 @@ async fn bun_launcher_is_idempotent_and_refreshes_when_stale() {
 #[tokio::test]
 async fn bun_launcher_conflicts_with_user_file_unless_forced() {
     let (src, bin) = make_dirs().await;
-    let script = src.join("tool.ts");
-    fs::write(&script, b"console.log('hi')\n").await.unwrap();
+    let script = make_bun_script(&src).await;
     // A user's own file at the same command name, no managed marker.
     make_plain(&bin, "tool").await;
 
@@ -669,8 +680,7 @@ async fn bun_launcher_conflicts_with_user_file_unless_forced() {
 #[tokio::test]
 async fn unlink_removes_managed_bun_launcher_but_skips_user_file() {
     let (src, bin) = make_dirs().await;
-    let script = src.join("tool.ts");
-    fs::write(&script, b"console.log('hi')\n").await.unwrap();
+    let script = make_bun_script(&src).await;
     link(&bin, &[bun_spec(&script, "tool")], false).await;
     // A user's own regular file that must survive uninstall.
     make_plain(&bin, "user_tool").await;
@@ -696,36 +706,9 @@ async fn unlink_removes_managed_bun_launcher_but_skips_user_file() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn bun_launcher_without_env_has_no_shine_dependency() {
-    let (src, bin) = make_dirs().await;
-    let script = src.join("tool.ts");
-    fs::write(&script, b"console.log('hi')\n").await.unwrap();
-
-    link(&bin, &[bun_spec(&script, "tool")], false).await;
-
-    let content = fs::read_to_string(bin.join("tool")).await.unwrap();
-    assert!(
-        content.contains(&format!(
-            "exec bun --no-install '{}' \"$@\"",
-            script.display()
-        )),
-        "no-env launcher must run bun directly: {content}"
-    );
-    assert!(
-        !content.contains("shine env run"),
-        "no-env launcher must not depend on shine: {content}"
-    );
-
-    fs::remove_dir_all(&src).await.unwrap();
-    fs::remove_dir_all(&bin).await.unwrap();
-}
-
-#[cfg(unix)]
-#[tokio::test]
 async fn bun_launcher_with_env_wraps_shine_env_run() {
     let (src, bin) = make_dirs().await;
-    let script = src.join("tool.ts");
-    fs::write(&script, b"console.log('hi')\n").await.unwrap();
+    let script = make_bun_script(&src).await;
 
     let env = vec!["API_URL".to_string(), "SERVICE_TOKEN=API_TOKEN".to_string()];
     link(&bin, &[bun_spec_with_env(&script, "tool", env)], false).await;
@@ -766,21 +749,12 @@ async fn locked_bun_launcher_uses_fallback_and_refreshes_disabled_launcher() {
 #[tokio::test]
 async fn bun_launcher_refreshes_when_env_declaration_changes() {
     let (src, bin) = make_dirs().await;
-    let script = src.join("tool.ts");
-    fs::write(&script, b"console.log('hi')\n").await.unwrap();
+    let script = make_bun_script(&src).await;
 
     // Install with no env, then replace the same source with a declaration.
     link(&bin, &[bun_spec(&script, "tool")], false).await;
-    let changed = link(
-        &bin,
-        &[bun_spec_with_env(
-            &script,
-            "tool",
-            vec!["API_URL".to_string()],
-        )],
-        false,
-    )
-    .await;
+    let declared = [bun_spec_with_env(&script, "tool", vec!["API_URL".into()])];
+    let changed = link(&bin, &declared, false).await;
     assert_eq!(
         changed.overwritten.len(),
         1,
@@ -788,16 +762,7 @@ async fn bun_launcher_refreshes_when_env_declaration_changes() {
     );
 
     // Re-running with the same declaration is a no-op (byte-identical).
-    let again = link(
-        &bin,
-        &[bun_spec_with_env(
-            &script,
-            "tool",
-            vec!["API_URL".to_string()],
-        )],
-        false,
-    )
-    .await;
+    let again = link(&bin, &declared, false).await;
     assert_eq!(again.skipped.len(), 1);
     assert!(again.overwritten.is_empty());
 
@@ -848,36 +813,29 @@ async fn host_launchers_match_transaction_resources_and_capture_live_config() {
         env: vec!["SOURCE=TARGET".into()],
         render_target: Some("shell/demo/tool".into()),
     };
-    let installed = link_executables_with_host(&host, &bin, &[spec.clone()], false)
-        .await
-        .unwrap();
+    let link_and_check_resources = async |spec: &LinkSpec| {
+        let report = link_executables_with_host(&host, &bin, std::slice::from_ref(spec), false)
+            .await
+            .unwrap();
+        for resource in prepare_launcher_resources(&bin, spec) {
+            assert!(
+                prepared_launcher_resource_is_exact(&host, &resource)
+                    .await
+                    .unwrap()
+            );
+        }
+        report
+    };
+    let installed = link_and_check_resources(&spec).await;
     assert_eq!(
         installed.created,
         [command_path_for_name(&bin, &spec.link_name)]
     );
-    for resource in prepare_launcher_resources(&bin, &spec) {
-        assert!(
-            prepared_launcher_resource_is_exact(&host, &resource)
-                .await
-                .unwrap()
-        );
-    }
-    let again = link_executables_with_host(&host, &bin, &[spec.clone()], false)
-        .await
-        .unwrap();
+    let again = link_and_check_resources(&spec).await;
     assert_eq!(again.skipped, installed.created);
     spec.live_launch_config = Some(root.join("state-b"));
-    let refreshed = link_executables_with_host(&host, &bin, &[spec.clone()], false)
-        .await
-        .unwrap();
+    let refreshed = link_and_check_resources(&spec).await;
     assert_eq!(refreshed.overwritten, installed.created);
-    for resource in prepare_launcher_resources(&bin, &spec) {
-        assert!(
-            prepared_launcher_resource_is_exact(&host, &resource)
-                .await
-                .unwrap()
-        );
-    }
 }
 
 #[tokio::test]

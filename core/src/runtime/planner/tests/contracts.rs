@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn filesystem_review_user_destination_wins_even_inside_shine_or_with_rollback_suffix() {
-    let runtime = runtime(static_copy_app_snapshot());
+    let runtime = runtime(static_copy_app_snapshot(b"managed"));
     let context = runtime.context();
     let destination = context.shine_dir.join("shell-manifest.toml");
     let rollback_named_destination = context.home_dir.join("my.shine.rollback");
@@ -62,7 +62,7 @@ async fn invalid_operation_flag_combinations_are_rejected() {
 
 #[tokio::test]
 async fn force_keeps_unchanged_static_copy_on_the_ordinary_remove_action() {
-    let runtime = runtime(static_copy_app_snapshot());
+    let runtime = runtime(static_copy_app_snapshot(b"managed"));
     seed_static_copy_app(&runtime, b"managed", None).await;
     let request = AppPlanRequest {
         operation: LifecycleOperation::Uninstall,

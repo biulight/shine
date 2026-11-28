@@ -249,48 +249,40 @@ fn production_description(bytes: &[u8], link_runtime: LinkRuntime) -> Vec<String
 }
 
 #[test]
-fn native_description_reads_only_the_header_and_preserves_internal_blank_lines() {
-    let cases: &[(&str, &[&str])] = &[
+fn script_descriptions_read_only_the_header_and_preserve_internal_blank_lines() {
+    use LinkRuntime::{Bun, Native};
+    let cases: &[(LinkRuntime, &str, &[&str])] = &[
         (
+            Native,
             "#!/bin/bash\n# First line.\n# Second line.\n\nsome_command\n",
             &["First line.", "Second line."],
         ),
-        ("#!/bin/bash\nsome_command\n", &[]),
+        (Native, "#!/bin/bash\nsome_command\n", &[]),
         (
+            Native,
             "#!/bin/bash\n# First.\n#\n# Third.\n",
             &["First.", "", "Third."],
         ),
-        ("#!/bin/bash\n# First.\n#\n#\n", &["First."]),
-        ("", &[]),
-    ];
-    for &(script, expected) in cases {
-        assert_eq!(
-            production_description(script.as_bytes(), LinkRuntime::Native),
-            expected,
-            "{script:?}"
-        );
-    }
-}
-
-#[test]
-fn bun_description_reads_only_the_header_and_preserves_internal_blank_lines() {
-    let cases: &[(&str, &[&str])] = &[
+        (Native, "#!/bin/bash\n# First.\n#\n#\n", &["First."]),
+        (Native, "", &[]),
         (
+            Bun,
             "// First line.\n// Second line.\nconsole.log('hi')\n",
             &["First line.", "Second line."],
         ),
         (
+            Bun,
             "#!/usr/bin/env bun\n// Only line.\nexport const x = 1\n",
             &["Only line."],
         ),
-        ("// First.\n//\n// Third.\n", &["First.", "", "Third."]),
-        ("import { foo } from './foo'\n// not a header\n", &[]),
+        (Bun, "// First.\n//\n// Third.\n", &["First.", "", "Third."]),
+        (Bun, "import { foo } from './foo'\n// not a header\n", &[]),
     ];
-    for &(script, expected) in cases {
+    for &(runtime, script, expected) in cases {
         assert_eq!(
-            production_description(script.as_bytes(), LinkRuntime::Bun),
+            production_description(script.as_bytes(), runtime),
             expected,
-            "{script:?}"
+            "{runtime:?}: {script:?}"
         );
     }
 }

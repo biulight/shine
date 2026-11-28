@@ -1,6 +1,17 @@
 use super::*;
 use shine_core::runtime::{FileSystemHost, RealHost};
 
+async fn expect_waiting<F: Future>(operation: F) -> std::pin::Pin<Box<F>> {
+    let mut pending = Box::pin(operation);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut pending)
+            .await
+            .is_err(),
+        "policy operation completed while the store lock was held"
+    );
+    pending
+}
+
 #[tokio::test]
 async fn reviewed_policy_updates_recheck_revocation_and_preserve_unrelated_changes() {
     let dir = crate::test_support::make_temp_dir("shine-broker-contention").await;
@@ -24,17 +35,10 @@ async fn reviewed_policy_updates_recheck_revocation_and_preserve_unrelated_chang
         previous: Some(initial.candidate.clone()),
     };
 
-    let guard = RealHost
-        .acquire_operation_lock(&dir.join("ssh-secret-broker.lock"))
-        .await
-        .unwrap();
-    let apply = apply_remote_enrollment(&config, &plan);
-    tokio::pin!(apply);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), &mut apply)
-            .await
-            .is_err()
-    );
+    let lock_path = dir.join("ssh-secret-broker.lock");
+    let lock_store = async || RealHost.acquire_operation_lock(&lock_path).await.unwrap();
+    let guard = lock_store().await;
+    let apply = expect_waiting(apply_remote_enrollment(&config, &plan)).await;
     // Model a revocation that completed while the reviewed update was waiting.
     save_store(&config, &PolicyStore::default()).await.unwrap();
     drop(guard);
@@ -51,17 +55,8 @@ async fn reviewed_policy_updates_recheck_revocation_and_preserve_unrelated_chang
     let mut unrelated = initial.candidate.clone();
     unrelated.name = "unrelated".into();
     unrelated.ssh_target = "other".into();
-    let guard = RealHost
-        .acquire_operation_lock(&dir.join("ssh-secret-broker.lock"))
-        .await
-        .unwrap();
-    let apply = apply_remote_enrollment(&config, &plan);
-    tokio::pin!(apply);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), &mut apply)
-            .await
-            .is_err()
-    );
+    let guard = lock_store().await;
+    let apply = expect_waiting(apply_remote_enrollment(&config, &plan)).await;
     save_store(
         &config,
         &PolicyStore {
@@ -76,17 +71,8 @@ async fn reviewed_policy_updates_recheck_revocation_and_preserve_unrelated_chang
     let store = load_store(&config).await.unwrap();
     assert_eq!(store.policies, [plan.candidate.clone(), unrelated.clone()]);
 
-    let guard = RealHost
-        .acquire_operation_lock(&dir.join("ssh-secret-broker.lock"))
-        .await
-        .unwrap();
-    let remove = handle_policy_remove(&config, &plan.name);
-    tokio::pin!(remove);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), &mut remove)
-            .await
-            .is_err()
-    );
+    let guard = lock_store().await;
+    let remove = expect_waiting(handle_policy_remove(&config, &plan.name)).await;
     save_store(
         &config,
         &PolicyStore {
@@ -205,6 +191,22 @@ fn policy_diff_retains_serialized_cr_values_without_normalizing_approval_inputs(
     assert_eq!(plan.candidate, candidate);
 }
 
+fn plan_dev_api_update(
+    store: &PolicyStore,
+    ssh_target: &str,
+    snapshot: &WorkspaceSnapshot,
+) -> Result<RemoteEnrollmentPlan> {
+    let release = resolve_release(snapshot, &[], true)?;
+    plan_remote_enrollment(
+        store,
+        ssh_target,
+        snapshot,
+        &release,
+        &["bun".into(), "test".into()],
+        Some("dev-api"),
+    )
+}
+
 #[test]
 fn trusted_remote_update_replaces_one_allow_and_preserves_policy_identity() {
     let original = snapshot();
@@ -218,17 +220,7 @@ fn trusted_remote_update_replaces_one_allow_and_preserves_policy_identity() {
     changed.sources[0].contents = changed.sources[0]
         .contents
         .replace("[payload]", "NEW_TOKEN = true\n[payload]");
-    let release = resolve_release(&changed, &[], true).unwrap();
-
-    let plan = plan_remote_enrollment(
-        &store,
-        "dev",
-        &changed,
-        &release,
-        &["bun".into(), "test".into()],
-        Some("dev-api"),
-    )
-    .unwrap();
+    let plan = plan_dev_api_update(&store, "dev", &changed).unwrap();
 
     assert!(plan.previous.is_some());
     assert_eq!(plan.candidate.project, "friendly-api-name");
@@ -241,17 +233,8 @@ fn trusted_remote_update_replaces_one_allow_and_preserves_policy_identity() {
         ["API_TOKEN", "NEW_TOKEN", "NPM_TOKEN"]
     );
     assert!(plan.diff().unwrap().unwrap().contains("NEW_TOKEN"));
-    assert!(
-        plan_remote_enrollment(
-            &store,
-            "other-host",
-            &changed,
-            &release,
-            &["bun".into(), "test".into()],
-            Some("dev-api"),
-        )
-        .is_err()
-    );
+    let error = plan_dev_api_update(&store, "other-host", &changed).unwrap_err();
+    assert!(error.to_string().contains("not the current SSH target"));
 }
 
 #[tokio::test]
@@ -266,16 +249,7 @@ async fn trusted_remote_update_applies_once_and_rejects_a_stale_preview() {
     changed.sources[0].contents = changed.sources[0]
         .contents
         .replace("[payload]", "NEW_TOKEN = true\n[payload]");
-    let release = resolve_release(&changed, &[], true).unwrap();
-    let plan = plan_remote_enrollment(
-        &store,
-        "dev",
-        &changed,
-        &release,
-        &["bun".into(), "test".into()],
-        Some("dev-api"),
-    )
-    .unwrap();
+    let plan = plan_dev_api_update(&store, "dev", &changed).unwrap();
 
     apply_remote_enrollment(&config, &plan).await.unwrap();
     let loaded = load_store(&config).await.unwrap();

@@ -997,24 +997,18 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .unwrap();
         assert!(config_text.contains("theme = light:Shine Light,dark:dark_Alien Blood"));
 
-        let default_light_theme =
-            fs::read_to_string(dir.join(".config/ghostty/themes/Shine Light"))
-                .await
-                .unwrap();
+        let themes = dir.join(".config/ghostty/themes");
+        let read_theme = async |name: &str| fs::read_to_string(themes.join(name)).await.unwrap();
+        let default_light_theme = read_theme("Shine Light").await;
         assert!(default_light_theme.contains("background-image = /tmp/shine-light-wallpaper.png"));
 
-        let light_theme =
-            fs::read_to_string(dir.join(".config/ghostty/themes/light_Github Light Default"))
-                .await
-                .unwrap();
+        let light_theme = read_theme("light_Github Light Default").await;
         assert!(light_theme.contains("background = #ffffff"));
         assert!(light_theme.contains("palette = 4=#0969da"));
         assert!(light_theme.contains("cursor-color = #0969da"));
         assert!(light_theme.contains("background-image = /tmp/shine-light-wallpaper.png"));
 
-        let dark_theme = fs::read_to_string(dir.join(".config/ghostty/themes/dark_Alien Blood"))
-            .await
-            .unwrap();
+        let dark_theme = read_theme("dark_Alien Blood").await;
         assert!(dark_theme.contains("background = #0f1610"));
         assert!(dark_theme.contains("palette = 10=#18e000"));
         assert!(dark_theme.contains("cursor-color = #73fa91"));

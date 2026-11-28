@@ -42,16 +42,12 @@ describe("image tool options", () => {
     expect(overridden).toMatchObject({ quality: 90, width: 800, height: 600 });
   });
 
-  test("validates operation-specific arguments", () => {
-    expect(() =>
-      parseImageToolOptions("compress", ["--width", "10", "photo.jpg"], {}),
-    ).toThrow("only valid for img-resize");
-    expect(() => parseImageToolOptions("convert", ["photo.jpg"], {})).toThrow(
-      "requires --format",
-    );
-    expect(() =>
-      parseImageToolOptions("compress", ["--quality", "101", "photo.jpg"], {}),
-    ).toThrow("between 1 and 100");
+  test.each([
+    ["compress", ["--width", "10", "photo.jpg"], "only valid for img-resize"],
+    ["convert", ["photo.jpg"], "requires --format"],
+    ["compress", ["--quality", "101", "photo.jpg"], "between 1 and 100"],
+  ] as const)("%s rejects %j", (operation, args, error) => {
+    expect(() => parseImageToolOptions(operation, args, {})).toThrow(error);
   });
 });
 
@@ -113,21 +109,16 @@ async function writeImagePair(directory: string, jpegName: string) {
 }
 
 describe("image processing", () => {
-  test("keeps same-format skips for case-aliased source names", async () => {
+  test.each([
+    ["JPEG", 0],
+    ["PNG", 1],
+  ] as const)("forced in-place conversion preserves a .JPG containing %s", async (format, exitCode) => {
     const directory = await temporaryDirectory();
     const input = join(directory, "photo.JPG");
-    const original = await new Bun.Image(PNG_1X1).jpeg().bytes();
+    const original = format === "JPEG" ? await new Bun.Image(PNG_1X1).jpeg().bytes() : PNG_1X1;
     await writeFile(input, original);
-    expect(await runImageTool("convert", ["--format", "jpg", "--force", input])).toBe(0);
+    expect(await runImageTool("convert", ["--format", "jpg", "--force", input])).toBe(exitCode);
     expect(await readFile(input)).toEqual(Buffer.from(original));
-  });
-
-  test("rejects an aliased in-place conversion when the extension mislabels the format", async () => {
-    const directory = await temporaryDirectory();
-    const input = join(directory, "photo.JPG");
-    await writeFile(input, PNG_1X1);
-    expect(await runImageTool("convert", ["--format", "jpg", "--force", input])).toBe(1);
-    expect(await readFile(input)).toEqual(Buffer.from(PNG_1X1));
   });
 
   test("preserves every input when a forced conversion targets a case alias", async () => {

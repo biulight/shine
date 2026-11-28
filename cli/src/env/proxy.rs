@@ -1126,6 +1126,13 @@ mod tests {
         )
         .await
         .unwrap();
+        assert!(
+            load_manifest(config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .contains_key("demo")
+        );
         config
     }
 
@@ -1193,19 +1200,14 @@ mod tests {
         let mut edited = tokio::fs::read(&path).await.unwrap();
         edited.extend_from_slice(b"REM custom setting\r\n");
         tokio::fs::write(&path, &edited).await.unwrap();
+        let before = proxy_state_bytes(&config).await;
         for dry in [true, false] {
             let error = uninstall_reviewed(&config, "demo", true, Some((dry, true)))
                 .await
                 .unwrap_err();
             assert!(error.to_string().contains("edited"));
             assert_eq!(tokio::fs::read(&path).await.unwrap(), edited);
-            assert!(
-                load_manifest(config.shine_dir())
-                    .await
-                    .unwrap()
-                    .entries
-                    .contains_key("demo")
-            );
+            assert_eq!(proxy_state_bytes(&config).await, before);
         }
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
@@ -1223,18 +1225,11 @@ mod tests {
                 tokio::fs::write(&target, MARKER).await.unwrap();
             }
             tokio::fs::symlink(&target, &launcher).await.unwrap();
-            let before = tokio::fs::read(config.config_path()).await.unwrap();
+            let before = proxy_state_bytes(&config).await;
             assert!(uninstall_for_platform(&config, "demo", true).await.is_err());
-            assert_eq!(tokio::fs::read(config.config_path()).await.unwrap(), before);
             assert_eq!(tokio::fs::read_link(launcher).await.unwrap(), target);
             assert!(config.bin_dir().join("demo").is_file());
-            assert!(
-                load_manifest(config.shine_dir())
-                    .await
-                    .unwrap()
-                    .entries
-                    .contains_key("demo")
-            );
+            assert_eq!(proxy_state_bytes(&config).await, before);
         }
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }

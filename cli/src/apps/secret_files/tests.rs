@@ -198,6 +198,12 @@ fn private_replacement(path: &Path, bytes: impl AsRef<[u8]>) {
         .unwrap();
 }
 
+fn replace_private_file(target: &Path, bytes: &[u8]) {
+    let replacement = target.with_file_name("replacement");
+    private_replacement(&replacement, bytes);
+    fs::rename(replacement, target).unwrap();
+}
+
 fn request(operation: LifecycleOperation) -> AppPlanRequest {
     AppPlanRequest {
         operation,
@@ -330,9 +336,7 @@ async fn missing_applied_identity_blocks_creation_and_update_recovery() {
             );
             let target = root.join("service/secrets/password");
             if replaced {
-                let replacement = root.join("service/secrets/replacement");
-                private_replacement(&replacement, "new");
-                fs::rename(replacement, &target).unwrap();
+                replace_private_file(&target, b"new");
             }
             let before = provider.observe(&target).unwrap();
             let journal = provider.journal();
@@ -874,9 +878,7 @@ async fn recovery_preserves_replaced_destination() {
     provider.fail_receipt.store(true, Ordering::SeqCst);
     assert!(install(&updated, false).await.is_err());
     let target = root.join("service/secrets/password");
-    let replacement = root.join("service/secrets/replacement");
-    private_replacement(&replacement, "new");
-    fs::rename(replacement, &target).unwrap();
+    replace_private_file(&target, b"new");
     let plan = updated.plan_app_operation_recovery().await.unwrap();
     assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
     assert!(root.join(".shine/app-secret-operation.json").exists());
@@ -958,9 +960,7 @@ async fn initial_secret_receipt_failure_recovers_only_the_created_file() {
         assert!(install(&runtime, false).await.is_err());
         let target = root.join("service/secrets/password");
         if replaced {
-            let replacement = root.join("service/secrets/replacement");
-            private_replacement(&replacement, "new");
-            fs::rename(replacement, &target).unwrap();
+            replace_private_file(&target, b"new");
         }
         let plan = runtime.plan_app_operation_recovery().await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan);

@@ -41,58 +41,46 @@ mod tests {
 
     #[test]
     fn strips_line_and_block_comments() {
-        for (input, marker) in [
-            (b"{\n  \"key\": \"value\" // comment\n}".as_slice(), "//"),
-            (b"{ /* block */ \"key\": \"value\" }", "/*"),
+        for input in [
+            "{\n  \"key\": \"value\" // comment\n}",
+            "{ /* block */ \"key\": \"value\" }",
         ] {
-            let out = apply(input).unwrap();
-            assert!(
-                !std::str::from_utf8(&out).unwrap().contains(marker),
-                "{marker}"
+            assert_eq!(
+                round_trip(input.as_bytes()),
+                serde_json::json!({"key": "value"}),
+                "{input}"
             );
-            let _: serde_json::Value = serde_json::from_slice(&out).unwrap();
         }
     }
 
     #[test]
-    fn preserves_nested_content() {
-        let input = b"{ \"mirrors\": [\"https://example.com\"] }";
-        let v = round_trip(input);
-        assert_eq!(v["mirrors"][0], "https://example.com");
+    fn preserves_nested_mirror_urls_with_and_without_comments() {
+        for (input, key, url) in [
+            (
+                r#"{ "mirrors": ["https://example.com"] }"#,
+                "mirrors",
+                "https://example.com",
+            ),
+            (
+                r#"{ "registry-mirrors": [
+                // tencent mirror
+                "https://mirror.ccs.tencentyun.com"
+            ] }"#,
+                "registry-mirrors",
+                "https://mirror.ccs.tencentyun.com",
+            ),
+        ] {
+            assert_eq!(round_trip(input.as_bytes())[key][0], url);
+        }
     }
 
     #[test]
-    fn docker_daemon_example() {
-        let input = br#"{
-  "registry-mirrors": [
-    // tencent mirror
-    "https://mirror.ccs.tencentyun.com"
-  ]
-}"#;
-        let v = round_trip(input);
-        assert_eq!(
-            v["registry-mirrors"][0],
-            "https://mirror.ccs.tencentyun.com"
-        );
-    }
-
-    #[test]
-    fn output_ends_with_newline() {
-        let out = apply(b"{\"x\": 1}").unwrap();
-        assert_eq!(out.last(), Some(&b'\n'));
-    }
-
-    #[test]
-    fn deterministic_output() {
-        let input = b"{ \"b\": 2, \"a\": 1 }";
-        let out1 = apply(input).unwrap();
-        let out2 = apply(input).unwrap();
-        assert_eq!(out1, out2);
-    }
-
-    #[test]
-    fn invalid_json_after_strip_errors() {
-        assert!(apply(b"{ invalid }").is_err());
+    fn output_bytes_are_deterministic_and_end_with_a_newline() {
+        for input in [r#"{"x": 1}"#, r#"{ "b": 2, "a": 1 }"#] {
+            let bytes = apply(input.as_bytes()).unwrap();
+            assert_eq!(bytes.last(), Some(&b'\n'));
+            assert_eq!(apply(input.as_bytes()).unwrap(), bytes);
+        }
     }
 
     #[test]
@@ -149,8 +137,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_malformed_json5_escapes_and_numbers() {
+    fn rejects_malformed_objects_escapes_and_numbers() {
         for input in [
+            "{ invalid }",
             r#""\x4""#,
             r#""\xGG""#,
             r#""\01""#,

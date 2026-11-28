@@ -92,6 +92,16 @@ fn request() -> AppRefreshPlanRequest {
         input_versions: Default::default(),
     }
 }
+async fn refresh(
+    runtime: &CoreRuntime<InMemoryHost>,
+    approval: &PlanApprovalV1,
+    interaction: &mut Interaction,
+) -> Result<AppLifecycleReport> {
+    runtime
+        .refresh_app_generators_approved(request(), approval, &mut NullObserver, interaction)
+        .await
+}
+
 async fn expect_pending<F: Future>(future: F) -> Pin<Box<F>> {
     let mut future = Box::pin(future);
     assert!(
@@ -132,18 +142,11 @@ async fn refresh_continues_after_file_failure_saves_once_and_runs_hooks_after_re
     }));
     queue_successful_output(runtime.host(), b"next");
     queue_successful_output(runtime.host(), b"");
-    let request = request();
-    let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
+    let plan = runtime.plan_app_refresh(request()).await.unwrap();
     assert!(plan.is_ready(), "{plan:#?}");
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let since = runtime.host().operations().len();
-    let report = runtime
-        .refresh_app_generators_approved(
-            request,
-            &approval,
-            &mut NullObserver,
-            &mut Interaction::new(true),
-        )
+    let report = refresh(&runtime, &approval, &mut Interaction::new(true))
         .await
         .unwrap();
     assert_eq!(
@@ -197,8 +200,7 @@ async fn refresh_admin_denial_and_failed_final_receipt_do_not_run_hooks() {
         let runtime = runtime(deny).await;
         let receipt = runtime.context().shine_dir.join("app-manifest.toml");
         let before = runtime.host().read(&receipt).await.unwrap();
-        let request = request();
-        let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
+        let plan = runtime.plan_app_refresh(request()).await.unwrap();
         assert!(plan.is_ready(), "{plan:#?}");
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         if !deny {
@@ -210,13 +212,7 @@ async fn refresh_admin_denial_and_failed_final_receipt_do_not_run_hooks() {
         let since = runtime.host().operations().len();
         let mut interaction = Interaction::new(!deny);
         assert!(
-            runtime
-                .refresh_app_generators_approved(
-                    request,
-                    &approval,
-                    &mut NullObserver,
-                    &mut interaction
-                )
+            refresh(&runtime, &approval, &mut interaction)
                 .await
                 .is_err()
         );
@@ -315,13 +311,7 @@ async fn refresh_selection_preserves_declared_order_and_requires_exact_receipt_o
             queue_successful_output(runtime.host(), b"next");
         }
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-        let report = runtime
-            .refresh_app_generators_approved(
-                request(),
-                &approval,
-                &mut NullObserver,
-                &mut Interaction::new(true),
-            )
+        let report = refresh(&runtime, &approval, &mut Interaction::new(true))
             .await
             .unwrap();
         assert_eq!(
@@ -368,16 +358,9 @@ async fn refresh_revalidates_receipts_after_waiting_for_the_lifecycle_lock() {
     let plan = runtime.plan_app_refresh(request()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let guard = runtime.acquire_app_lifecycle_operation().await.unwrap();
-    let mut observer = NullObserver;
     let mut interaction = Interaction::new(true);
     let since = runtime.host().operations().len();
-    let pending = expect_pending(runtime.refresh_app_generators_approved(
-        request(),
-        &approval,
-        &mut observer,
-        &mut interaction,
-    ))
-    .await;
+    let pending = expect_pending(refresh(&runtime, &approval, &mut interaction)).await;
     assert_eq!(
         runtime.host().operations().len(),
         since,
@@ -412,15 +395,8 @@ async fn refresh_preserves_unrelated_receipts_added_while_waiting_for_the_lock()
     let plan = runtime.plan_app_refresh(request()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let guard = runtime.acquire_app_lifecycle_operation().await.unwrap();
-    let mut observer = NullObserver;
     let mut interaction = Interaction::new(true);
-    let pending = expect_pending(runtime.refresh_app_generators_approved(
-        request(),
-        &approval,
-        &mut observer,
-        &mut interaction,
-    ))
-    .await;
+    let pending = expect_pending(refresh(&runtime, &approval, &mut interaction)).await;
     let mut manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
         .await
         .unwrap();
@@ -534,15 +510,8 @@ async fn refresh_waiting_on_lock_never_recovers_an_interrupted_operation_implici
         let receipt = runtime.context().shine_dir.join("app-manifest.toml");
         let before = runtime.host().read(&receipt).await.unwrap();
         let guard = runtime.acquire_app_lifecycle_operation().await.unwrap();
-        let mut observer = NullObserver;
         let mut interaction = Interaction::new(true);
-        let pending = expect_pending(runtime.refresh_app_generators_approved(
-            request(),
-            &approval,
-            &mut observer,
-            &mut interaction,
-        ))
-        .await;
+        let pending = expect_pending(refresh(&runtime, &approval, &mut interaction)).await;
         runtime.host().put_file(&journal_path, journal.clone());
         runtime.host().put_file(&resource, content.clone());
         let since = runtime.host().operations().len();

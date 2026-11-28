@@ -889,21 +889,23 @@ esac
         }
         command.output().unwrap()
     };
+    let assert_no_staging = || {
+        for entry in fs::read_dir(output.parent().unwrap()).unwrap() {
+            let name = entry.unwrap().file_name();
+            assert!(
+                !name.to_string_lossy().starts_with(".shine-identity-"),
+                "leftover staging file: {name:?}"
+            );
+        }
+    };
     assert!(!run(false, "success").status.success());
     assert_eq!(fs::read(&output).unwrap(), original);
+    assert_no_staging();
     for mode in ["fail", "invalid"] {
         let failed = run(true, mode);
         assert!(!failed.status.success(), "{failed:?}");
         assert_eq!(fs::read(&output).unwrap(), original);
-        assert!(
-            !fs::read_dir(output.parent().unwrap())
-                .unwrap()
-                .any(|entry| entry
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".shine-identity-"))
-        );
+        assert_no_staging();
     }
     Fixture::assert_ok(run(true, "success"));
     assert_eq!(
@@ -914,13 +916,5 @@ esac
         fs::metadata(&output).unwrap().permissions().mode() & 0o777,
         0o600
     );
-    assert!(
-        !fs::read_dir(output.parent().unwrap())
-            .unwrap()
-            .any(|entry| entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".shine-identity-"))
-    );
+    assert_no_staging();
 }

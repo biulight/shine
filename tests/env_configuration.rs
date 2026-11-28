@@ -1392,6 +1392,14 @@ fn linked_and_special_targets_are_rejected_and_saved_files_are_private() {
 
 #[test]
 fn proxy_toggle_reports_write_scope_and_effective_project_override() {
+    let assert_effective_state = |text: &str, enabled: bool| {
+        let state = if enabled { "enabled" } else { "disabled" };
+        assert!(
+            text.contains(&format!("Current effective state: {state}")),
+            "{text}"
+        );
+        state
+    };
     for (action, global_enabled, project_enabled) in
         [("disable", false, true), ("enable", true, false)]
     {
@@ -1404,15 +1412,7 @@ fn proxy_toggle_reports_write_scope_and_effective_project_override() {
         let text = f.quiet_stdout(true, &["proxy", action, "demo"]);
         assert!(text.contains("in global config"), "{text}");
         assert_display_path(&text);
-        let effective = if project_enabled {
-            "enabled"
-        } else {
-            "disabled"
-        };
-        assert!(
-            text.contains(&format!("Current effective state: {effective}")),
-            "{text}"
-        );
+        assert_effective_state(&text, project_enabled);
         assert_eq!(f.read("project/shine.config.toml"), project);
         let global: toml::Value = toml::from_str(&f.read("state/config.toml")).unwrap();
         // enabled=true can be represented by the default, so decode through the value's default.
@@ -1427,15 +1427,7 @@ fn proxy_toggle_reports_write_scope_and_effective_project_override() {
         let text = f.ok(true, &["proxy", action, "demo", "--project"]);
         assert!(text.contains("in project config"), "{text}");
         assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
-        let effective = if global_enabled {
-            "enabled"
-        } else {
-            "disabled"
-        };
-        assert!(
-            text.contains(&format!("Current effective state: {effective}")),
-            "{text}"
-        );
+        let effective = assert_effective_state(&text, global_enabled);
         assert_eq!(f.read("state/config.toml"), global_bytes);
         let list = f.ok(true, &["proxy", "list"]);
         assert!(

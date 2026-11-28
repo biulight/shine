@@ -301,6 +301,19 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
         config
     }
 
+    async fn assert_generator_runs(config: &Config, generator: &str, count: usize) {
+        let path = config
+            .presets_dir()
+            .join("app/sample")
+            .join(format!("{generator}.runs"));
+        assert_eq!(
+            fs::read(&path).await.unwrap(),
+            vec![b'x'; count],
+            "{}",
+            path.display()
+        );
+    }
+
     async fn write_generator(app_dir: &Path, stem: &str) {
         let path = app_dir.join(format!("{stem}.sh"));
         fs::write(
@@ -349,12 +362,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
 
         let app_dir = config.presets_dir().join("app/sample");
         let dest = root.join("dest/first.txt");
-        assert_eq!(
-            fs::read_to_string(app_dir.join("first.runs"))
-                .await
-                .unwrap(),
-            "x"
-        );
+        assert_generator_runs(&config, "first", 1).await;
         fs::write(app_dir.join("first.payload"), b"first-v2\n")
             .await
             .unwrap();
@@ -380,12 +388,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
         .await
         .unwrap();
         assert_eq!(report.updated, 0);
-        assert_eq!(
-            fs::read_to_string(app_dir.join("first.runs"))
-                .await
-                .unwrap(),
-            "x"
-        );
+        assert_generator_runs(&config, "first", 1).await;
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v1\n");
 
         crate::trust::grant_current_for_test(&config, "app/sample").await;
@@ -393,12 +396,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             .await
             .unwrap();
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v2\n");
-        assert_eq!(
-            fs::read_to_string(app_dir.join("first.runs"))
-                .await
-                .unwrap(),
-            "xx"
-        );
+        assert_generator_runs(&config, "first", 2).await;
         fs::remove_dir_all(root).await.unwrap();
     }
 
@@ -426,13 +424,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
                 .await
                 .unwrap();
         assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
-        assert_eq!(
-            fs::read_to_string(config.presets_dir().join("app/sample/first.runs"))
-                .await
-                .unwrap(),
-            "x",
-            "read-only status must not execute an automatic generator"
-        );
+        assert_generator_runs(&config, "first", 1).await;
         fs::remove_dir_all(root).await.unwrap();
     }
 
@@ -456,12 +448,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             Some(b"first-v1\n".as_slice())
         );
         assert!(!root.join("dest/first.txt").exists());
-        assert_eq!(
-            fs::read_to_string(config.presets_dir().join("app/sample/first.runs"))
-                .await
-                .unwrap(),
-            "x"
-        );
+        assert_generator_runs(&config, "first", 1).await;
         fs::remove_dir_all(root).await.unwrap();
     }
 
@@ -485,7 +472,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             .await
             .unwrap();
         assert_eq!(files[0].status, FileStatus::GeneratorTrustRequired);
-        assert_eq!(fs::read(app_dir.join("first.runs")).await.unwrap(), b"x");
+        assert_generator_runs(&config, "first", 1).await;
         crate::trust::grant_current_for_test(&config, "app/sample").await;
         fs::write(app_dir.join("first.sh"), b"exit 99\n")
             .await
@@ -497,18 +484,14 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             files[0].desired_content.as_deref(),
             Some(b"first-v1\n".as_slice())
         );
-        assert_eq!(fs::read(app_dir.join("first.runs")).await.unwrap(), b"xx");
+        assert_generator_runs(&config, "first", 2).await;
         fs::remove_dir_all(root).await.unwrap();
     }
 
     #[tokio::test]
     async fn explicit_generator_evaluation_updates_status_without_writing_destination() {
         let root = crate::test_support::make_temp_dir("shine-generator-evaluation").await;
-        let config = write_fixture(&root, false).await;
-        crate::trust::grant_current_for_test(&config, "app/sample").await;
-        handle_install_approved(&config, Some("sample"), false, false, true)
-            .await
-            .unwrap();
+        let config = installed_fixture(&root, false).await;
         let app_dir = config.presets_dir().join("app/sample");
         let destination = root.join("dest/first.txt");
         fs::write(app_dir.join("first.payload"), b"first-v2\n")
@@ -533,13 +516,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             ["app_manual_refresh_required"]
         );
         assert_eq!(fs::read(&destination).await.unwrap(), b"first-v1\n");
-        assert_eq!(
-            fs::read_to_string(app_dir.join("first.runs"))
-                .await
-                .unwrap(),
-            "xx",
-            "explicit evaluation must execute the selected generator exactly once"
-        );
+        assert_generator_runs(&config, "first", 2).await;
         fs::remove_dir_all(root).await.unwrap();
     }
 
@@ -571,13 +548,7 @@ generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity
             .unwrap();
         assert_eq!(fs::read(&first_dest).await.unwrap(), b"first-v2\n");
         assert_eq!(fs::read(&second_dest).await.unwrap(), b"second-v1\n");
-        assert_eq!(
-            fs::read_to_string(app_dir.join("second.runs"))
-                .await
-                .unwrap(),
-            "x",
-            "single-file refresh must not run other generators"
-        );
+        assert_generator_runs(&config, "second", 1).await;
         fs::remove_dir_all(root).await.unwrap();
     }
 

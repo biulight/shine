@@ -172,7 +172,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    async fn write_external_sample_app(dir: &std::path::Path, body: &[u8]) {
+    pub(super) async fn write_external_sample_app(dir: &std::path::Path, body: &[u8]) {
         write_external_sample_app_with_extra(dir, body, None).await;
     }
 
@@ -231,12 +231,14 @@ mod tests {
     }
 
     #[cfg(unix)]
-    async fn write_external_sample_app_with_post_upgrade(
+    async fn create_sample_app_with_upgrade_hook(
         dir: &std::path::Path,
-        body: &[u8],
-        script_path: &std::path::Path,
-        marker_path: &std::path::Path,
-    ) {
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let script_path = dir.join("hook.sh");
+        let marker_path = dir.join("hook-ran");
+        fs::write(&script_path, "#!/bin/sh\nprintf x >> \"$1\"\n")
+            .await
+            .unwrap();
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();
         let manifest = format!(
@@ -247,14 +249,11 @@ mod tests {
         fs::write(cat_dir.join("shine.toml"), manifest)
             .await
             .unwrap();
-        fs::write(cat_dir.join("daemon.jsonc"), body).await.unwrap();
-    }
-
-    #[cfg(unix)]
-    async fn write_hook_script(path: &std::path::Path) {
-        fs::write(path, "#!/bin/sh\nprintf x >> \"$1\"\n")
+        let source = cat_dir.join("daemon.jsonc");
+        fs::write(&source, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n")
             .await
             .unwrap();
+        (marker_path, source)
     }
 
     #[tokio::test]
@@ -322,7 +321,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    async fn temp_home() -> (TestEnvironmentGuard, PathBuf) {
+    pub(super) async fn temp_home() -> (TestEnvironmentGuard, PathBuf) {
         let guard = env_lock();
         let dir = make_temp_dir().await;
         // SAFETY: the caller keeps the environment guard until the test finishes.
@@ -414,11 +413,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test(flavor = "current_thread")]
-    async fn targeted_upgrade_does_not_mutate_other_app_categories() {
-        let (_guard, dir) = temp_home().await;
-
-        write_external_sample_app(&dir, b"{\n  \"proxy\": \"one\"\n}\n").await;
+    async fn write_other_app(dir: &std::path::Path) -> PathBuf {
         let other_dir = dir.join("presets/app/other");
         fs::create_dir_all(&other_dir).await.unwrap();
         fs::write(
@@ -430,6 +425,16 @@ mod tests {
         fs::write(other_dir.join("config.json"), b"{\"value\":1}\n")
             .await
             .unwrap();
+        other_dir
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn targeted_upgrade_does_not_mutate_other_app_categories() {
+        let (_guard, dir) = temp_home().await;
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"one\"\n}\n").await;
+        let other_dir = write_other_app(&dir).await;
 
         let config = external_app_config(&dir).await;
         handle_install_approved(&config, Some("sample"), false, false, true)
@@ -474,17 +479,7 @@ mod tests {
         let (_guard, dir) = temp_home().await;
 
         write_external_sample_app(&dir, b"{\"value\":\"initial\"}\n").await;
-        let other_dir = dir.join("presets/app/other");
-        fs::create_dir_all(&other_dir).await.unwrap();
-        fs::write(
-            other_dir.join("shine.toml"),
-            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
-        )
-        .await
-        .unwrap();
-        fs::write(other_dir.join("config.json"), b"{\"value\":1}\n")
-            .await
-            .unwrap();
+        let other_dir = write_other_app(&dir).await;
 
         let sample_destination = dir.join(".config/sample/daemon.json");
         fs::create_dir_all(sample_destination.parent().unwrap())
@@ -633,16 +628,7 @@ mod tests {
     async fn upgrade_runs_post_upgrade_hook_after_file_update_when_allowed() {
         let (_guard, dir) = temp_home().await;
 
-        let script = dir.join("hook.sh");
-        let marker = dir.join("hook-ran");
-        write_hook_script(&script).await;
-        write_external_sample_app_with_post_upgrade(
-            &dir,
-            b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
-            &script,
-            &marker,
-        )
-        .await;
+        let (marker, source) = create_sample_app_with_upgrade_hook(&dir).await;
         let config = external_app_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
@@ -653,13 +639,12 @@ mod tests {
             !marker.exists(),
             "post-upgrade hook must not run during install"
         );
-        write_external_sample_app_with_post_upgrade(
-            &dir,
+        fs::write(
+            &source,
             b"{\n  \"proxy\": \"@@PROXY_HOST@@\",\n  \"updated\": true\n}\n",
-            &script,
-            &marker,
         )
-        .await;
+        .await
+        .unwrap();
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         let mut sep = crate::output::SectionSeparator::new();
@@ -686,16 +671,7 @@ mod tests {
     async fn upgrade_does_not_run_post_upgrade_hook_when_unchanged() {
         let (_guard, dir) = temp_home().await;
 
-        let script = dir.join("hook.sh");
-        let marker = dir.join("hook-ran");
-        write_hook_script(&script).await;
-        write_external_sample_app_with_post_upgrade(
-            &dir,
-            b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
-            &script,
-            &marker,
-        )
-        .await;
+        let (marker, _) = create_sample_app_with_upgrade_hook(&dir).await;
         let config = external_app_config(&dir).await;
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
@@ -715,28 +691,18 @@ mod tests {
     async fn external_post_upgrade_hook_is_skipped_without_opt_in() {
         let (_guard, dir) = temp_home().await;
 
-        let script = dir.join("hook.sh");
-        let marker = dir.join("hook-ran");
-        write_hook_script(&script).await;
-        write_external_sample_app_with_post_upgrade(
-            &dir,
-            b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
-            &script,
-            &marker,
-        )
-        .await;
+        let (marker, source) = create_sample_app_with_upgrade_hook(&dir).await;
         let config = external_app_config(&dir).await;
 
         handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
-        write_external_sample_app_with_post_upgrade(
-            &dir,
+        fs::write(
+            &source,
             b"{\n  \"proxy\": \"@@PROXY_HOST@@\",\n  \"updated\": true\n}\n",
-            &script,
-            &marker,
         )
-        .await;
+        .await
+        .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
         let error =

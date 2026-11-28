@@ -36,15 +36,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_macos() {
-        let result = detect_os_id_from("macos", None).unwrap();
-        assert_eq!(result, "macos");
-    }
-
-    #[test]
-    fn detects_windows() {
-        let result = detect_os_id_from("windows", None).unwrap();
-        assert_eq!(result, "windows");
+    fn non_linux_targets_use_the_platform_name() {
+        for os in ["macos", "windows"] {
+            assert_eq!(detect_os_id_from(os, None).unwrap(), os);
+        }
     }
 
     #[test]
@@ -56,6 +51,8 @@ mod tests {
             ),
             ("ID=\"ubuntu\"\n", "ubuntu"),
             ("ID=Debian\n", "debian"),
+            ("ID=arch\n", "arch"),
+            ("ID=manjaro\nID_LIKE=arch\n", "manjaro"),
         ] {
             assert_eq!(
                 detect_os_id_from("linux", Some(os_release)).unwrap(),
@@ -66,26 +63,10 @@ mod tests {
     }
 
     #[test]
-    fn detects_arch_without_promoting_derivatives() {
-        assert_eq!(
-            detect_os_id_from("linux", Some("ID=arch\n")).unwrap(),
-            "arch"
-        );
-        assert_eq!(
-            detect_os_id_from("linux", Some("ID=manjaro\nID_LIKE=arch\n")).unwrap(),
-            "manjaro"
-        );
-    }
-
-    #[test]
-    fn errors_on_linux_without_os_release() {
-        let err = detect_os_id_from("linux", None).unwrap_err();
-        assert!(err.to_string().contains("os-release"));
-    }
-
-    #[test]
-    fn errors_on_unsupported_platform() {
-        let err = detect_os_id_from("freebsd", None).unwrap_err();
-        assert!(err.to_string().contains("freebsd"));
+    fn detection_errors_identify_the_missing_release_or_unsupported_platform() {
+        for (os, diagnostic) in [("linux", "os-release"), ("freebsd", "freebsd")] {
+            let err = detect_os_id_from(os, None).unwrap_err();
+            assert!(err.to_string().contains(diagnostic), "{os}: {err}");
+        }
     }
 }

@@ -410,112 +410,77 @@ mod tests {
         assert!(err.to_string().contains("shine binary"));
     }
 
-    #[test]
-    fn asset_file_name_uses_versioned_target_name_for_stable() {
-        let release = GithubRelease {
-            tag_name: "v1.2.3".to_string(),
+    fn release_with_assets(tag: &str, assets: &[(&str, &str)]) -> GithubRelease {
+        GithubRelease {
+            tag_name: tag.into(),
             body: String::new(),
-            assets: vec![],
-        };
-        assert_eq!(
-            asset_file_name(&release, ReleaseChannel::Stable, "darwin-aarch64").unwrap(),
-            "shine-v1.2.3-darwin-aarch64.tar.gz"
-        );
-    }
-
-    #[test]
-    fn asset_file_name_uses_fixed_target_name_for_preview() {
-        let release = GithubRelease {
-            tag_name: "preview".to_string(),
-            body: String::new(),
-            assets: vec![],
-        };
-        assert_eq!(
-            asset_file_name(&release, ReleaseChannel::Preview, "linux-x86_64").unwrap(),
-            "shine-preview-linux-x86_64.tar.gz"
-        );
-        assert_eq!(
-            asset_file_name(&release, ReleaseChannel::Preview, "windows-x86_64").unwrap(),
-            "shine-preview-windows-x86_64.tar.gz"
-        );
-    }
-
-    #[test]
-    fn find_release_asset_selects_matching_stable_asset() {
-        let release = GithubRelease {
-            tag_name: "v1.2.3".to_string(),
-            body: String::new(),
-            assets: vec![
-                GithubReleaseAsset {
-                    name: "shine-v1.2.3-linux-x86_64.tar.gz".to_string(),
-                    browser_download_url: "https://example.test/linux".to_string(),
-                },
-                GithubReleaseAsset {
-                    name: "shine-v1.2.3-darwin-aarch64.tar.gz".to_string(),
-                    browser_download_url: "https://example.test/macos".to_string(),
-                },
-            ],
-        };
-
-        let asset =
-            find_release_asset(&release, ReleaseChannel::Stable, "macos", "aarch64").unwrap();
-        assert_eq!(asset.release_tag, "v1.2.3");
-        assert_eq!(asset.target, "darwin-aarch64");
-        assert_eq!(asset.download_url, "https://example.test/macos");
-    }
-
-    #[test]
-    fn find_release_asset_selects_matching_preview_asset_without_semver_tag() {
-        let release = GithubRelease {
-            tag_name: "preview".to_string(),
-            body: String::new(),
-            assets: vec![GithubReleaseAsset {
-                name: "shine-preview-linux-x86_64.tar.gz".to_string(),
-                browser_download_url: "https://example.test/preview".to_string(),
-            }],
-        };
-
-        let asset =
-            find_release_asset(&release, ReleaseChannel::Preview, "linux", "x86_64").unwrap();
-        assert_eq!(asset.release_tag, "preview");
-        assert_eq!(asset.target, "linux-x86_64");
-        assert_eq!(asset.download_url, "https://example.test/preview");
-    }
-
-    #[test]
-    fn find_release_asset_selects_matching_windows_architecture() {
-        let platforms = [
-            ("x86_64", "https://example.test/windows"),
-            ("aarch64", "https://example.test/windows-arm64"),
-        ];
-        let release = GithubRelease {
-            tag_name: "v1.2.3".to_string(),
-            body: String::new(),
-            assets: platforms
-                .into_iter()
-                .map(|(arch, url)| GithubReleaseAsset {
-                    name: format!("shine-v1.2.3-windows-{arch}.tar.gz"),
-                    browser_download_url: url.to_string(),
+            assets: assets
+                .iter()
+                .map(|&(name, path)| GithubReleaseAsset {
+                    name: name.into(),
+                    browser_download_url: format!("https://example.test/{path}"),
                 })
                 .collect(),
-        };
-        for (arch, url) in platforms {
-            let asset =
-                find_release_asset(&release, ReleaseChannel::Stable, "windows", arch).unwrap();
-            assert_eq!(asset.release_tag, "v1.2.3");
-            assert_eq!(asset.target, format!("windows-{arch}"));
-            assert_eq!(asset.download_url, url);
+        }
+    }
+
+    fn assert_selected_assets(
+        release: &GithubRelease,
+        channel: ReleaseChannel,
+        cases: &[(&str, &str, &str, &str)],
+    ) {
+        for &(os, arch, target, path) in cases {
+            let asset = find_release_asset(release, channel, os, arch).unwrap();
+            assert_eq!(asset.release_tag, release.tag_name);
+            assert_eq!(asset.target, target);
+            assert_eq!(asset.download_url, format!("https://example.test/{path}"));
         }
     }
 
     #[test]
-    fn find_release_asset_errors_when_target_missing() {
-        let release = GithubRelease {
-            tag_name: "v1.2.3".to_string(),
-            body: String::new(),
-            assets: vec![],
-        };
+    fn stable_assets_match_platform_and_architecture() {
+        let release = release_with_assets(
+            "v1.2.3",
+            &[
+                ("shine-v1.2.3-linux-x86_64.tar.gz", "linux"),
+                ("shine-v1.2.3-darwin-aarch64.tar.gz", "macos"),
+                ("shine-v1.2.3-windows-x86_64.tar.gz", "windows"),
+                ("shine-v1.2.3-windows-aarch64.tar.gz", "windows-arm64"),
+            ],
+        );
+        assert_selected_assets(
+            &release,
+            ReleaseChannel::Stable,
+            &[
+                ("macos", "aarch64", "darwin-aarch64", "macos"),
+                ("windows", "x86_64", "windows-x86_64", "windows"),
+                ("windows", "aarch64", "windows-aarch64", "windows-arm64"),
+            ],
+        );
+    }
 
+    #[test]
+    fn preview_assets_match_without_semver_tag() {
+        let release = release_with_assets(
+            "preview",
+            &[
+                ("shine-preview-linux-x86_64.tar.gz", "preview"),
+                ("shine-preview-windows-x86_64.tar.gz", "preview-windows"),
+            ],
+        );
+        assert_selected_assets(
+            &release,
+            ReleaseChannel::Preview,
+            &[
+                ("linux", "x86_64", "linux-x86_64", "preview"),
+                ("windows", "x86_64", "windows-x86_64", "preview-windows"),
+            ],
+        );
+    }
+
+    #[test]
+    fn find_release_asset_errors_when_target_missing() {
+        let release = release_with_assets("v1.2.3", &[]);
         let error =
             find_release_asset(&release, ReleaseChannel::Stable, "linux", "x86_64").unwrap_err();
         assert!(

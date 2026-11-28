@@ -4,6 +4,22 @@ use crate::action::ActionKindV1;
 use crate::runtime::tests::poll_once;
 use FilesystemAccessV1::{Remove, Write};
 
+async fn upgrade(
+    runtime: &CoreRuntime<InMemoryHost>,
+    request: AppPlanRequest,
+    approval: &PlanApprovalV1,
+) -> Result<AppUpgradeLifecycleReport> {
+    runtime
+        .upgrade_apps_approved(
+            request,
+            approval,
+            AppApprovedUpgradeOptions::default(),
+            &mut crate::runtime::NullObserver,
+            &mut Interaction,
+        )
+        .await
+}
+
 async fn single_approved_action(
     runtime: &CoreRuntime<InMemoryHost>,
     request: &AppPlanRequest,
@@ -134,7 +150,7 @@ async fn whole_app_cleanup_retains_failed_receipts_until_approved_retry() {
 
 #[tokio::test]
 async fn waiting_app_install_revalidates_approval_before_preparation_effects() {
-    let runtime = runtime(static_copy_app_snapshot());
+    let runtime = runtime(static_copy_app_snapshot(b"managed"));
     let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -240,7 +256,7 @@ async fn app_upgrade_ignores_permissions_from_uninstalled_presets() {
 
 #[tokio::test]
 async fn app_upgrade_uses_the_latest_legacy_receipt_after_a_relocation() {
-    let runtime = runtime(static_copy_app_snapshot());
+    let runtime = runtime(static_copy_app_snapshot(b"managed"));
     let source = "app/demo/config.toml".to_string();
     let old_destination = runtime.context().home_dir.join(".legacy/demo/config.toml");
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
@@ -289,13 +305,7 @@ async fn app_upgrade_uses_the_latest_legacy_receipt_after_a_relocation() {
 
 #[tokio::test]
 async fn approved_app_install_rejects_changed_state_before_mutation() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -323,16 +333,7 @@ async fn approved_app_install_rejects_changed_state_before_mutation() {
 
 #[tokio::test]
 async fn approved_app_install_journals_create_and_commits_only_after_receipt_write() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file(
-                "app/demo/config.toml",
-                b"secret-managed-bytes".to_vec(),
-            )
-            .build();
+    let snapshot = static_copy_app_snapshot(b"secret-managed-bytes");
     let runtime = runtime(snapshot);
     let request = app_request(LifecycleOperation::Install, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -547,17 +548,7 @@ async fn approved_app_upgrade_journals_key_owned_json_relocation() {
         ],
     );
 
-    let mut observer = crate::runtime::NullObserver;
-    runtime
-        .upgrade_apps_approved(
-            request,
-            &approval,
-            AppApprovedUpgradeOptions::default(),
-            &mut observer,
-            &mut Interaction,
-        )
-        .await
-        .unwrap();
+    upgrade(&runtime, request, &approval).await.unwrap();
     let previous_json: serde_json::Value =
         serde_json::from_slice(&runtime.host().read(&previous).await.unwrap()).unwrap();
     let desired_json: serde_json::Value =
@@ -663,13 +654,7 @@ async fn approved_privileged_app_install_journals_backup_aware_creation() {
 
 #[tokio::test]
 async fn approved_app_upgrade_journals_static_in_place_managed_update() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"next-managed".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"next-managed");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let rollback = crate::action::managed_file_rollback_path(&destination);
@@ -713,17 +698,7 @@ async fn approved_app_upgrade_journals_static_in_place_managed_update() {
         );
     }
 
-    let mut observer = crate::runtime::NullObserver;
-    let report = runtime
-        .upgrade_apps_approved(
-            request,
-            &approval,
-            AppApprovedUpgradeOptions::default(),
-            &mut observer,
-            &mut Interaction,
-        )
-        .await
-        .unwrap();
+    let report = upgrade(&runtime, request, &approval).await.unwrap();
     assert_eq!(report.updated_categories, vec!["demo"]);
     assert_eq!(
         runtime.host().read(&destination).await.unwrap(),
@@ -789,17 +764,7 @@ async fn approved_app_upgrade_converges_legacy_duplicate_relocation_receipts() {
     assert!(plan.is_ready());
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
 
-    let mut observer = crate::runtime::NullObserver;
-    let report = runtime
-        .upgrade_apps_approved(
-            request,
-            &approval,
-            AppApprovedUpgradeOptions::default(),
-            &mut observer,
-            &mut Interaction,
-        )
-        .await
-        .unwrap();
+    let report = upgrade(&runtime, request, &approval).await.unwrap();
 
     assert_eq!(report.updated_categories, vec!["demo"]);
     assert_eq!(
@@ -856,17 +821,7 @@ async fn approved_app_upgrade_journals_static_copy_relocation() {
         ],
     );
 
-    let mut observer = crate::runtime::NullObserver;
-    runtime
-        .upgrade_apps_approved(
-            request,
-            &approval,
-            AppApprovedUpgradeOptions::default(),
-            &mut observer,
-            &mut Interaction,
-        )
-        .await
-        .unwrap();
+    upgrade(&runtime, request, &approval).await.unwrap();
     assert!(runtime.host().read(&previous).await.is_err());
     assert_eq!(
         runtime.host().read(&desired).await.unwrap(),
@@ -896,17 +851,7 @@ async fn app_relocation_uses_previous_receipt_administrator_identity() {
             .contains(&PermissionV1::Administrator)
     );
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
-    let mut observer = crate::runtime::NullObserver;
-    runtime
-        .upgrade_apps_approved(
-            request,
-            &approval,
-            AppApprovedUpgradeOptions::default(),
-            &mut observer,
-            &mut Interaction,
-        )
-        .await
-        .unwrap();
+    upgrade(&runtime, request, &approval).await.unwrap();
     assert!(runtime.host().read(&previous).await.is_err());
     assert_eq!(
         runtime.host().read(&desired).await.unwrap(),
@@ -963,18 +908,7 @@ async fn generated_relocation_binds_backup_changes_before_any_execution() {
         }
         let changed = runtime.plan_apps(request.clone()).await.unwrap();
         assert_ne!(plan.fingerprint().unwrap(), changed.fingerprint().unwrap());
-        assert!(
-            runtime
-                .upgrade_apps_approved(
-                    request,
-                    &approval,
-                    AppApprovedUpgradeOptions::default(),
-                    &mut crate::runtime::NullObserver,
-                    &mut Interaction
-                )
-                .await
-                .is_err()
-        );
+        assert!(upgrade(&runtime, request, &approval).await.is_err());
         assert!(runtime.host().operations()[operations..].iter().all(
             |operation| match operation {
                 HostOperation::Read(_) => true,
@@ -1105,17 +1039,7 @@ async fn app_relocation_rejects_destination_created_after_review() {
         .host()
         .put_file(&desired, b"late-user-file".to_vec());
 
-    let mut observer = crate::runtime::NullObserver;
-    let error = runtime
-        .upgrade_apps_approved(
-            request,
-            &approval,
-            AppApprovedUpgradeOptions::default(),
-            &mut observer,
-            &mut Interaction,
-        )
-        .await
-        .unwrap_err();
+    let error = upgrade(&runtime, request, &approval).await.unwrap_err();
     assert!(error.to_string().contains("Plan"));
     assert_eq!(
         runtime.host().read(&previous).await.unwrap(),
@@ -1157,17 +1081,7 @@ async fn approved_privileged_app_upgrade_journals_static_copy_update() {
         }
     ));
 
-    let mut observer = crate::runtime::NullObserver;
-    runtime
-        .upgrade_apps_approved(
-            request,
-            &approval,
-            AppApprovedUpgradeOptions::default(),
-            &mut observer,
-            &mut Interaction,
-        )
-        .await
-        .unwrap();
+    upgrade(&runtime, request, &approval).await.unwrap();
     assert_eq!(
         runtime.host().read(&destination).await.unwrap(),
         b"next-managed"
@@ -1188,13 +1102,7 @@ async fn approved_privileged_app_upgrade_journals_static_copy_update() {
 
 #[tokio::test]
 async fn approved_app_install_journals_an_existing_static_managed_update() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"next-managed".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"next-managed");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let rollback = crate::action::managed_file_rollback_path(&destination);
@@ -1237,13 +1145,7 @@ async fn approved_app_install_journals_an_existing_static_managed_update() {
 
 #[tokio::test]
 async fn approved_app_install_journals_backup_creation_and_commits_both_paths() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let backup = crate::install::backup_path(&destination);
@@ -1293,13 +1195,7 @@ async fn approved_app_install_journals_backup_creation_and_commits_both_paths() 
 
 #[tokio::test]
 async fn app_install_blocks_instead_of_replacing_an_existing_backup() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let backup = crate::install::backup_path(&destination);
@@ -1390,13 +1286,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', se
 
 #[tokio::test]
 async fn backup_aware_install_blocks_a_non_regular_destination() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let target = runtime.context().home_dir.join("user-config.toml");
@@ -1420,13 +1310,7 @@ async fn backup_aware_install_blocks_a_non_regular_destination() {
 
 #[tokio::test]
 async fn approved_backup_install_rejects_a_backup_created_after_review() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
+    let snapshot = static_copy_app_snapshot(b"desired");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let backup = crate::install::backup_path(&destination);
@@ -1816,17 +1700,7 @@ async fn approved_app_upgrade_prune_journals_stale_static_copy_removal() {
     let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(kind, ActionKindV1::RemoveManagedFile { .. }));
 
-    let mut observer = crate::runtime::NullObserver;
-    let report = runtime
-        .upgrade_apps_approved(
-            request,
-            &approval,
-            AppApprovedUpgradeOptions::default(),
-            &mut observer,
-            &mut Interaction,
-        )
-        .await
-        .unwrap();
+    let report = upgrade(&runtime, request, &approval).await.unwrap();
     assert_eq!(report.lifecycle.summary().changed, 1);
     assert!(runtime.host().read(&destination).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
@@ -1872,17 +1746,7 @@ async fn approved_app_upgrade_prune_journals_stale_json_keys() {
     let kind = single_approved_action(&runtime, &request, &plan, &approval).await;
     assert!(matches!(kind, ActionKindV1::RemoveManagedJson { .. }));
 
-    let mut observer = crate::runtime::NullObserver;
-    runtime
-        .upgrade_apps_approved(
-            request,
-            &approval,
-            AppApprovedUpgradeOptions::default(),
-            &mut observer,
-            &mut Interaction,
-        )
-        .await
-        .unwrap();
+    upgrade(&runtime, request, &approval).await.unwrap();
     let remaining = runtime.host().read(&destination).await.unwrap();
     let remaining: serde_json::Value = serde_json::from_slice(&remaining).unwrap();
     assert_eq!(remaining, serde_json::json!({ "theme": "dark" }));
@@ -1890,7 +1754,7 @@ async fn approved_app_upgrade_prune_journals_stale_json_keys() {
 
 #[tokio::test]
 async fn approved_app_uninstall_journals_static_managed_removal() {
-    let snapshot = static_copy_app_snapshot();
+    let snapshot = static_copy_app_snapshot(b"managed");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let rollback = crate::action::managed_file_rollback_path(&destination);
@@ -1944,7 +1808,7 @@ async fn approved_app_uninstall_journals_static_managed_removal() {
 
 #[tokio::test]
 async fn approved_app_uninstall_journals_backup_restoration() {
-    let snapshot = static_copy_app_snapshot();
+    let snapshot = static_copy_app_snapshot(b"managed");
     let runtime = runtime(snapshot);
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
     let backup = crate::install::backup_path(&destination);
@@ -2116,7 +1980,7 @@ async fn approved_privileged_forced_app_uninstall_journals_backup_restoration() 
 
 #[tokio::test]
 async fn approved_forced_app_uninstall_journals_modified_static_copy_removal() {
-    let runtime = runtime(static_copy_app_snapshot());
+    let runtime = runtime(static_copy_app_snapshot(b"managed"));
     let (destination, _) = seed_static_copy_app(&runtime, b"user-modified", None).await;
     let rollback = crate::action::managed_file_rollback_path(&destination);
     let request = AppPlanRequest {
@@ -2153,7 +2017,7 @@ async fn approved_forced_app_uninstall_journals_modified_static_copy_removal() {
 
 #[tokio::test]
 async fn approved_forced_app_uninstall_journals_backup_restoration() {
-    let runtime = runtime(static_copy_app_snapshot());
+    let runtime = runtime(static_copy_app_snapshot(b"managed"));
     let (destination, backup) =
         seed_static_copy_app(&runtime, b"user-modified", Some(b"user-original")).await;
     let backup = backup.unwrap();

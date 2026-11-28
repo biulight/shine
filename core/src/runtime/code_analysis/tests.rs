@@ -31,6 +31,36 @@ fn request(operation: LifecycleOperation) -> AppPlanRequest {
     }
 }
 
+fn session_with_file_limit(command_files: usize) -> CodeAnalysisSession {
+    let session = CodeAnalysisSession::default();
+    session.0.lock().unwrap().sources = Session::new(
+        analysis::Limits {
+            command_files,
+            ..Default::default()
+        },
+        session.1.clone(),
+    );
+    session
+}
+
+#[track_caller]
+fn assert_install_admission(plan: &crate::plan::PlanV1, allowed: bool, code: &str) {
+    assert_eq!(plan.is_ready(), allowed, "{code}: {plan:?}");
+    assert_eq!(
+        PlanApprovalV1::for_reviewed_plan(plan).is_ok(),
+        allowed,
+        "{code}"
+    );
+    let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
+    assert_eq!(
+        diagnostics
+            .iter()
+            .any(|d| d.kind == DiagnosticKind::Difference),
+        !allowed,
+        "{code}: {diagnostics:?}"
+    );
+}
+
 async fn install_plan(runtime: &CoreRuntime<InMemoryHost>) -> crate::plan::PlanV1 {
     runtime
         .plan_apps(request(LifecycleOperation::Install))
@@ -166,15 +196,8 @@ async fn pattern_bindings_and_writes_preserve_lifecycle_admission() {
     ] {
         let runtime = runtime(code, "", true);
         let plan = install_plan(&runtime).await;
-        assert_eq!(plan.is_ready(), allowed, "{code}: {plan:?}");
-        assert_eq!(PlanApprovalV1::for_reviewed_plan(&plan).is_ok(), allowed);
+        assert_install_admission(&plan, allowed, code);
         let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
-        assert_eq!(
-            diagnostics
-                .iter()
-                .any(|d| d.kind == DiagnosticKind::Difference),
-            !allowed
-        );
         if allowed {
             assert!(
                 diagnostics
@@ -342,14 +365,7 @@ async fn author_terminal_budget_is_incomplete_instead_of_expected_blocking() {
     let mut state =
         crate::runtime::authoring::PresetAuthoringSyntheticState::empty(InMemoryHost::new());
     state.environment.insert("ENABLE".into(), "yes".into());
-    let analysis = CodeAnalysisSession::default();
-    analysis.0.lock().unwrap().sources = Session::new(
-        analysis::Limits {
-            command_files: 0,
-            ..Default::default()
-        },
-        analysis.1.clone(),
-    );
+    let analysis = session_with_file_limit(0);
     let report = crate::runtime::authoring::plan_preset_source_scope_with_analysis(
         scope,
         RuntimePlatform::Linux,
@@ -575,16 +591,8 @@ async fn p1_rule_fixes_preserve_author_readiness_trust_and_approval_boundaries()
                 .build(),
         );
         let plan = install_plan(&live).await;
-        assert_eq!(plan.is_ready(), allowed, "{code}: {plan:?}");
-        assert_eq!(PlanApprovalV1::for_reviewed_plan(&plan).is_ok(), allowed);
+        assert_install_admission(&plan, allowed, code);
         let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
-        assert_eq!(
-            diagnostics
-                .iter()
-                .any(|d| d.kind == DiagnosticKind::Difference),
-            !allowed,
-            "{code}"
-        );
         assert_eq!(
             diagnostics
                 .iter()
@@ -688,14 +696,7 @@ platform = "linux"
 "#
         .to_vec(),
     );
-    let analysis = CodeAnalysisSession::default();
-    analysis.0.lock().unwrap().sources = Session::new(
-        analysis::Limits {
-            command_files: 0,
-            ..Default::default()
-        },
-        analysis.1.clone(),
-    );
+    let analysis = session_with_file_limit(0);
     let report = crate::runtime::fixture::test_preset_path_with_analysis(
         &source,
         Path::new("/repo"),
@@ -1231,14 +1232,7 @@ async fn lint_budget_failure_retains_completed_entry_differences() {
     }
     source.put_file("/repo/app/demo/other", b"fallback".to_vec());
     source.put_file("/repo/app/demo/other.ts", b"export {};".to_vec());
-    let session = CodeAnalysisSession::default();
-    session.0.lock().unwrap().sources = Session::new(
-        analysis::Limits {
-            command_files: 1,
-            ..Default::default()
-        },
-        session.1.clone(),
-    );
+    let session = session_with_file_limit(1);
     let report = crate::runtime::lint::lint_preset_path_with_analysis(
         &source,
         Path::new("/repo"),

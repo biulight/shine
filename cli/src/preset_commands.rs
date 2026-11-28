@@ -769,37 +769,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn link_fails_when_path_missing_and_no_create() {
+    async fn link_without_create_rejects_missing_paths_and_regular_files() {
         let dir = make_temp_dir().await;
         let config = config_in(&dir);
         let missing = dir.join("does-not-exist");
-
-        let err = handle_preset_link(&config, missing, false, false).await;
-        assert!(err.is_err());
-        let msg = err.unwrap_err().to_string();
-        assert!(
-            msg.contains("--create") || msg.contains("does not exist"),
-            "error should mention --create: {msg}"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn link_fails_when_path_is_a_file() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
         let file = dir.join("not-a-dir.txt");
         fs::write(&file, b"hello").await.unwrap();
 
-        let err = handle_preset_link(&config, file, false, false).await;
-        assert!(err.is_err());
-        assert!(
-            err.unwrap_err().to_string().contains("not a directory"),
-            "error should mention 'not a directory'"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
+        for (path, diagnostic) in [(&missing, "--create"), (&file, "not a directory")] {
+            let error = handle_preset_link(&config, path.clone(), false, false)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains(diagnostic), "{error:#}");
+            assert!(!dir.join("config.toml").exists());
+        }
+        assert!(!missing.exists());
+        assert_eq!(fs::read(&file).await.unwrap(), b"hello");
+        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

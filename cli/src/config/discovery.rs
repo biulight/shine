@@ -384,27 +384,27 @@ mod tests {
     }
 
     #[test]
-    fn shine_config_dir_overrides_everything() {
-        assert_eq!(
-            resolve_with_overrides(Some("/state"), None, None, false),
-            ("/state".into(), "/state/presets".into(), true)
-        );
-    }
-
-    #[test]
-    fn shine_presets_overrides_presets_only() {
-        assert_eq!(
-            resolve_with_overrides(None, Some("/env"), None, false),
-            ("/default".into(), "/env".into(), true)
-        );
-    }
-
-    #[test]
-    fn shine_config_dir_takes_precedence_over_shine_presets() {
-        assert_eq!(
-            resolve_with_overrides(Some("/state"), Some("/env"), None, false),
-            ("/state".into(), "/state/presets".into(), true)
-        );
+    fn global_config_resolves_state_and_presets_in_priority_order() {
+        let state = Some("/state");
+        let env = Some("/env");
+        let configured = Some("/configured");
+        let from_state = ("/state", "/state/presets", true);
+        let from_env = ("/default", "/env", true);
+        for (config_dir, presets_env, toml_presets, expected) in [
+            (None, None, None, ("/default", "/default/presets", false)),
+            (None, None, configured, ("/default", "/configured", true)),
+            (None, env, None, from_env),
+            (None, env, configured, from_env),
+            (state, None, None, from_state),
+            (state, env, None, from_state),
+        ] {
+            let (state_dir, presets_dir, external) = expected;
+            assert_eq!(
+                resolve_with_overrides(config_dir, presets_env, toml_presets, false),
+                (state_dir.into(), presets_dir.into(), external),
+                "SHINE_CONFIG_DIR={config_dir:?}, SHINE_PRESETS={presets_env:?}, presets_dir={toml_presets:?}"
+            );
+        }
     }
 
     #[test]
@@ -415,65 +415,23 @@ mod tests {
         );
     }
 
-    #[test]
-    fn config_toml_presets_dir_is_used_when_no_env() {
-        assert_eq!(
-            resolve_with_overrides(None, None, Some("/configured"), false),
-            ("/default".into(), "/configured".into(), true)
-        );
-    }
-
-    #[test]
-    fn shine_presets_takes_precedence_over_config_toml() {
-        assert_eq!(
-            resolve_with_overrides(None, Some("/env"), Some("/configured"), false),
-            ("/default".into(), "/env".into(), true)
-        );
-    }
-
-    #[test]
-    fn is_external_presets_false_when_no_override() {
-        assert_eq!(
-            resolve_with_overrides(None, None, None, false),
-            ("/default".into(), "/default/presets".into(), false)
-        );
-    }
-
     #[tokio::test]
-    async fn read_minimal_config_file_presets_returns_none_when_file_missing() {
-        let missing =
-            std::env::temp_dir().join(format!("shine-no-config-{}.toml", uuid::Uuid::new_v4()));
-        let result = read_minimal_config_file::<MinimalConfig>(&missing);
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn read_minimal_config_file_presets_returns_none_when_key_absent() {
+    async fn minimal_config_distinguishes_missing_file_absent_key_and_configured_path() {
         let dir = make_temp_dir().await;
         let path = dir.join("config.toml");
-        fs::write(&path, "schema_version = 0\n").await.unwrap();
+        let read = || read_minimal_config_file::<MinimalConfig>(&path);
+        assert!(read().is_none());
 
-        let result = read_minimal_config_file::<MinimalConfig>(&path)
-            .unwrap()
-            .presets_dir;
-        assert!(result.is_none());
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn read_minimal_config_file_presets_returns_path_when_key_present() {
-        let dir = make_temp_dir().await;
-        let path = dir.join("config.toml");
-        fs::write(&path, "schema_version = 0\npresets_dir = \"/my/presets\"\n")
-            .await
-            .unwrap();
-
-        let result = read_minimal_config_file::<MinimalConfig>(&path)
-            .unwrap()
-            .presets_dir;
-        assert_eq!(result, Some(PathBuf::from("/my/presets")));
-
-        fs::remove_dir_all(&dir).await.unwrap();
+        for (contents, expected) in [
+            ("schema_version = 0\n", None),
+            (
+                "schema_version = 0\npresets_dir = \"/my/presets\"\n",
+                Some(PathBuf::from("/my/presets")),
+            ),
+        ] {
+            fs::write(&path, contents).await.unwrap();
+            assert_eq!(read().unwrap().presets_dir, expected, "{contents}");
+        }
+        fs::remove_dir_all(dir).await.unwrap();
     }
 }

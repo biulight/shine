@@ -37,6 +37,21 @@ impl Fixture {
         .unwrap();
         Self(root)
     }
+    const TOOL_SCRIPT: &str = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+
+    fn write_shell_tool(&self, category: &str, contents: &str) -> PathBuf {
+        let preset = self.0.join("state/presets/shell").join(category);
+        fs::create_dir_all(&preset).unwrap();
+        let script = Self::TOOL_SCRIPT;
+        fs::write(
+            preset.join("shine.toml"),
+            format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n"),
+        )
+        .unwrap();
+        fs::write(preset.join(script), contents).unwrap();
+        preset
+    }
+
     fn installed_app_with_generator() -> Self {
         let fixture = Self::new();
         fixture.app(false);
@@ -186,26 +201,28 @@ fn assert_hint_argv(command: &str, expected: &[&str]) {
     cli::commands::Cli::try_parse_from(expected).unwrap();
 }
 
+const LINE_ENDING_DIFFS: &[(&str, &str, &str)] = &[
+    (
+        "head\r\nold\r\nend\r\n",
+        "head\nnew\nend\n",
+        "@@ -1,3 +1,3 @@\n head\n-old\n+new\n end\n",
+    ),
+    ("same\r\n", "same\n", "Only line endings differ.\n"),
+    (
+        "head\nold\rtail\r",
+        "head\nnew\rtail\r",
+        "@@ -1,2 +1,2 @@\n head\n-old\\rtail\\r\n\\ No newline at end of file\n+new\\rtail\\r\n\\ No newline at end of file\n",
+    ),
+    (
+        "head\r\nend\n",
+        "head\nend\r\n",
+        "@@ -1,2 +1,2 @@\n-head\\r\n-end\n+head\n+end\\r\n",
+    ),
+];
+
 #[test]
 fn app_diff_previews_preserve_byte_status_and_files_across_line_endings() {
-    for (current, expected, fragment) in [
-        (
-            "head\r\nold\r\nend\r\n",
-            "head\nnew\nend\n",
-            "@@ -1,3 +1,3 @@\n head\n-old\n+new\n end\n",
-        ),
-        ("same\r\n", "same\n", "Only line endings differ.\n"),
-        (
-            "head\nold\rtail\r",
-            "head\nnew\rtail\r",
-            "@@ -1,2 +1,2 @@\n head\n-old\\rtail\\r\n\\ No newline at end of file\n+new\\rtail\\r\n\\ No newline at end of file\n",
-        ),
-        (
-            "head\r\nend\n",
-            "head\nend\r\n",
-            "@@ -1,2 +1,2 @@\n-head\\r\n-end\n+head\n+end\\r\n",
-        ),
-    ] {
+    for &(current, expected, fragment) in LINE_ENDING_DIFFS {
         let fixture = Fixture::new();
         let preset = fixture.0.join("state/presets/app/demo");
         let destination_dir = fixture.0.join("destination");
@@ -654,19 +671,7 @@ fn shell_snapshot_diffs_deduplicate_aliases_and_preserve_rendered_changes() {
 
 #[test]
 fn shell_diff_previews_keep_snapshot_bytes_and_lf_line_structure() {
-    for (current, expected, fragment) in [
-        (
-            "head\r\nold\r\nend\r\n",
-            "head\nnew\nend\n",
-            "@@ -1,3 +1,3 @@\n head\n-old\n+new\n end\n",
-        ),
-        ("same\r\n", "same\n", "Only line endings differ.\n"),
-        (
-            "head\nold\rtail\r",
-            "head\nnew\rtail\r",
-            "@@ -1,2 +1,2 @@\n head\n-old\\rtail\\r\n\\ No newline at end of file\n+new\\rtail\\r\n\\ No newline at end of file\n",
-        ),
-    ] {
+    for &(current, expected, fragment) in LINE_ENDING_DIFFS {
         let fixture = Fixture::new();
         let state = fixture.0.join("state");
         let preset = state.join("presets/shell/demo");
@@ -969,15 +974,8 @@ fn shell_info_shows_command_status_and_only_relevant_details() {
 fn shell_info_hints_preserve_category_arguments_before_and_after_install() {
     for category in ["team tools", "it's", "-demo"] {
         let fixture = Fixture::new();
-        let preset = fixture.0.join("state/presets/shell").join(category);
-        fs::create_dir_all(&preset).unwrap();
-        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
-        fs::write(
-            preset.join("shine.toml"),
-            format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n"),
-        )
-        .unwrap();
-        fs::write(preset.join(script), "# never executed\n").unwrap();
+        let preset = fixture.write_shell_tool(category, "# never executed\n");
+        let script = Fixture::TOOL_SCRIPT;
         let selector = format!("{category}/tool");
         let target = format!("shell/{selector}");
         let info = fixture.run(&["shell", "info", "--", category]);
@@ -1356,15 +1354,8 @@ fn missing_shell_hints_preserve_special_names_and_dry_run_state() {
             "schema_version = 2\nexternal_shell_mode = 'snapshot'\n",
         )
         .unwrap();
-        let preset = fixture.0.join("state/presets/shell").join(category);
-        fs::create_dir_all(&preset).unwrap();
-        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
-        fs::write(
-            preset.join("shine.toml"),
-            format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n"),
-        )
-        .unwrap();
-        fs::write(preset.join(script), "# never executed\n").unwrap();
+        let preset = fixture.write_shell_tool(category, "# never executed\n");
+        let script = Fixture::TOOL_SCRIPT;
         let selector = format!("{category}/tool");
         let target = format!("shell/{selector}");
         success(&fixture.run(&["trust", "grant", &target, "--yes"]));
@@ -1469,15 +1460,7 @@ fn shell_trust_remediation_preserves_target_and_required_mode_without_enrolling(
         );
         fs::write(fixture.0.join("state/config.toml"), &config).unwrap();
         let category = "demo space's";
-        let preset = fixture.0.join("state/presets/shell").join(category);
-        fs::create_dir_all(&preset).unwrap();
-        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
-        fs::write(
-            preset.join("shine.toml"),
-            format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n"),
-        )
-        .unwrap();
-        fs::write(preset.join(script), "# not executed\n").unwrap();
+        fixture.write_shell_tool(category, "# not executed\n");
         let selector = format!("{category}/tool");
         let target = format!("shell/{selector}");
         let output = fixture.run(&["shell", "install", &selector, "--yes"]);

@@ -684,11 +684,24 @@ mod tests {
         crate::test_support::make_temp_dir("shine-sys").await
     }
 
+    async fn external_sys_fixture(dir: &std::path::Path, os_id: &str) -> (Config, PathBuf) {
+        let mut config = Config::new_for_test(dir);
+        config.is_external_presets = true;
+        let os_dir = config.presets_dir().join("sys").join(os_id);
+        fs::create_dir_all(&os_dir).await.unwrap();
+        (config, os_dir)
+    }
+
+    async fn fixture_manifest(config: &Config) -> SysRunManifest {
+        SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn managed_item_apply_upgrade_and_uninstall_lifecycle() {
         let dir = make_temp_dir().await;
-        let os_dir = dir.join("presets/sys/fakeos");
-        fs::create_dir_all(&os_dir).await.unwrap();
+        let (config, os_dir) = external_sys_fixture(&dir, "fakeos").await;
         let first_destination = dir.join("first-managed.txt");
         let second_destination = dir.join("second-managed.txt");
         fs::write(os_dir.join("first.txt"), "first v1")
@@ -740,9 +753,6 @@ target = {:?}
             .await
             .unwrap();
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-
         let (first_install, first_lifecycle) = run_fixture_item(
             &config,
             Some("first"),
@@ -769,14 +779,12 @@ target = {:?}
         .unwrap();
         assert_eq!(second_install.updated, 1);
         assert_eq!(second_lifecycle.summary().changed, 1);
-        let second_manifest_before =
-            SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap()
-                .entries
-                .into_iter()
-                .find(|entry| entry.item_id == "second")
-                .unwrap();
+        let second_manifest_before = fixture_manifest(&config)
+            .await
+            .entries
+            .into_iter()
+            .find(|entry| entry.item_id == "second")
+            .unwrap();
 
         fs::write(os_dir.join("first.txt"), "first v2")
             .await
@@ -820,10 +828,7 @@ target = {:?}
             fs::read_to_string(&second_destination).await.unwrap(),
             "second v1"
         );
-        let manifest_after_upgrade =
-            SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap();
+        let manifest_after_upgrade = fixture_manifest(&config).await;
         assert_eq!(
             manifest_after_upgrade
                 .entries
@@ -873,10 +878,7 @@ target = {:?}
             fs::read_to_string(&second_destination).await.unwrap(),
             "second v1"
         );
-        let final_manifest =
-            SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap();
+        let final_manifest = fixture_manifest(&config).await;
         assert_eq!(final_manifest.entries.len(), 1);
         assert_eq!(final_manifest.entries[0], second_manifest_before);
 
@@ -886,8 +888,7 @@ target = {:?}
     #[tokio::test]
     async fn managed_updates_reports_split_dns_env_change() {
         let dir = make_temp_dir().await;
-        let os_dir = dir.join("presets/sys/macos");
-        fs::create_dir_all(&os_dir).await.unwrap();
+        let (mut config, os_dir) = external_sys_fixture(&dir, "macos").await;
         fs::write(
             os_dir.join("shine.toml"),
             r#"
@@ -937,8 +938,6 @@ resource = "/etc/resolver/private.example"
         .await
         .unwrap();
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
         config.env.insert(
             "PRIVATE_DNS_DOMAIN".to_string(),
             "private.example".to_string(),
@@ -1059,8 +1058,7 @@ target = {:?}
     #[tokio::test]
     async fn builtin_receipt_uninstalls_after_preset_is_deleted() {
         let dir = make_temp_dir().await;
-        let os_dir = dir.join("presets/sys/fakeos");
-        fs::create_dir_all(&os_dir).await.unwrap();
+        let (config, os_dir) = external_sys_fixture(&dir, "fakeos").await;
         let destination = dir.join("managed-output.txt");
         fs::write(os_dir.join("desired.txt"), "managed")
             .await
@@ -1075,8 +1073,6 @@ target = {:?}
         )
         .await;
 
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
         let (applied, applied_lifecycle) = run_fixture_item(
             &config,
             Some("managed-file-test"),
@@ -1145,13 +1141,7 @@ target = {:?}
                 .contains(&LifecycleEffect::ReceiptRemoved)
         );
         assert!(!destination.exists());
-        assert!(
-            SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-                .await
-                .unwrap()
-                .entries
-                .is_empty()
-        );
+        assert!(fixture_manifest(&config).await.entries.is_empty());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1159,16 +1149,13 @@ target = {:?}
     #[tokio::test]
     async fn missing_env_maps_to_safe_structured_failure() {
         let dir = make_temp_dir().await;
-        let os_dir = dir.join("presets/sys/fakeos");
-        fs::create_dir_all(&os_dir).await.unwrap();
+        let (config, os_dir) = external_sys_fixture(&dir, "fakeos").await;
         write_managed_file_preset(
             &os_dir,
             &dir.join("managed-output.txt"),
             r#"required_env = ["REQUIRED_TOKEN"]"#,
         )
         .await;
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
 
         let (report, lifecycle) = run_fixture_item(
             &config,
@@ -1197,8 +1184,7 @@ target = {:?}
     #[tokio::test]
     async fn future_manifest_rejects_apply_before_resource_mutation() {
         let dir = make_temp_dir().await;
-        let os_dir = dir.join("presets/sys/fakeos");
-        fs::create_dir_all(&os_dir).await.unwrap();
+        let (config, os_dir) = external_sys_fixture(&dir, "fakeos").await;
         let destination = dir.join("managed-output.txt");
         fs::write(os_dir.join("desired.txt"), "managed")
             .await
@@ -1210,8 +1196,6 @@ target = {:?}
         )
         .await
         .unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
 
         let error = run_fixture_item(
             &config,
@@ -1229,13 +1213,11 @@ target = {:?}
     }
 
     #[test]
-    fn managed_upgrade_output_hides_only_no_op_rows_by_default() {
-        assert!(!should_print_managed_outcome(
-            false,
-            SysItemStatus::AlreadyInstalled
-        ));
-        assert!(!should_print_managed_outcome(false, SysItemStatus::Skipped));
-
+    fn managed_output_hides_no_op_rows_unless_all_are_requested() {
+        for status in [SysItemStatus::AlreadyInstalled, SysItemStatus::Skipped] {
+            assert!(!should_print_managed_outcome(false, status), "{status:?}");
+            assert!(should_print_managed_outcome(true, status), "{status:?}");
+        }
         for status in [
             SysItemStatus::Installed,
             SysItemStatus::Updated,
@@ -1245,15 +1227,6 @@ target = {:?}
         ] {
             assert!(should_print_managed_outcome(false, status), "{status:?}");
         }
-    }
-
-    #[test]
-    fn managed_full_output_includes_no_op_rows() {
-        assert!(should_print_managed_outcome(
-            true,
-            SysItemStatus::AlreadyInstalled
-        ));
-        assert!(should_print_managed_outcome(true, SysItemStatus::Skipped));
     }
 
     #[tokio::test]

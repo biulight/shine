@@ -30,17 +30,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_to_empty_destination() {
-        let dir = make_temp_dir().await;
-        let dest = dir.join("deep/nested/dest.toml");
+    async fn install_previews_then_creates_a_missing_destination() {
+        for relative in ["dest.toml", "deep/nested/dest.toml"] {
+            let dir = make_temp_dir().await;
+            let dest = dir.join(relative);
+            let install = |dry_run| {
+                install_bytes_with_host(&RealHost, b"content", &dest, false, dry_run, false)
+            };
 
-        let outcome = install_bytes_with_host(&RealHost, b"content", &dest, false, false, false)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, InstallOutcome::Installed { .. }));
-        assert!(dest.exists());
-        assert_eq!(fs::read(&dest).await.unwrap(), b"content");
-        fs::remove_dir_all(&dir).await.unwrap();
+            assert!(matches!(
+                install(true).await.unwrap(),
+                InstallOutcome::DryRun
+            ));
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "{relative}");
+            assert!(matches!(
+                install(false).await.unwrap(),
+                InstallOutcome::Installed { .. }
+            ));
+            assert_eq!(fs::read(&dest).await.unwrap(), b"content");
+            fs::remove_dir_all(dir).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -64,57 +73,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_already_managed_same_content_returns_already_managed() {
+    async fn managed_install_skips_matching_content_and_overwrites_changed_content() {
         let dir = make_temp_dir().await;
         let dest = dir.join("dest.toml");
         fs::write(&dest, b"content").await.unwrap();
+        let install = |bytes| install_bytes_with_host(&RealHost, bytes, &dest, true, false, false);
 
-        let outcome = install_bytes_with_host(&RealHost, b"content", &dest, true, false, false)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, InstallOutcome::AlreadyManaged));
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn install_already_managed_different_content_overwrites() {
-        let dir = make_temp_dir().await;
-        let dest = dir.join("dest.toml");
-        fs::write(&dest, b"old").await.unwrap();
-
-        let outcome = install_bytes_with_host(&RealHost, b"updated", &dest, true, false, false)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, InstallOutcome::Installed { .. }));
+        assert!(matches!(
+            install(b"content").await.unwrap(),
+            InstallOutcome::AlreadyManaged
+        ));
+        assert!(matches!(
+            install(b"updated").await.unwrap(),
+            InstallOutcome::Installed { .. }
+        ));
         assert_eq!(fs::read(&dest).await.unwrap(), b"updated");
-        fs::remove_dir_all(&dir).await.unwrap();
+        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn install_dry_run_does_not_write() {
-        let dir = make_temp_dir().await;
-        let dest = dir.join("dest.toml");
-
-        let outcome = install_bytes_with_host(&RealHost, b"content", &dest, false, true, false)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, InstallOutcome::DryRun));
-        assert!(!dest.exists());
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn uninstall_removes_matching_file() {
+    async fn uninstall_previews_then_removes_a_matching_file() {
         let dir = make_temp_dir().await;
         let dest = dir.join("dest.toml");
         let content = b"managed content";
         fs::write(&dest, content).await.unwrap();
         let entry = entry_for(&dest, hash_content(content));
 
-        let outcome = uninstall_entry_with_host(&RealHost, &entry, false, false)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, UninstallOutcome::Removed));
+        let uninstall = |dry_run| uninstall_entry_with_host(&RealHost, &entry, dry_run, false);
+        assert!(matches!(
+            uninstall(true).await.unwrap(),
+            UninstallOutcome::DryRun
+        ));
+        assert_eq!(fs::read(&dest).await.unwrap(), content);
+        assert!(matches!(
+            uninstall(false).await.unwrap(),
+            UninstallOutcome::Removed
+        ));
         assert!(!dest.exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -180,22 +174,6 @@ mod tests {
             }
             fs::remove_dir_all(dir).await.unwrap();
         }
-    }
-
-    #[tokio::test]
-    async fn uninstall_dry_run_leaves_file_intact() {
-        let dir = make_temp_dir().await;
-        let dest = dir.join("dest.toml");
-        let content = b"managed";
-        fs::write(&dest, content).await.unwrap();
-        let entry = entry_for(&dest, hash_content(content));
-
-        let outcome = uninstall_entry_with_host(&RealHost, &entry, true, false)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, UninstallOutcome::DryRun));
-        assert!(dest.exists());
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]

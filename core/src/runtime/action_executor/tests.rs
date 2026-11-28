@@ -31,6 +31,15 @@ fn runtime() -> CoreRuntime<InMemoryHost> {
     )
 }
 
+async fn read_journal(
+    runtime: &CoreRuntime<InMemoryHost>,
+) -> Result<Vec<u8>, crate::runtime::HostError> {
+    runtime
+        .host()
+        .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
+        .await
+}
+
 fn action_ir(runtime: &CoreRuntime<InMemoryHost>, content: &[u8]) -> ActionIrV1 {
     ActionIrV1::new(
         "operation-1",
@@ -481,11 +490,7 @@ async fn managed_file_creation_stays_journaled_until_receipt_commit() {
         .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
         .await
         .unwrap();
-    let journal_bytes = runtime
-        .host()
-        .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
-        .await
-        .unwrap();
+    let journal_bytes = read_journal(&runtime).await.unwrap();
     assert!(
         !String::from_utf8(journal_bytes)
             .unwrap()
@@ -496,25 +501,13 @@ async fn managed_file_creation_stays_journaled_until_receipt_commit() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("matching manifest receipt"));
-    assert!(
-        runtime
-            .host()
-            .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
-            .await
-            .is_ok()
-    );
+    assert!(read_journal(&runtime).await.is_ok());
     save_matching_receipt(&runtime, content).await;
     runtime
         .commit_app_managed_file_operation(&execution)
         .await
         .unwrap();
-    assert!(
-        runtime
-            .host()
-            .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
-            .await
-            .is_err()
-    );
+    assert!(read_journal(&runtime).await.unwrap_err().is_not_found());
     assert_eq!(
         runtime
             .host()
@@ -769,13 +762,7 @@ async fn backup_creation_commits_only_after_receipt_owns_both_paths() {
         .commit_app_managed_file_operation(&execution)
         .await
         .unwrap();
-    assert!(
-        runtime
-            .host()
-            .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
-            .await
-            .is_err()
-    );
+    assert!(read_journal(&runtime).await.unwrap_err().is_not_found());
     assert_eq!(
         runtime.host().read(&destination).await.unwrap(),
         MANAGED_BYTES
@@ -1020,14 +1007,7 @@ async fn managed_update_retains_previous_bytes_until_receipt_commit() {
         .unwrap();
     assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
     assert_eq!(runtime.host().read(&rollback).await.unwrap(), original);
-    let journal = String::from_utf8(
-        runtime
-            .host()
-            .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let journal = String::from_utf8(read_journal(&runtime).await.unwrap()).unwrap();
     assert!(!journal.contains("previous-managed"));
     assert!(!journal.contains("next-managed"));
 
@@ -1037,13 +1017,7 @@ async fn managed_update_retains_previous_bytes_until_receipt_commit() {
         .await
         .unwrap();
     assert!(runtime.host().read(&rollback).await.is_err());
-    assert!(
-        runtime
-            .host()
-            .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
-            .await
-            .is_err()
-    );
+    assert!(read_journal(&runtime).await.unwrap_err().is_not_found());
 }
 
 #[tokio::test]
@@ -1720,14 +1694,7 @@ async fn managed_removal_retains_previous_bytes_until_receipt_removal_commit() {
         .unwrap();
     assert!(runtime.host().read(&destination).await.is_err());
     assert_eq!(runtime.host().read(&rollback).await.unwrap(), original);
-    let journal = String::from_utf8(
-        runtime
-            .host()
-            .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let journal = String::from_utf8(read_journal(&runtime).await.unwrap()).unwrap();
     assert!(!journal.contains("previous-managed"));
 
     remove_matching_receipt(&runtime).await;
@@ -1736,13 +1703,7 @@ async fn managed_removal_retains_previous_bytes_until_receipt_removal_commit() {
         .await
         .unwrap();
     assert!(runtime.host().read(&rollback).await.is_err());
-    assert!(
-        runtime
-            .host()
-            .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
-            .await
-            .is_err()
-    );
+    assert!(read_journal(&runtime).await.unwrap_err().is_not_found());
 }
 
 #[tokio::test]
@@ -1866,13 +1827,7 @@ async fn backup_restoring_removal_commits_only_after_receipt_removal() {
     assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     assert!(runtime.host().read(&backup).await.is_err());
     assert!(runtime.host().read(&rollback).await.is_err());
-    assert!(
-        runtime
-            .host()
-            .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
-            .await
-            .is_err()
-    );
+    assert!(read_journal(&runtime).await.unwrap_err().is_not_found());
 }
 
 #[tokio::test]

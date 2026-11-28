@@ -754,63 +754,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_pull_encodes_checkout_paths_without_fetching_or_changing_identity() {
-        let root = temp_dir(if cfg!(unix) {
-            "review\nFORGED\r\t\u{1b}中文"
+    async fn rejected_pull_preserves_checkout_and_reports_its_path() {
+        let special = if cfg!(unix) {
+            (
+                "review\nFORGED\r\t\u{1b}中文",
+                r"review\nFORGED\r\t\u{1b}中文",
+            )
         } else {
-            "review中文"
-        });
-        let presets = root.join("presets");
-        init_repo(&presets);
-        let config = Config::new_for_test(&root);
-        for reason in ["uncommitted changes", "has no upstream", "detached HEAD"] {
-            if reason == "uncommitted changes" {
-                std::fs::write(presets.join("local.txt"), "keep\n").unwrap();
-            } else if reason == "has no upstream" {
-                std::fs::remove_file(presets.join("local.txt")).unwrap();
-            } else {
-                git(&presets, &["checkout", "--detach"]);
-            }
-            let head = std::fs::read(presets.join(".git/HEAD")).unwrap();
-            let error = handle_pull(&config, false).await.unwrap_err().to_string();
-            assert!(error.contains(reason), "{error}");
-            assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
-            assert!(!error.contains("\nFORGED"), "{error:?}");
-            if cfg!(unix) {
-                assert!(error.contains(r"review\nFORGED\r\t\u{1b}中文"));
-            }
-            assert_eq!(std::fs::read(presets.join(".git/HEAD")).unwrap(), head);
-            assert_eq!(read_text(presets.join("preset.txt")), "one\n");
-            assert!(!presets.join(".git/FETCH_HEAD").exists());
+            ("review中文", "review中文")
+        };
+        for (label, displayed) in [("plain-checkout", "plain-checkout"), special] {
+            let root = temp_dir(label);
+            let presets = root.join("presets");
+            init_repo(&presets);
+            let config = Config::new_for_test(&root);
+
+            let assert_rejected = async |reason: &str| {
+                let head = std::fs::read(presets.join(".git/HEAD")).unwrap();
+                let error = handle_pull(&config, false).await.unwrap_err().to_string();
+                assert!(
+                    error.contains(reason) && error.contains(displayed),
+                    "{error:?}"
+                );
+                assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
+                assert!(!error.contains("\nFORGED"), "{error:?}");
+                assert_eq!(std::fs::read(presets.join(".git/HEAD")).unwrap(), head);
+                assert_eq!(read_text(presets.join("preset.txt")), "one\n");
+                assert!(!presets.join(".git/FETCH_HEAD").exists());
+            };
+
+            assert_rejected("has no upstream").await;
+            let local = presets.join("local.txt");
+            std::fs::write(&local, "keep\n").unwrap();
+            assert_rejected("uncommitted changes").await;
+            assert_eq!(read_text(&local), "keep\n");
+            std::fs::remove_file(local).unwrap();
+            git(&presets, &["checkout", "--detach"]);
+            assert_rejected("detached HEAD").await;
+            std::fs::remove_dir_all(root).unwrap();
         }
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn dirty_worktree_is_rejected_before_pull() {
-        let root = temp_dir("dirty");
-        let presets = root.join("presets");
-        init_repo(&presets);
-        std::fs::write(presets.join("local.txt"), "dirty\n").unwrap();
-        let config = Config::new_for_test(&root);
-
-        let error = handle_pull(&config, false).await.unwrap_err();
-
-        assert!(error.to_string().contains("uncommitted changes"));
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn branch_without_upstream_is_rejected() {
-        let root = temp_dir("no-upstream");
-        let presets = root.join("presets");
-        init_repo(&presets);
-        let config = Config::new_for_test(&root);
-
-        let error = handle_pull(&config, false).await.unwrap_err();
-
-        assert!(error.to_string().contains("has no upstream"));
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -828,20 +810,6 @@ mod tests {
         handle_pull(&config, false).await.unwrap();
 
         assert_eq!(read_text(presets.join("overlay.txt")), "two\n");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn detached_head_is_rejected() {
-        let root = temp_dir("detached");
-        let presets = root.join("presets");
-        init_repo(&presets);
-        git(&presets, &["checkout", "--detach"]);
-        let config = Config::new_for_test(&root);
-
-        let error = handle_pull(&config, false).await.unwrap_err();
-
-        assert!(error.to_string().contains("detached HEAD"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

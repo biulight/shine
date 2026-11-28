@@ -181,27 +181,6 @@ impl<O: Write, E: Write> LifecycleReporter for TerminalRenderer<'_, O, E> {
 mod tests {
     use super::*;
 
-    #[derive(Default)]
-    struct RecordingReporter {
-        events: Vec<PresentationEvent>,
-    }
-
-    impl LifecycleReporter for RecordingReporter {
-        fn emit(&mut self, event: PresentationEvent) {
-            self.events.push(event);
-        }
-    }
-
-    struct FakeInteraction {
-        confirm: bool,
-    }
-
-    impl LifecycleInteraction for FakeInteraction {
-        fn confirm(&mut self, _prompt: &str, _default: bool) -> anyhow::Result<bool> {
-            Ok(self.confirm)
-        }
-    }
-
     #[test]
     fn writer_backed_renderer_preserves_streams_and_sections() {
         let mut separator = SectionSeparator::with_preamble("Upgrading configs");
@@ -218,23 +197,6 @@ mod tests {
             "Upgrading configs\nApp Configs\n\nShell Presets\n"
         );
         assert_eq!(String::from_utf8(stderr).unwrap(), "warning\n");
-    }
-
-    #[test]
-    fn presentation_and_interaction_ports_are_replaceable() {
-        let mut reporter = RecordingReporter::default();
-        reporter.emit(PresentationEvent::stdout("changed"));
-        reporter.emit(PresentationEvent::stderr("failed"));
-        assert_eq!(
-            reporter.events,
-            vec![
-                PresentationEvent::stdout("changed"),
-                PresentationEvent::stderr("failed")
-            ]
-        );
-
-        let mut interaction = FakeInteraction { confirm: false };
-        assert!(!interaction.confirm("remove?", false).unwrap());
     }
 }
 

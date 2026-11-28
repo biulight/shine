@@ -339,7 +339,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn github_auth_token_uses_first_nonblank_token() {
+    fn github_auth_token_and_mode_follow_the_first_nonblank_token() {
         for (github, gh, expected) in [
             (
                 Some(" github-value "),
@@ -347,32 +347,27 @@ mod tests {
                 Some("github-value"),
             ),
             (None, Some("gh-value"), Some("gh-value")),
+            (None, Some(" token "), Some("token")),
             (Some("  "), Some("gh-value"), Some("gh-value")),
             (None, None, None),
         ] {
-            let token = github_auth_token_from_vars(|name| match name {
+            let lookup = |name: &str| match name {
                 "GITHUB_TOKEN" => github.map(str::to_owned),
                 "GH_TOKEN" => gh.map(str::to_owned),
                 _ => None,
-            });
+            };
             assert_eq!(
-                token.as_deref(),
+                github_auth_token_from_vars(lookup).as_deref(),
                 expected,
                 "GITHUB_TOKEN={github:?}, GH_TOKEN={gh:?}"
             );
+            let mode = if expected.is_some() {
+                AuthMode::Token
+            } else {
+                AuthMode::Anonymous
+            };
+            assert_eq!(auth_mode_from_vars(lookup), mode);
         }
-    }
-
-    #[test]
-    fn auth_mode_tracks_token_presence_without_storing_token_value() {
-        assert_eq!(auth_mode_from_vars(|_| None), AuthMode::Anonymous);
-        assert_eq!(
-            auth_mode_from_vars(|name| match name {
-                "GH_TOKEN" => Some(" token ".to_string()),
-                _ => None,
-            }),
-            AuthMode::Token
-        );
     }
 
     #[test]
@@ -406,49 +401,45 @@ mod tests {
     }
 
     #[test]
-    fn github_api_error_extracts_rate_limit_reset_for_primary_limit() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
-        headers.insert("x-ratelimit-reset", HeaderValue::from_static("1780937643"));
-        let err = anyhow!(GithubApiError::from_response(
-            ReleaseChannel::Stable,
-            reqwest::StatusCode::FORBIDDEN,
-            &headers,
-            r#"{"message":"API rate limit exceeded"}"#,
-        ));
+    fn rate_limit_status_and_reset_depend_on_http_status_and_remaining_quota() {
+        use reqwest::StatusCode;
+        let response = |status, remaining, body| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-ratelimit-remaining", HeaderValue::from_static(remaining));
+            headers.insert("x-ratelimit-reset", HeaderValue::from_static("1780937643"));
+            anyhow!(GithubApiError::from_response(
+                ReleaseChannel::Stable,
+                status,
+                &headers,
+                body
+            ))
+        };
 
-        assert_eq!(
-            rate_limit_http_status(&err),
-            Some(reqwest::StatusCode::FORBIDDEN)
+        let limited = response(
+            StatusCode::FORBIDDEN,
+            "0",
+            r#"{"message":"API rate limit exceeded"}"#,
         );
         assert_eq!(
-            rate_limit_reset_from_error(&err, 1_780_000_000),
+            rate_limit_http_status(&limited),
+            Some(StatusCode::FORBIDDEN)
+        );
+        assert_eq!(
+            rate_limit_reset_from_error(&limited, 1_780_000_000),
             Some(1_780_937_643)
         );
-    }
 
-    #[test]
-    fn github_api_error_ignores_non_rate_limit_responses() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("12"));
-        headers.insert("x-ratelimit-reset", HeaderValue::from_static("1780937643"));
-        let err = anyhow!(GithubApiError::from_response(
-            ReleaseChannel::Stable,
-            reqwest::StatusCode::FORBIDDEN,
-            &headers,
-            r#"{"message":"forbidden"}"#,
-        ));
-        assert_eq!(rate_limit_http_status(&err), None);
-        assert_eq!(rate_limit_reset_from_error(&err, 1_780_000_000), None);
-
-        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
-        let err = anyhow!(GithubApiError::from_response(
-            ReleaseChannel::Stable,
-            reqwest::StatusCode::BAD_GATEWAY,
-            &headers,
-            "gateway failure",
-        ));
-        assert_eq!(rate_limit_reset_from_error(&err, 1_780_000_000), None);
+        for error in [
+            response(StatusCode::FORBIDDEN, "12", r#"{"message":"forbidden"}"#),
+            response(StatusCode::BAD_GATEWAY, "0", "gateway failure"),
+        ] {
+            assert_eq!(rate_limit_http_status(&error), None, "{error}");
+            assert_eq!(
+                rate_limit_reset_from_error(&error, 1_780_000_000),
+                None,
+                "{error}"
+            );
+        }
     }
 
     #[test]

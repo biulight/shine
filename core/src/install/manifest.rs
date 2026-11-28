@@ -347,34 +347,19 @@ content_hash = 7
     }
 
     #[test]
-    fn remove_by_dest_removes_matching_entry() {
+    fn destination_lookup_and_removal_preserve_the_other_entry() {
         let mut manifest = AppManifest::default();
-        manifest.upsert(sample_entry("/tmp/a.toml"));
-        manifest.upsert(sample_entry("/tmp/b.toml"));
-        let removed = manifest.remove_by_dest(Path::new("/tmp/a.toml"));
-        assert!(removed.is_some());
-        assert_eq!(manifest.entries.len(), 1);
-    }
+        let keep = sample_entry("/tmp/a.toml");
+        let remove = sample_entry("/tmp/b.toml");
+        manifest.upsert(keep.clone());
+        manifest.upsert(remove.clone());
 
-    #[test]
-    fn remove_by_dest_is_no_op_for_missing_entry() {
-        let mut manifest = AppManifest::default();
-        manifest.upsert(sample_entry("/tmp/a.toml"));
-        let removed = manifest.remove_by_dest(Path::new("/tmp/nonexistent.toml"));
-        assert!(removed.is_none());
-        assert_eq!(manifest.entries.len(), 1);
-    }
-
-    #[test]
-    fn find_by_dest_returns_entry() {
-        let mut manifest = AppManifest::default();
-        manifest.upsert(sample_entry("/tmp/a.toml"));
-        assert!(manifest.find_by_dest(Path::new("/tmp/a.toml")).is_some());
-        assert!(
-            manifest
-                .find_by_dest(Path::new("/tmp/other.toml"))
-                .is_none()
-        );
+        let dest = remove.destination.as_path();
+        assert_eq!(manifest.find_by_dest(dest), Some(&remove));
+        assert_eq!(manifest.remove_by_dest(dest).as_ref(), Some(&remove));
+        assert_eq!(manifest.find_by_dest(dest), None);
+        assert_eq!(manifest.remove_by_dest(dest), None);
+        assert_eq!(manifest.entries, [keep]);
     }
 
     #[test]

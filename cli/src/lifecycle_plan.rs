@@ -853,12 +853,11 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         builder.finish()
     }
 
-    #[tokio::test]
-    async fn built_in_utils_review_is_concise_without_changing_approval() {
+    async fn built_in_shell_install_plan(target: &str) -> (ShellPlanRequest, PlanV1) {
         use shine_core::runtime::{
             InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
         };
-        let home = std::env::temp_dir().join("shine-utils-review");
+        let home = std::env::temp_dir().join(format!("shine-{target}-review"));
         let mut context = RuntimeContext::isolated(
             home.clone(),
             home.join(".shine"),
@@ -875,13 +874,19 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
         );
         let request = ShellPlanRequest {
             operation: LifecycleOperation::Install,
-            target: Some("utils".into()),
+            target: Some(target.into()),
             force: false,
             purge: false,
             input_versions: PlanningInputVersions::default(),
         };
         let plan = runtime.plan_shells(request.clone()).await.unwrap();
         assert!(plan.is_ready());
+        (request, plan)
+    }
+
+    #[tokio::test]
+    async fn built_in_utils_review_is_concise_without_changing_approval() {
+        let (request, plan) = built_in_shell_install_plan("utils").await;
         assert_eq!(plan.code_boundaries.len(), 3);
         assert!(plan.code_boundaries.iter().all(|entry| {
             entry.source == CodeSourceV2::ShineDistribution
@@ -981,33 +986,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SUBSCRIPTIO
     #[tokio::test]
     async fn built_in_image_tools_review_summarizes_plain_environment_without_changing_approval() {
         use shine_core::plan::EnvironmentSensitivityV1;
-        use shine_core::runtime::{
-            InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
-        };
-        let home = std::env::temp_dir().join("shine-image-tools-review");
-        let mut context = RuntimeContext::isolated(
-            home.clone(),
-            home.join(".shine"),
-            home.join(".shine/presets"),
-            home.join(".shine/bin"),
-            RuntimePlatform::Linux,
-        );
-        context.shell = shine_core::runtime::ShellType::Bash;
-        context.shell_config_paths = vec![home.join(".bashrc")];
-        let runtime = CoreRuntime::new(
-            InMemoryHost::new(),
-            context,
-            capture_embedded_preset_snapshot(crate::core_runtime::embedded_preset_files()),
-        );
-        let request = ShellPlanRequest {
-            operation: LifecycleOperation::Install,
-            target: Some("image-tools".into()),
-            force: false,
-            purge: false,
-            input_versions: PlanningInputVersions::default(),
-        };
-        let plan = runtime.plan_shells(request.clone()).await.unwrap();
-        assert!(plan.is_ready());
+        let (request, plan) = built_in_shell_install_plan("image-tools").await;
         let before = serde_json::to_value(&plan).unwrap();
         let fingerprint = plan.fingerprint().unwrap();
         let planned = vec![(LifecyclePlanRequest::Shell(request), plan)];

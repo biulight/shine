@@ -268,13 +268,13 @@ async fn app_manifest(runtime: &CoreRuntime<InMemoryHost>) -> AppManifest {
         .unwrap()
 }
 
-fn static_copy_app_snapshot() -> PresetSnapshot {
+fn static_copy_app_snapshot(content: &[u8]) -> PresetSnapshot {
     PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "app/demo/shine.toml",
                 b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
             )
-            .file("app/demo/config.toml", b"managed".to_vec())
+            .file("app/demo/config.toml", content.to_vec())
             .build()
 }
 

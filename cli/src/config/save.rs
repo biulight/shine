@@ -140,6 +140,15 @@ mod tests {
         fs::read_to_string(&config.config_path).await.unwrap()
     }
 
+    async fn save_fresh_config(edit: impl FnOnce(&mut Config)) -> String {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        edit(&mut config);
+        let content = save_and_read(&config).await;
+        fs::remove_dir_all(dir).await.unwrap();
+        content
+    }
+
     #[tokio::test]
     async fn config_writers_discard_source_bearing_parse_error_chains() {
         let dir = make_temp_dir().await;
@@ -240,15 +249,12 @@ mod tests {
 
     #[tokio::test]
     async fn save_writes_last_cleared_schema_version_when_set() {
-        let dir = make_temp_dir().await;
-        let mut config = config_in(&dir);
-        config.last_cleared_schema_version = Some(1);
-
-        let content = save_and_read(&config).await;
+        let content = save_fresh_config(|config| {
+            config.last_cleared_schema_version = Some(1);
+        })
+        .await;
         let parsed: toml::Table = toml::from_str(&content).unwrap();
         assert_eq!(parsed["last_cleared_schema_version"].as_integer(), Some(1));
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
@@ -319,11 +325,10 @@ mod tests {
 
     #[tokio::test]
     async fn presets_dir_override_round_trips_through_save() {
-        let dir = make_temp_dir().await;
-        let mut config = config_in(&dir);
-        config.presets_dir_override = Some(PathBuf::from("/external/presets"));
-
-        let content = save_and_read(&config).await;
+        let content = save_fresh_config(|config| {
+            config.presets_dir_override = Some(PathBuf::from("/external/presets"));
+        })
+        .await;
         assert!(
             content.contains("/external/presets"),
             "presets_dir should be written to config.toml"
@@ -334,17 +339,14 @@ mod tests {
             loaded.presets_dir_override,
             Some(PathBuf::from("/external/presets"))
         );
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn presets_overlay_dir_override_round_trips_through_save() {
-        let dir = make_temp_dir().await;
-        let mut config = config_in(&dir);
-        config.presets_overlay_dir_override = Some(PathBuf::from("/external/overlay"));
-
-        let content = save_and_read(&config).await;
+        let content = save_fresh_config(|config| {
+            config.presets_overlay_dir_override = Some(PathBuf::from("/external/overlay"));
+        })
+        .await;
         assert!(content.contains("presets_overlay_dir"));
 
         let loaded: Config = toml::from_str(&content).unwrap();
@@ -352,18 +354,15 @@ mod tests {
             loaded.presets_overlay_dir_override,
             Some(PathBuf::from("/external/overlay"))
         );
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn presets_overlay_git_round_trips_through_save() {
-        let dir = make_temp_dir().await;
-        let mut config = config_in(&dir);
-        config.presets_overlay_git = Some("https://example.com/overlay.git".to_string());
-        config.presets_overlay_git_branch = Some("main".to_string());
-
-        let content = save_and_read(&config).await;
+        let content = save_fresh_config(|config| {
+            config.presets_overlay_git = Some("https://example.com/overlay.git".to_string());
+            config.presets_overlay_git_branch = Some("main".to_string());
+        })
+        .await;
         assert!(content.contains("presets_overlay_git"));
 
         let loaded: Config = toml::from_str(&content).unwrap();
@@ -372,87 +371,60 @@ mod tests {
             Some("https://example.com/overlay.git")
         );
         assert_eq!(loaded.presets_overlay_git_branch.as_deref(), Some("main"));
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn gpg_recipients_round_trip_through_save() {
-        let dir = make_temp_dir().await;
-        let mut config = config_in(&dir);
-        config.gpg_recipients = vec![
-            "alice@example.com".to_string(),
-            "bob@example.com".to_string(),
-        ];
-
-        let content = save_and_read(&config).await;
+        let content = save_fresh_config(|config| {
+            config.gpg_recipients = vec![
+                "alice@example.com".to_string(),
+                "bob@example.com".to_string(),
+            ];
+        })
+        .await;
         let loaded: Config = toml::from_str(&content).unwrap();
         assert_eq!(
             loaded.gpg_recipients,
             ["alice@example.com", "bob@example.com"]
         );
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn retired_coarse_trust_flags_are_not_saved() {
-        let dir = make_temp_dir().await;
-        let mut config = config_in(&dir);
-        config.legacy_allow_app_hooks = true;
-        config.legacy_allow_sys_code = true;
-
-        let content = save_and_read(&config).await;
+        let content = save_fresh_config(|config| {
+            config.legacy_allow_app_hooks = true;
+            config.legacy_allow_sys_code = true;
+        })
+        .await;
         assert!(!content.contains("allow_app_hooks"));
         assert!(!content.contains("allow_sys_code"));
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn sync_terminal_theme_false_round_trips_through_save() {
-        let dir = make_temp_dir().await;
-        let mut config = config_in(&dir);
-        config.sync_terminal_theme = false;
-
-        let content = save_and_read(&config).await;
+        let content = save_fresh_config(|config| {
+            config.sync_terminal_theme = false;
+        })
+        .await;
         assert!(content.contains("sync_terminal_theme"));
         let loaded: Config = toml::from_str(&content).unwrap();
         assert!(!loaded.sync_terminal_theme);
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn sync_terminal_theme_true_default_is_absent_from_toml() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir); // sync_terminal_theme defaults to true
-
-        let content = save_and_read(&config).await;
+    async fn fresh_config_omits_default_theme_and_presets_dir() {
+        let content = save_fresh_config(|_| {}).await;
         let parsed: toml::Table = toml::from_str(&content).unwrap();
         assert!(
             !parsed.contains_key("sync_terminal_theme"),
             "default true value must not clutter a fresh config.toml"
         );
-        // An old config.toml with no such key at all must still default true.
-        let loaded: Config = toml::from_str(&content).unwrap();
-        assert!(loaded.sync_terminal_theme);
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn presets_dir_absent_from_toml_when_override_is_none() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir); // presets_dir_override: None
-
-        let content = save_and_read(&config).await;
-        let parsed: toml::Table = toml::from_str(&content).unwrap();
         assert!(
             !parsed.contains_key("presets_dir"),
             "presets_dir key must be absent when override is None"
         );
-
-        fs::remove_dir_all(&dir).await.unwrap();
+        // An old config.toml with no such key at all must still default true.
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert!(loaded.sync_terminal_theme);
     }
 }
