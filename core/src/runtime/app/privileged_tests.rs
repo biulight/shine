@@ -46,10 +46,11 @@ async fn privileged_app_install_restores_failed_writes_and_respects_force() {
     let backup = entry.backup.clone().unwrap();
     let host = InMemoryHost::new();
     host.put_file(&destination, b"original".to_vec());
+    let install = |managed, force| {
+        install_privileged_bytes(&host, b"managed", &destination, managed, false, force)
+    };
     host.fail_write_after(&destination, 0);
-    let error = install_privileged_bytes(&host, b"managed", &destination, false, false, false)
-        .await
-        .unwrap_err();
+    let error = install(false, false).await.unwrap_err();
     assert_eq!(error.to_string(), "privileged write");
     assert_eq!(host.read(&destination).await.unwrap(), b"original");
     assert!(host.read(&backup).await.is_err());
@@ -58,21 +59,15 @@ async fn privileged_app_install_restores_failed_writes_and_respects_force() {
         Some(HostOperation::AcquirePrivilegedOperation)
     ));
     assert!(matches!(
-        install_privileged_bytes(&host, b"managed", &destination, false, false, false)
-            .await
-            .unwrap(),
+        install(false, false).await.unwrap(),
         InstallOutcome::BackedUpAndInstalled { .. }
     ));
     assert!(matches!(
-        install_privileged_bytes(&host, b"managed", &destination, true, false, false)
-            .await
-            .unwrap(),
+        install(true, false).await.unwrap(),
         InstallOutcome::AlreadyManaged
     ));
     assert!(matches!(
-        install_privileged_bytes(&host, b"managed", &destination, true, false, true)
-            .await
-            .unwrap(),
+        install(true, true).await.unwrap(),
         InstallOutcome::Installed { .. }
     ));
     assert_eq!(host.read(&backup).await.unwrap(), b"original");
@@ -83,19 +78,20 @@ async fn privileged_app_uninstall_preserves_edits_unless_forced() {
     let entry = entry();
     let destination = entry.destination.clone();
     let host = InMemoryHost::new();
+    let uninstall = async |entry: &AppEntry, force| {
+        uninstall_privileged_entry(&host, entry, false, force)
+            .await
+            .unwrap()
+    };
     host.put_file(entry.backup.as_ref().unwrap(), b"original".to_vec());
     host.put_file(&destination, b"edited".to_vec());
     assert!(matches!(
-        uninstall_privileged_entry(&host, &entry, false, false)
-            .await
-            .unwrap(),
+        uninstall(&entry, false).await,
         UninstallOutcome::UserModified
     ));
     assert_eq!(host.read(&destination).await.unwrap(), b"edited");
     assert!(matches!(
-        uninstall_privileged_entry(&host, &entry, false, true)
-            .await
-            .unwrap(),
+        uninstall(&entry, true).await,
         UninstallOutcome::ForceRestoredBackup { .. }
     ));
     assert_eq!(host.read(&destination).await.unwrap(), b"original");
@@ -104,15 +100,11 @@ async fn privileged_app_uninstall_preserves_edits_unless_forced() {
         ..entry
     };
     assert!(matches!(
-        uninstall_privileged_entry(&host, &entry, false, true)
-            .await
-            .unwrap(),
+        uninstall(&entry, true).await,
         UninstallOutcome::ForceRemoved
     ));
     assert!(matches!(
-        uninstall_privileged_entry(&host, &entry, false, false)
-            .await
-            .unwrap(),
+        uninstall(&entry, false).await,
         UninstallOutcome::NotFound
     ));
 }

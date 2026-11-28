@@ -1496,16 +1496,11 @@ mod tests {
         let rollback = dir.join("rollback");
         let previous = b"original user content\n# >>> shine >>>\nsource old\n# <<< shine <<<\n";
         let current = b"new user edit\n# >>> shine >>>\nsource new\n# <<< shine <<<\n";
-        for path in [&destination, &rollback] {
-            std::fs::write(
-                path,
-                if path == &destination {
-                    current.as_slice()
-                } else {
-                    previous.as_slice()
-                },
-            )
-            .unwrap();
+        for (path, contents) in [
+            (&destination, current.as_slice()),
+            (&rollback, previous.as_slice()),
+        ] {
+            std::fs::write(path, contents).unwrap();
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
         let file = ShellProfileFileV1 {
@@ -1571,30 +1566,23 @@ mod tests {
             content_hash: hash_content(b"helper"),
             executable: Some(true),
         }];
-        assert_eq!(
-            observe_shell_tree(&host, &root, &expected, false)
+        let observe = async |files: &[ShellTreeFileV1], partial| {
+            observe_shell_tree(&host, &root, files, partial)
                 .await
-                .unwrap(),
-            ShellTreeObservation::Exact
-        );
+                .unwrap()
+        };
+        assert_eq!(observe(&expected, false).await, ShellTreeObservation::Exact);
         host.set_mode(&root.join("helper"), 0o644).await.unwrap();
         for partial in [false, true] {
             assert_eq!(
-                observe_shell_tree(&host, &root, &expected, partial)
-                    .await
-                    .unwrap(),
+                observe(&expected, partial).await,
                 ShellTreeObservation::Changed
             );
         }
         let legacy_json = serde_json::json!({ "relative_path": "helper", "content_hash": hash_content(b"helper") });
         let legacy: ShellTreeFileV1 = serde_json::from_value(legacy_json.clone()).unwrap();
         assert_eq!(serde_json::to_value(&legacy).unwrap(), legacy_json);
-        assert_eq!(
-            observe_shell_tree(&host, &root, &[legacy], false)
-                .await
-                .unwrap(),
-            ShellTreeObservation::Exact
-        );
+        assert_eq!(observe(&[legacy], false).await, ShellTreeObservation::Exact);
     }
 
     #[tokio::test]
@@ -1605,16 +1593,11 @@ mod tests {
         let rollback = shell_snapshot_rollback_path(&root);
         host.put_file(root.join("demo.sh"), b"desired".to_vec());
         host.put_file(rollback.join("demo.sh"), b"user-changed".to_vec());
-        let previous_files = vec![ShellTreeFileV1 {
+        let tree_file = |contents: &[u8]| ShellTreeFileV1 {
             relative_path: PathBuf::from("demo.sh"),
-            content_hash: hash_content(b"previous"),
+            content_hash: hash_content(contents),
             executable: None,
-        }];
-        let desired_files = vec![ShellTreeFileV1 {
-            relative_path: PathBuf::from("demo.sh"),
-            content_hash: hash_content(b"desired"),
-            executable: None,
-        }];
+        };
 
         assert_eq!(
             assess_shell_snapshot_recovery(
@@ -1623,8 +1606,8 @@ mod tests {
                 &stage,
                 &rollback,
                 true,
-                &previous_files,
-                &desired_files,
+                &[tree_file(b"previous")],
+                &[tree_file(b"desired")],
                 false,
             )
             .await
@@ -1640,12 +1623,8 @@ mod tests {
         let rollback = managed_file_rollback_path(&destination);
         host.put_file(&destination, b"desired".to_vec());
         host.put_file(&rollback, b"user-changed".to_vec());
-        let previous = ShellFileIdentityV1 {
-            content_hash: hash_content(b"previous"),
-            unix_mode: None,
-        };
-        let desired = ShellFileIdentityV1 {
-            content_hash: hash_content(b"desired"),
+        let identity = |contents: &[u8]| ShellFileIdentityV1 {
+            content_hash: hash_content(contents),
             unix_mode: None,
         };
 
@@ -1654,8 +1633,8 @@ mod tests {
                 &host,
                 &destination,
                 &rollback,
-                Some(&previous),
-                &desired,
+                Some(&identity(b"previous")),
+                &identity(b"desired"),
                 false,
             )
             .await

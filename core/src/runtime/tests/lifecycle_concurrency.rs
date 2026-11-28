@@ -1,3 +1,4 @@
+use super::poll_once;
 use crate::{
     lifecycle::LifecycleOperation,
     plan::{PlanApprovalError, PlanApprovalV1},
@@ -9,7 +10,7 @@ use crate::{
     },
 };
 use anyhow::Result;
-use std::{future::Future, pin::Pin, task::Poll};
+use std::{future::Future, pin::Pin};
 
 struct Interaction;
 
@@ -50,18 +51,6 @@ fn runtime(snapshot: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
     CoreRuntime::new(InMemoryHost::new(), context, snapshot)
 }
 
-async fn assert_pending(future: Pin<&mut impl Future>) {
-    let mut future = future;
-    std::future::poll_fn(|cx| {
-        assert!(
-            future.as_mut().poll(cx).is_pending(),
-            "operation did not wait for its lock"
-        );
-        Poll::Ready(())
-    })
-    .await;
-}
-
 #[tokio::test]
 async fn concurrent_managed_sys_installs_preserve_receipts_and_revalidate_approval() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
@@ -99,31 +88,22 @@ target = '~/.config/b.txt'
     };
     let a = request("a");
     let b = request("b");
-    let approval_a =
-        PlanApprovalV1::for_reviewed_plan(&runtime.plan_managed_sys(a.clone()).await.unwrap())
-            .unwrap();
-    let approval_b =
-        PlanApprovalV1::for_reviewed_plan(&runtime.plan_managed_sys(b.clone()).await.unwrap())
-            .unwrap();
+    let review = async |request: &SysManagedPlanRequest| {
+        let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        PlanApprovalV1::for_reviewed_plan(&plan).unwrap()
+    };
+    let run = async |request, approval: &PlanApprovalV1| {
+        runtime
+            .run_managed_sys_approved(request, approval, &mut Interaction, &mut NullObserver)
+            .await
+    };
+    let approval_a = review(&a).await;
+    let approval_b = review(&b).await;
     let lock = runtime.host().acquire_privileged_operation().await.unwrap();
-    let mut interaction_a = Interaction;
-    let mut interaction_b = Interaction;
-    let mut observer_a = NullObserver;
-    let mut observer_b = NullObserver;
-    let mut first = Box::pin(runtime.run_managed_sys_approved(
-        a,
-        &approval_a,
-        &mut interaction_a,
-        &mut observer_a,
-    ));
-    let mut second = Box::pin(runtime.run_managed_sys_approved(
-        b.clone(),
-        &approval_b,
-        &mut interaction_b,
-        &mut observer_b,
-    ));
-    assert_pending(first.as_mut()).await;
-    assert_pending(second.as_mut()).await;
+    let mut first = Box::pin(run(a, &approval_a));
+    let mut second = Box::pin(run(b.clone(), &approval_b));
+    assert!(poll_once(first.as_mut()).await.is_pending());
+    assert!(poll_once(second.as_mut()).await.is_pending());
     drop(lock);
     first.await.unwrap();
     // The complete manifest observation changed while B waited. Waiting does
@@ -145,13 +125,8 @@ target = '~/.config/b.txt'
             .await
             .is_err()
     );
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&runtime.plan_managed_sys(b.clone()).await.unwrap())
-            .unwrap();
-    runtime
-        .run_managed_sys_approved(b, &approval, &mut Interaction, &mut NullObserver)
-        .await
-        .unwrap();
+    let approval = review(&b).await;
+    run(b, &approval).await.unwrap();
     let manifest = SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
         .await
         .unwrap();
@@ -180,29 +155,26 @@ async fn concurrent_shell_install_and_uninstall_preserve_unrelated_receipts() {
         .file_with_executable("shell/b/b.sh", b"#!/bin/sh\nexit 0\n".to_vec(), true)
         .build();
     let runtime = runtime(snapshot);
-    let request = |target: &str, operation| ShellPlanRequest {
-        operation,
-        target: Some(target.into()),
-        force: false,
-        purge: false,
-        input_versions: PlanningInputVersions::default(),
+    let review = async |target: &str, operation| {
+        let request = ShellPlanRequest {
+            operation,
+            target: Some(target.into()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        (request, PlanApprovalV1::for_reviewed_plan(&plan).unwrap())
     };
-    let a = request("a", LifecycleOperation::Install);
-    let approval =
-        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(a.clone()).await.unwrap()).unwrap();
+    let (a, approval) = review("a", LifecycleOperation::Install).await;
     runtime.install_shells_approved(a, &approval).await.unwrap();
-    let b = request("b", LifecycleOperation::Install);
-    let remove = request("a", LifecycleOperation::Uninstall);
-    let approval_b =
-        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(b.clone()).await.unwrap()).unwrap();
-    let approval_remove =
-        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(remove.clone()).await.unwrap())
-            .unwrap();
+    let (b, approval_b) = review("b", LifecycleOperation::Install).await;
+    let (remove, approval_remove) = review("a", LifecycleOperation::Uninstall).await;
     let lock = runtime.host().acquire_privileged_operation().await.unwrap();
     let mut first = Box::pin(runtime.install_shells_approved(b, &approval_b));
-    let mut second = Box::pin(runtime.uninstall_shells_approved(remove.clone(), &approval_remove));
-    assert_pending(first.as_mut()).await;
-    assert_pending(second.as_mut()).await;
+    let mut second = Box::pin(runtime.uninstall_shells_approved(remove, &approval_remove));
+    assert!(poll_once(first.as_mut()).await.is_pending());
+    assert!(poll_once(second.as_mut()).await.is_pending());
     drop(lock);
     first.await.unwrap();
     // Installing an unrelated category does not change A's reviewed removal,

@@ -11,6 +11,12 @@ use super::{FileMetadata, FileSystemObservationHost, HostError, InMemoryHost};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::task::Poll;
+
+/// Observe one poll with the current task's waker, even when the future is pending.
+pub(super) async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
+    std::future::poll_fn(|cx| Poll::Ready(future.as_mut().poll(cx))).await
+}
 
 // The consumer must compile with filesystem observation as its only host capability.
 pub(super) struct ObservationOnlyHost(pub(super) InMemoryHost);

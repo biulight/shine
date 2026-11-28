@@ -90,6 +90,17 @@ printf '%s\n' "$PHONE_TEST_JSON"
             .unwrap()
     }
 
+    fn paired_args(&self, extra: &[&str]) -> String {
+        let output = self.run(extra, false, TAG);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read_to_string(self.root.join("calls")).unwrap(), "x");
+        fs::read_to_string(self.root.join("args")).unwrap()
+    }
+
     fn assert_config_unchanged(&self) {
         assert_eq!(
             fs::read_to_string(self.root.join("state/config.toml")).unwrap(),
@@ -107,52 +118,27 @@ impl Drop for Fixture {
 #[test]
 fn macos_phone_cli_appends_stub_and_preserves_existing_configuration() {
     let fixture = Fixture::new();
-    let output = fixture.run(&["--label", "Work Mac"], false, TAG);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
     assert_eq!(
-        fs::read_to_string(fixture.root.join("args")).unwrap(),
+        fixture.paired_args(&["--label", "Work Mac"]),
         "setup\n--label\nWork Mac\n--transport\nauto\n--json\n--recipient-type\ntag\n"
     );
-    assert_eq!(fs::read_to_string(fixture.root.join("calls")).unwrap(), "x");
     let config: toml::Value =
         toml::from_str(&fs::read_to_string(fixture.root.join("state/config.toml")).unwrap())
             .unwrap();
     assert_eq!(config["secret_backend"].as_str(), Some("gpg"));
     assert_eq!(config["age_recipients"][0].as_str(), Some(TAG));
-    let paths = config["age_identities"].as_array().unwrap();
-    assert_eq!(paths.len(), 2);
+    let paths =
+        ["state/age/identity.txt", "phone identity.txt"].map(|path| fixture.root.join(path));
     assert_eq!(
-        paths[0].as_str().unwrap(),
-        fixture
-            .root
-            .join("state/age/identity.txt")
-            .to_str()
-            .unwrap()
-    );
-    assert_eq!(
-        paths[1].as_str().unwrap(),
-        fixture.root.join("phone identity.txt").to_str().unwrap()
+        config["age_identities"],
+        toml::Value::try_from(paths).unwrap()
     );
 }
 
 #[test]
 fn macos_phone_cli_resolves_default_label_and_forwards_explicit_transport() {
     let fixture = Fixture::new();
-    let output = fixture.run(
-        &["--transport", "adb", "--adb-serial", "device serial"],
-        false,
-        TAG,
-    );
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let args = fs::read_to_string(fixture.root.join("args")).unwrap();
+    let args = fixture.paired_args(&["--transport", "adb", "--adb-serial", "device serial"]);
     let args: Vec<_> = args.lines().collect();
     assert_eq!(&args[..2], &["setup", "--label"]);
     assert!(!args[2].trim().is_empty() && args[2].len() <= 64);

@@ -456,6 +456,24 @@ impl Fixture {
         Self::assert_ok(self.shine().args(args).output().unwrap())
     }
 
+    fn run_concurrently(&self, count: usize, configure: impl Fn(&mut Command, usize)) {
+        let mut children = Vec::new();
+        for index in 0..count {
+            let mut command = self.shine();
+            configure(&mut command, index);
+            children.push(
+                command
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap(),
+            );
+        }
+        for child in children {
+            Self::assert_ok(child.wait_with_output().unwrap());
+        }
+    }
+
     fn initialize(&self) {
         self.run_ok(&["env", "get", "REVIEW_TOKEN"]);
         let now = std::time::SystemTime::now()
@@ -743,28 +761,16 @@ fn concurrent_task_saves_preserve_every_successful_update() {
     let fixture = Fixture::new();
     // Initialize once so this test isolates task persistence from config bootstrapping.
     fixture.initialize();
-    let mut children = Vec::new();
-    for index in 0..32 {
-        children.push(
-            fixture
-                .shine()
-                .args([
-                    "task",
-                    "save",
-                    &format!("task-{index}"),
-                    "--",
-                    "echo",
-                    &index.to_string(),
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-        );
-    }
-    for child in children {
-        Fixture::assert_ok(child.wait_with_output().unwrap());
-    }
+    fixture.run_concurrently(32, |command, index| {
+        command.args([
+            "task",
+            "save",
+            &format!("task-{index}"),
+            "--",
+            "echo",
+            &index.to_string(),
+        ]);
+    });
     let table: toml::Value =
         toml::from_str(&fs::read_to_string(fixture.state().join("tasks.toml")).unwrap()).unwrap();
     assert_eq!(table["tasks"].as_table().unwrap().len(), 32);
@@ -788,21 +794,9 @@ fn concurrent_trust_revocations_do_not_restore_revoked_grants() {
     }
     fs::write(&path, encoded).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-    let mut children = Vec::new();
-    for index in 0..32 {
-        children.push(
-            fixture
-                .shine()
-                .args(["trust", "revoke", &format!("app/demo-{index}")])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-        );
-    }
-    for child in children {
-        Fixture::assert_ok(child.wait_with_output().unwrap());
-    }
+    fixture.run_concurrently(32, |command, index| {
+        command.args(["trust", "revoke", &format!("app/demo-{index}")]);
+    });
     let store: shine_core::trust::TrustStoreV1 =
         toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     assert!(
@@ -822,65 +816,42 @@ fn concurrent_broker_policy_adds_and_removes_preserve_successful_changes() {
         "version = 1\n[secret]\nTOKEN = true\n[payload]\ndata = 'synthetic-ciphertext'\n",
     )
     .unwrap();
-    let mut children = Vec::new();
-    for index in 0..32 {
-        children.push(
-            fixture
-                .shine()
-                .args([
-                    "env",
-                    "broker",
-                    "policy",
-                    "add",
-                    "--name",
-                    &format!("policy-{index}"),
-                    "--ssh-target",
-                    &format!("host-{index}"),
-                    "--workspace",
-                ])
-                .arg(&workspace)
-                .args([
-                    "--mode",
-                    "development",
-                    "--release",
-                    "TOKEN",
-                    "--",
-                    "echo",
-                    "test",
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-        );
-    }
-    for child in children {
-        Fixture::assert_ok(child.wait_with_output().unwrap());
-    }
+    fixture.run_concurrently(32, |command, index| {
+        command
+            .args([
+                "env",
+                "broker",
+                "policy",
+                "add",
+                "--name",
+                &format!("policy-{index}"),
+                "--ssh-target",
+                &format!("host-{index}"),
+                "--workspace",
+            ])
+            .arg(&workspace)
+            .args([
+                "--mode",
+                "development",
+                "--release",
+                "TOKEN",
+                "--",
+                "echo",
+                "test",
+            ]);
+    });
     let path = fixture.state().join("ssh-secret-broker.toml");
     let store: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(store["policy"].as_array().unwrap().len(), 32);
-    let mut children = Vec::new();
-    for index in 0..32 {
-        children.push(
-            fixture
-                .shine()
-                .args([
-                    "env",
-                    "broker",
-                    "policy",
-                    "remove",
-                    &format!("policy-{index}"),
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-        );
-    }
-    for child in children {
-        Fixture::assert_ok(child.wait_with_output().unwrap());
-    }
+    fixture.run_concurrently(32, |command, index| {
+        command.args([
+            "env",
+            "broker",
+            "policy",
+            "remove",
+            &format!("policy-{index}"),
+        ]);
+    });
     let store: toml::Value = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     assert!(store["policy"].as_array().unwrap().is_empty());
 }

@@ -1,5 +1,6 @@
 //! Refresh phase contracts through the approved production entry point.
 use super::*;
+use crate::runtime::tests::poll_once;
 use crate::runtime::{
     AppRefreshPlanRequest, HostOperation, InMemoryHost, NullObserver, PresetSnapshot,
     PresetSourceKind, ProcessOutput, RuntimeContext, RuntimePlatform,
@@ -93,14 +94,10 @@ fn request() -> AppRefreshPlanRequest {
 }
 async fn expect_pending<F: Future>(future: F) -> Pin<Box<F>> {
     let mut future = Box::pin(future);
-    std::future::poll_fn(|cx| {
-        assert!(
-            future.as_mut().poll(cx).is_pending(),
-            "refresh finished while the lifecycle lock was held"
-        );
-        std::task::Poll::Ready(())
-    })
-    .await;
+    assert!(
+        poll_once(future.as_mut()).await.is_pending(),
+        "refresh finished while the lifecycle lock was held"
+    );
     future
 }
 
@@ -475,14 +472,10 @@ async fn refresh_preserves_unrelated_receipts_added_while_waiting_for_the_lock()
     }
     // Completion releases the guard after receipt persistence and hooks.
     let mut next = Box::pin(runtime.acquire_app_lifecycle_operation());
-    std::future::poll_fn(|cx| {
-        assert!(matches!(
-            next.as_mut().poll(cx),
-            std::task::Poll::Ready(Ok(_))
-        ));
-        std::task::Poll::Ready(())
-    })
-    .await;
+    assert!(matches!(
+        poll_once(next.as_mut()).await,
+        std::task::Poll::Ready(Ok(_))
+    ));
 }
 
 #[tokio::test]

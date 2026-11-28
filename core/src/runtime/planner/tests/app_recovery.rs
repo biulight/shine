@@ -9,6 +9,25 @@ async fn approve_and_recover_app(runtime: &CoreRuntime<InMemoryHost>, plan: &Pla
         .unwrap();
 }
 
+async fn assert_upgrade_fails(
+    runtime: &CoreRuntime<InMemoryHost>,
+    request: AppPlanRequest,
+    approval: &PlanApprovalV1,
+) {
+    assert!(
+        runtime
+            .upgrade_apps_approved(
+                request,
+                approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut crate::runtime::NullObserver,
+                &mut Interaction
+            )
+            .await
+            .is_err()
+    );
+}
+
 fn two_file_app_snapshot() -> PresetSnapshot {
     PresetSnapshot::builder(PresetSourceKind::Embedded)
         .file(
@@ -258,16 +277,16 @@ fn json_relocation_fixture() -> (CoreRuntime<InMemoryHost>, PathBuf, PathBuf) {
     (runtime, previous, desired)
 }
 
-#[tokio::test]
-async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
-    let (runtime, previous, desired) = json_relocation_fixture();
-    let rollback = crate::action::managed_file_rollback_path(&previous);
+async fn save_previous_json_receipt(
+    runtime: &CoreRuntime<InMemoryHost>,
+    previous: &std::path::Path,
+) {
     let managed_keys = vec!["proxy".to_string()];
     AppManifest {
         schema_version: APP_MANIFEST_SCHEMA_VERSION,
         entries: vec![AppEntry {
             source: "app/demo/settings.json".to_string(),
-            destination: previous.clone(),
+            destination: previous.to_path_buf(),
             backup: None,
             content_hash: crate::runtime::managed_json::managed_json_hash(
                 br#"{"proxy":"previous"}"#,
@@ -282,6 +301,13 @@ async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
     .save(runtime.host(), &runtime.context().shine_dir)
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
+    let (runtime, previous, desired) = json_relocation_fixture();
+    let rollback = crate::action::managed_file_rollback_path(&previous);
+    save_previous_json_receipt(&runtime, &previous).await;
     let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
 
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
@@ -309,19 +335,7 @@ async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
     runtime
         .host()
         .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
-    let mut observer = crate::runtime::NullObserver;
-    assert!(
-        runtime
-            .upgrade_apps_approved(
-                request,
-                &approval,
-                AppApprovedUpgradeOptions::default(),
-                &mut observer,
-                &mut Interaction,
-            )
-            .await
-            .is_err()
-    );
+    assert_upgrade_fails(&runtime, request, &approval).await;
     assert!(runtime.host().read(&previous).await.is_err());
     let desired_json: serde_json::Value =
         serde_json::from_slice(&runtime.host().read(&desired).await.unwrap()).unwrap();
@@ -354,51 +368,18 @@ async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
 async fn json_relocation_receipt_failure_restores_only_owned_keys_on_both_sides() {
     let (runtime, previous, desired) = json_relocation_fixture();
     let rollback = crate::action::managed_file_rollback_path(&previous);
-    let managed_keys = vec!["proxy".to_string()];
     runtime.host().put_file(
         &previous,
         br#"{"proxy":"previous","theme":"light"}"#.to_vec(),
     );
-    AppManifest {
-        schema_version: APP_MANIFEST_SCHEMA_VERSION,
-        entries: vec![AppEntry {
-            source: "app/demo/settings.json".to_string(),
-            destination: previous.clone(),
-            backup: None,
-            content_hash: crate::runtime::managed_json::managed_json_hash(
-                br#"{"proxy":"previous"}"#,
-                &managed_keys,
-            )
-            .unwrap(),
-            install_strategy: crate::install::AppInstallStrategy::JsonMerge {
-                managed_keys: managed_keys.clone(),
-            },
-            uses_env: false,
-            requires_admin: false,
-        }],
-    }
-    .save(runtime.host(), &runtime.context().shine_dir)
-    .await
-    .unwrap();
+    save_previous_json_receipt(&runtime, &previous).await;
     let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime
         .host()
         .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
-    let mut observer = crate::runtime::NullObserver;
-    assert!(
-        runtime
-            .upgrade_apps_approved(
-                request,
-                &approval,
-                AppApprovedUpgradeOptions::default(),
-                &mut observer,
-                &mut Interaction,
-            )
-            .await
-            .is_err()
-    );
+    assert_upgrade_fails(&runtime, request, &approval).await;
     runtime
         .host()
         .put_file(&previous, br#"{"theme":"dark","zoom":2}"#.to_vec());
@@ -426,47 +407,16 @@ async fn json_relocation_receipt_failure_restores_only_owned_keys_on_both_sides(
 async fn committed_json_relocation_cleanup_preserves_user_owned_values_on_both_sides() {
     let (runtime, previous, desired) = json_relocation_fixture();
     let rollback = crate::action::managed_file_rollback_path(&previous);
-    let managed_keys = vec!["proxy".to_string()];
     runtime.host().put_file(
         &previous,
         br#"{"proxy":"previous","theme":"light"}"#.to_vec(),
     );
-    AppManifest {
-        schema_version: APP_MANIFEST_SCHEMA_VERSION,
-        entries: vec![AppEntry {
-            source: "app/demo/settings.json".to_string(),
-            destination: previous.clone(),
-            backup: None,
-            content_hash: crate::runtime::managed_json::managed_json_hash(
-                br#"{"proxy":"previous"}"#,
-                &managed_keys,
-            )
-            .unwrap(),
-            install_strategy: crate::install::AppInstallStrategy::JsonMerge { managed_keys },
-            uses_env: false,
-            requires_admin: false,
-        }],
-    }
-    .save(runtime.host(), &runtime.context().shine_dir)
-    .await
-    .unwrap();
+    save_previous_json_receipt(&runtime, &previous).await;
     let request = app_request(LifecycleOperation::Upgrade, Some("demo"));
     let plan = runtime.plan_apps(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().fail_remove_after(&rollback, 0);
-    let mut observer = crate::runtime::NullObserver;
-    assert!(
-        runtime
-            .upgrade_apps_approved(
-                request,
-                &approval,
-                AppApprovedUpgradeOptions::default(),
-                &mut observer,
-                &mut Interaction,
-            )
-            .await
-            .is_err()
-    );
+    assert_upgrade_fails(&runtime, request, &approval).await;
     let manifest = app_manifest(&runtime).await;
     assert_eq!(
         manifest
@@ -543,19 +493,7 @@ async fn app_relocation_recovery_after_receipt_commit_cleans_only_rollback() {
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().fail_remove_after(&rollback, 0);
 
-    let mut observer = crate::runtime::NullObserver;
-    assert!(
-        runtime
-            .upgrade_apps_approved(
-                request,
-                &approval,
-                AppApprovedUpgradeOptions::default(),
-                &mut observer,
-                &mut Interaction,
-            )
-            .await
-            .is_err()
-    );
+    assert_upgrade_fails(&runtime, request, &approval).await;
     assert!(runtime.host().read(&previous).await.is_err());
     assert_eq!(
         runtime.host().read(&desired).await.unwrap(),
@@ -636,19 +574,7 @@ async fn app_relocation_receipt_failure_recovers_previous_file_and_backup() {
         .host()
         .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
 
-    let mut observer = crate::runtime::NullObserver;
-    assert!(
-        runtime
-            .upgrade_apps_approved(
-                request,
-                &approval,
-                AppApprovedUpgradeOptions::default(),
-                &mut observer,
-                &mut Interaction,
-            )
-            .await
-            .is_err()
-    );
+    assert_upgrade_fails(&runtime, request, &approval).await;
     assert_eq!(
         runtime.host().read(&previous).await.unwrap(),
         b"user-original"
@@ -718,19 +644,7 @@ async fn app_relocation_recovers_created_destination_when_previous_file_was_miss
         .host()
         .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
 
-    let mut observer = crate::runtime::NullObserver;
-    assert!(
-        runtime
-            .upgrade_apps_approved(
-                request,
-                &approval,
-                AppApprovedUpgradeOptions::default(),
-                &mut observer,
-                &mut Interaction,
-            )
-            .await
-            .is_err()
-    );
+    assert_upgrade_fails(&runtime, request, &approval).await;
     assert_eq!(
         runtime.host().read(&desired).await.unwrap(),
         b"next-managed"
@@ -1039,19 +953,7 @@ async fn app_upgrade_prune_receipt_failure_recovers_stale_static_copy() {
         .host()
         .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
 
-    let mut observer = crate::runtime::NullObserver;
-    assert!(
-        runtime
-            .upgrade_apps_approved(
-                request,
-                &approval,
-                AppApprovedUpgradeOptions::default(),
-                &mut observer,
-                &mut Interaction,
-            )
-            .await
-            .is_err()
-    );
+    assert_upgrade_fails(&runtime, request, &approval).await;
     assert!(runtime.host().read(&destination).await.is_err());
     assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"managed");
 

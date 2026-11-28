@@ -45,29 +45,6 @@ fn action_ir(runtime: &CoreRuntime<InMemoryHost>, content: &[u8]) -> ActionIrV1 
     )
 }
 
-fn backup_action_ir(
-    runtime: &CoreRuntime<InMemoryHost>,
-    original: &[u8],
-    content: &[u8],
-) -> ActionIrV1 {
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    ActionIrV1::new(
-        "operation-backup",
-        vec![DeclarativeActionV1::create_managed_file_with_backup(
-            "action-backup",
-            "app/demo",
-            "config",
-            ManagedFileCreationWithBackupSpecV1 {
-                destination: destination.clone(),
-                backup: crate::install::backup_path(&destination),
-                original_hash: hash_content(original),
-                desired_hash: hash_content(content),
-                requires_admin: false,
-            },
-        )],
-    )
-}
-
 fn update_action_ir(
     runtime: &CoreRuntime<InMemoryHost>,
     original: &[u8],
@@ -719,24 +696,55 @@ async fn creation_recovery_blocks_a_symlink_even_when_target_bytes_match() {
     assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
 }
 
+const ORIGINAL_BYTES: &[u8] = b"user-original";
+const MANAGED_BYTES: &[u8] = b"managed-content";
+
+fn seed_backup_creation(runtime: &CoreRuntime<InMemoryHost>) -> (PathBuf, PathBuf, ActionIrV1) {
+    let destination = runtime.context().home_dir.join(".config/demo/config");
+    let backup = crate::install::backup_path(&destination);
+    runtime
+        .host()
+        .put_file(&destination, ORIGINAL_BYTES.to_vec());
+    let ir = ActionIrV1::new(
+        "operation-backup",
+        vec![DeclarativeActionV1::create_managed_file_with_backup(
+            "action-backup",
+            "app/demo",
+            "config",
+            ManagedFileCreationWithBackupSpecV1 {
+                destination: destination.clone(),
+                backup: backup.clone(),
+                original_hash: hash_content(ORIGINAL_BYTES),
+                desired_hash: hash_content(MANAGED_BYTES),
+                requires_admin: false,
+            },
+        )],
+    );
+    (destination, backup, ir)
+}
+
+async fn execute_backup_creation(
+    runtime: &CoreRuntime<InMemoryHost>,
+    ir: ActionIrV1,
+) -> Result<AppOperationExecutionV1> {
+    let (plan, approval) = approved_install_plan(runtime, &ir);
+    runtime
+        .execute_app_managed_file_creation_approved(&plan, &approval, ir, MANAGED_BYTES)
+        .await
+}
+
 #[tokio::test]
 async fn backup_creation_commits_only_after_receipt_owns_both_paths() {
     let runtime = runtime();
-    let original = b"user-original";
-    let content = b"managed-content";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    let ir = backup_action_ir(&runtime, original, content);
-    let (plan, approval) = approved_install_plan(&runtime, &ir);
+    let (destination, backup, ir) = seed_backup_creation(&runtime);
 
-    let execution = runtime
-        .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
-        .await
-        .unwrap();
+    let execution = execute_backup_creation(&runtime, ir).await.unwrap();
     assert_eq!(execution.backup.as_ref(), Some(&backup));
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
-    assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        MANAGED_BYTES
+    );
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), ORIGINAL_BYTES);
     assert!(
         runtime
             .commit_app_managed_file_operation(&execution)
@@ -744,7 +752,7 @@ async fn backup_creation_commits_only_after_receipt_owns_both_paths() {
             .is_err()
     );
 
-    save_matching_receipt_with_backup(&runtime, content, Some(backup.clone())).await;
+    save_matching_receipt_with_backup(&runtime, MANAGED_BYTES, Some(backup.clone())).await;
     runtime
         .commit_app_managed_file_operation(&execution)
         .await
@@ -756,27 +764,19 @@ async fn backup_creation_commits_only_after_receipt_owns_both_paths() {
             .await
             .is_err()
     );
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
-    assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        MANAGED_BYTES
+    );
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), ORIGINAL_BYTES);
 }
 
 #[tokio::test]
 async fn failed_backup_rename_leaves_original_and_recovery_clears_journal() {
     let runtime = runtime();
-    let original = b"user-original";
-    let content = b"managed-content";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
+    let (destination, backup, ir) = seed_backup_creation(&runtime);
     runtime.host().fail_rename_after(&destination, &backup, 0);
-    let ir = backup_action_ir(&runtime, original, content);
-    let (plan, approval) = approved_install_plan(&runtime, &ir);
-    assert!(
-        runtime
-            .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
-            .await
-            .is_err()
-    );
+    assert!(execute_backup_creation(&runtime, ir).await.is_err());
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert_recovery_step(
@@ -785,29 +785,21 @@ async fn failed_backup_rename_leaves_original_and_recovery_clears_journal() {
         "app_recovery_backup_creation_not_started",
     );
     approve_and_recover(&runtime, &recovery_plan).await;
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        ORIGINAL_BYTES
+    );
     assert!(runtime.host().read(&backup).await.is_err());
 }
 
 #[tokio::test]
 async fn interruption_after_backup_rename_restores_original() {
     let runtime = runtime();
-    let original = b"user-original";
-    let content = b"managed-content";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
+    let (destination, backup, ir) = seed_backup_creation(&runtime);
     runtime.host().fail_write_after(&destination, 0);
-    let ir = backup_action_ir(&runtime, original, content);
-    let (plan, approval) = approved_install_plan(&runtime, &ir);
-    assert!(
-        runtime
-            .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
-            .await
-            .is_err()
-    );
+    assert!(execute_backup_creation(&runtime, ir).await.is_err());
     assert!(runtime.host().read(&destination).await.is_err());
-    assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), ORIGINAL_BYTES);
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert_recovery_step(
@@ -816,53 +808,41 @@ async fn interruption_after_backup_rename_restores_original() {
         "app_recovery_restore_backup",
     );
     approve_and_recover(&runtime, &recovery_plan).await;
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        ORIGINAL_BYTES
+    );
     assert!(runtime.host().read(&backup).await.is_err());
 }
 
 #[tokio::test]
 async fn interruption_after_managed_write_removes_it_before_restoring_backup() {
     let runtime = runtime();
-    let original = b"user-original";
-    let content = b"managed-content";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
+    let (destination, backup, ir) = seed_backup_creation(&runtime);
     fail_journal_write_after(&runtime, 1);
-    let ir = backup_action_ir(&runtime, original, content);
-    let (plan, approval) = approved_install_plan(&runtime, &ir);
-    assert!(
-        runtime
-            .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
-            .await
-            .is_err()
+    assert!(execute_backup_creation(&runtime, ir).await.is_err());
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        MANAGED_BYTES
     );
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
-    assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), ORIGINAL_BYTES);
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     approve_and_recover(&runtime, &recovery_plan).await;
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        ORIGINAL_BYTES
+    );
     assert!(runtime.host().read(&backup).await.is_err());
 }
 
 #[tokio::test]
 async fn privileged_backup_creation_recovery_uses_privileged_paths() {
     let runtime = runtime();
-    let original = b"user-original";
-    let content = b"managed-content";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
+    let (destination, backup, ir) = seed_backup_creation(&runtime);
     fail_journal_write_after(&runtime, 1);
-    let ir = privileged_managed_file_ir(backup_action_ir(&runtime, original, content));
-    let (plan, approval) = approved_install_plan(&runtime, &ir);
-    assert!(
-        runtime
-            .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
-            .await
-            .is_err()
-    );
+    let ir = privileged_managed_file_ir(ir);
+    assert!(execute_backup_creation(&runtime, ir).await.is_err());
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(
@@ -872,7 +852,10 @@ async fn privileged_backup_creation_recovery_uses_privileged_paths() {
             .contains(&PermissionV1::Administrator)
     );
     approve_and_recover(&runtime, &recovery_plan).await;
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        ORIGINAL_BYTES
+    );
     assert!(runtime.host().read(&backup).await.is_err());
     let operations = runtime.host().operations();
     assert!(operations.contains(&HostOperation::RemovePrivileged(destination.clone())));
@@ -886,17 +869,9 @@ async fn privileged_backup_creation_recovery_uses_privileged_paths() {
 async fn backup_recovery_blocks_when_either_path_changed() {
     for change_backup in [false, true] {
         let runtime = runtime();
-        let original = b"user-original";
-        let content = b"managed-content";
-        let destination = runtime.context().home_dir.join(".config/demo/config");
-        let backup = crate::install::backup_path(&destination);
-        runtime.host().put_file(&destination, original.to_vec());
+        let (destination, backup, ir) = seed_backup_creation(&runtime);
         fail_journal_write_after(&runtime, 1);
-        let ir = backup_action_ir(&runtime, original, content);
-        let (plan, approval) = approved_install_plan(&runtime, &ir);
-        let _ = runtime
-            .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
-            .await;
+        assert!(execute_backup_creation(&runtime, ir).await.is_err());
         runtime.host().put_file(
             if change_backup { &backup } else { &destination },
             b"user-change".to_vec(),
@@ -923,20 +898,14 @@ async fn backup_recovery_blocks_when_either_path_changed() {
 #[tokio::test]
 async fn backup_recovery_blocks_a_symlink_even_when_target_bytes_match() {
     let runtime = runtime();
-    let original = b"user-original";
-    let content = b"managed-content";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
+    let (destination, backup, ir) = seed_backup_creation(&runtime);
     let symlink_target = runtime.context().home_dir.join("same-content");
-    runtime.host().put_file(&destination, original.to_vec());
     fail_journal_write_after(&runtime, 1);
-    let ir = backup_action_ir(&runtime, original, content);
-    let (plan, approval) = approved_install_plan(&runtime, &ir);
-    let _ = runtime
-        .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
-        .await;
+    assert!(execute_backup_creation(&runtime, ir).await.is_err());
     runtime.host().remove_file(&backup).await.unwrap();
-    runtime.host().put_file(&symlink_target, original.to_vec());
+    runtime
+        .host()
+        .put_file(&symlink_target, ORIGINAL_BYTES.to_vec());
     runtime
         .host()
         .symlink(&symlink_target, &backup)
@@ -950,48 +919,36 @@ async fn backup_recovery_blocks_a_symlink_even_when_target_bytes_match() {
         PlanActionV1::Blocked,
         "app_recovery_backup_state_changed",
     );
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
-    assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        MANAGED_BYTES
+    );
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), ORIGINAL_BYTES);
 }
 
 #[tokio::test]
 async fn recovery_preserves_backup_creation_after_receipt_is_durable() {
     let runtime = runtime();
-    let original = b"user-original";
-    let content = b"managed-content";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    let ir = backup_action_ir(&runtime, original, content);
-    let (plan, approval) = approved_install_plan(&runtime, &ir);
-    runtime
-        .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
-        .await
-        .unwrap();
-    save_matching_receipt_with_backup(&runtime, content, Some(backup.clone())).await;
+    let (destination, backup, ir) = seed_backup_creation(&runtime);
+    execute_backup_creation(&runtime, ir).await.unwrap();
+    save_matching_receipt_with_backup(&runtime, MANAGED_BYTES, Some(backup.clone())).await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     let recovered = approve_and_recover(&runtime, &recovery_plan).await;
     assert!(recovered.rolled_back_actions.is_empty());
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
-    assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        MANAGED_BYTES
+    );
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), ORIGINAL_BYTES);
 }
 
 #[tokio::test]
 async fn backup_recovery_blocks_on_a_mismatched_ownership_receipt() {
     let runtime = runtime();
-    let original = b"user-original";
-    let content = b"managed-content";
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let backup = crate::install::backup_path(&destination);
-    runtime.host().put_file(&destination, original.to_vec());
-    let ir = backup_action_ir(&runtime, original, content);
-    let (plan, approval) = approved_install_plan(&runtime, &ir);
-    runtime
-        .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
-        .await
-        .unwrap();
-    save_matching_receipt_with_backup(&runtime, content, None).await;
+    let (destination, backup, ir) = seed_backup_creation(&runtime);
+    execute_backup_creation(&runtime, ir).await.unwrap();
+    save_matching_receipt_with_backup(&runtime, MANAGED_BYTES, None).await;
 
     let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
     assert!(!recovery_plan.is_ready());
@@ -1000,8 +957,11 @@ async fn backup_recovery_blocks_on_a_mismatched_ownership_receipt() {
         PlanActionV1::Blocked,
         "app_recovery_receipt_conflict",
     );
-    assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
-    assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        MANAGED_BYTES
+    );
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), ORIGINAL_BYTES);
 }
 
 #[tokio::test]

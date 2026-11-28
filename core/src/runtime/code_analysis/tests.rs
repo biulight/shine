@@ -1,6 +1,7 @@
 use super::*;
 use crate::lifecycle::LifecycleOperation;
 use crate::plan::PlanApprovalV1;
+use crate::runtime::tests::poll_once;
 use crate::runtime::*;
 
 fn runtime(code: &str, permissions: &str, enabled: bool) -> CoreRuntime<InMemoryHost> {
@@ -846,11 +847,7 @@ async fn dropped_preparation_latches_cancellation_before_another_entry() {
         .unwrap();
     let requested = [binding];
     let mut preparation = Box::pin(runtime.prepare_code_analysis(&requested));
-    std::future::poll_fn(|cx| {
-        assert!(std::future::Future::poll(preparation.as_mut(), cx).is_pending());
-        std::task::Poll::Ready(())
-    })
-    .await;
+    assert!(poll_once(preparation.as_mut()).await.is_pending());
     drop(preparation);
     assert!(
         runtime

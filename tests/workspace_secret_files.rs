@@ -714,40 +714,52 @@ fn file_groups_refuse_existing_targets_and_preserve_replacements() {
     assert!(!f.root.join("other").exists());
 }
 
-#[test]
-fn file_groups_reject_workspace_case_aliases_before_backend_or_deletion() {
-    for (from, to) in [
-        ("target='.signing/key'", "target='SHINE.WORKSPACE.TOML'"),
-        (
-            "source='.secrets/{mode}/key.enc'",
-            "source='SHINE.WORKSPACE.TOML'",
-        ),
+fn assert_workspace_alias_rejected(workspace: Option<&str>, alias: &str) {
+    for (field, mapped_path) in [
+        ("source", ".secrets/{mode}/key.enc"),
+        ("target", ".signing/key"),
     ] {
         let f = Fixture::new();
-        let path = f.root.join("shine.workspace.toml");
-        let contents = fs::read_to_string(&path).unwrap().replace(from, to);
+        let default_path = f.root.join("shine.workspace.toml");
+        let path = f.root.join(workspace.unwrap_or("shine.workspace.toml"));
+        let contents = fs::read_to_string(&default_path).unwrap().replace(
+            &format!("{field}='{mapped_path}'"),
+            &format!("{field}='{alias}'"),
+        );
         fs::write(&path, &contents).unwrap();
         let log = f.root.join("backend-called");
         for dry_run in [false, true] {
-            let mut cmd = f.command();
-            cmd.args([
+            let mut seal = f.command();
+            seal.args([
                 "env",
                 "secret",
                 "seal",
                 "--file-group",
                 "signing",
                 "--remove-plaintext",
-            ])
-            .env("PROBE_BACKEND_LOG", &log);
-            if dry_run {
-                cmd.arg("--dry-run");
+            ]);
+            for mut command in [seal, f.export()] {
+                if workspace.is_some() {
+                    command.arg("--workspace").arg(&path);
+                }
+                if dry_run {
+                    command.arg("--dry-run");
+                }
+                error(
+                    command.env("PROBE_BACKEND_LOG", &log).output().unwrap(),
+                    "mapping overlaps workspace file",
+                );
+                assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+                assert!(!log.exists());
+                assert!(!f.root.join(".secrets").exists());
             }
-            error(cmd.output().unwrap(), "mapping overlaps workspace file");
-            assert_eq!(fs::read_to_string(&path).unwrap(), contents);
-            assert!(!log.exists());
-            assert!(!f.root.join(".secrets").exists());
         }
     }
+}
+
+#[test]
+fn file_groups_reject_workspace_case_aliases_before_backend_or_deletion() {
+    assert_workspace_alias_rejected(None, "SHINE.WORKSPACE.TOML");
 }
 
 #[test]
@@ -756,49 +768,7 @@ fn file_groups_reject_unicode_workspace_aliases_before_backend_or_deletion() {
         ("unicode-\u{e9}.toml", "unicode-e\u{301}.toml"),
         ("unicode-e\u{301}.toml", "unicode-\u{e9}.toml"),
     ] {
-        for field in ["source", "target"] {
-            let f = Fixture::new();
-            let path = f.root.join(name);
-            let original = fs::read_to_string(f.root.join("shine.workspace.toml")).unwrap();
-            let from = if field == "source" {
-                "source='.secrets/{mode}/key.enc'"
-            } else {
-                "target='.signing/key'"
-            };
-            let contents = original.replace(from, &format!("{field}='{alias}'"));
-            fs::write(&path, &contents).unwrap();
-            let log = f.root.join("backend-called");
-            for dry_run in [false, true] {
-                let mut cmd = f.command();
-                cmd.args([
-                    "env",
-                    "secret",
-                    "seal",
-                    "--file-group",
-                    "signing",
-                    "--remove-plaintext",
-                    "--workspace",
-                ])
-                .arg(&path)
-                .env("PROBE_BACKEND_LOG", &log);
-                if dry_run {
-                    cmd.arg("--dry-run");
-                }
-                error(cmd.output().unwrap(), "mapping overlaps workspace file");
-                let mut export = f.export();
-                export
-                    .arg("--workspace")
-                    .arg(&path)
-                    .env("PROBE_BACKEND_LOG", &log);
-                if dry_run {
-                    export.arg("--dry-run");
-                }
-                error(export.output().unwrap(), "mapping overlaps workspace file");
-                assert_eq!(fs::read_to_string(&path).unwrap(), contents);
-                assert!(!log.exists());
-                assert!(!f.root.join(".secrets").exists());
-            }
-        }
+        assert_workspace_alias_rejected(Some(name), alias);
     }
 }
 

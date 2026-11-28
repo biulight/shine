@@ -11,34 +11,30 @@ checker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checker)
 
 
-def needs(*names):
+def needs(*names, flags="none"):
     return "Version needs section '.gnu.version_r' contains 1 entry:\n" + "\n".join(
-        f"  0x0010: Name: {name}  Flags: none  Version: 2" for name in names
+        f"  0x0010: Name: {name}  Flags: {flags}  Version: 2" for name in names
     )
 
 
 class GlibcAdmission(unittest.TestCase):
-    def test_accepts_ubuntu_2204_and_older_requirements(self):
-        self.assertEqual(
-            checker.check_versions(needs("GLIBC_2.2.5", "GLIBC_2.9", "GLIBC_2.35")),
-            (2, 35, 0),
-        )
-
-    def test_compares_versions_numerically(self):
-        self.assertEqual(
-            checker.check_versions(needs("GLIBC_2.9", "GLIBC_2.34")), (2, 34, 0)
-        )
+    def test_highest_glibc_requirement_at_or_below_baseline(self):
+        definition = "Version definition section: Name: GLIBC_9.0\n"
+        for output, expected in [
+            (needs("GLIBC_2.2.5", "GLIBC_2.9", "GLIBC_2.35"), (2, 35, 0)),
+            (needs("GLIBC_2.9", "GLIBC_2.34"), (2, 34, 0)),
+            (definition + needs("GLIBC_2.35", "GCC_4.2.0"), (2, 35, 0)),
+        ]:
+            with self.subTest(output=output):
+                self.assertEqual(checker.check_versions(output), expected)
 
     def test_rejects_newer_versions_including_weak_requirements(self):
         for version in ("2.35.1", "2.36", "2.38", "2.39", "2.100", "3.0"):
+            output = needs("GLIBC_2.2.5", f"GLIBC_{version}", flags="WEAK")
             with self.subTest(version=version), self.assertRaisesRegex(
                 ValueError, "exceeds"
             ):
-                checker.check_versions(
-                    needs("GLIBC_2.2.5", "GLIBC_" + version).replace(
-                        "Flags: none", "Flags: WEAK"
-                    )
-                )
+                checker.check_versions(output)
 
     def test_rejects_private_or_unrecognized_glibc_requirements(self):
         for name in ("GLIBC_PRIVATE", "GLIBC_ABI_DT_RELR", "GLIBC_bad"):
@@ -53,12 +49,6 @@ class GlibcAdmission(unittest.TestCase):
                 ValueError, "no glibc"
             ):
                 checker.check_versions(output)
-
-    def test_ignores_definitions_and_other_libraries(self):
-        output = "Version definition section: Name: GLIBC_9.0\n" + needs(
-            "GLIBC_2.35", "GCC_4.2.0"
-        )
-        self.assertEqual(checker.check_versions(output), (2, 35, 0))
 
 
 if __name__ == "__main__":

@@ -149,22 +149,19 @@ mod tests {
         } else {
             "sh"
         };
-        let first_source = format!("one.{source_extension}");
-        let second_source = format!("two.{source_extension}");
         let category = dir.join("presets/shell/custom");
         fs::create_dir_all(&category).await.unwrap();
-        fs::write(
-            category.join("shine.toml"),
-            format!(
-                "[[files]]\nsource = \"{first_source}\"\ntarget = \"one\"\npermissions = {{ schema_version = 1 }}\n\n[[files]]\nsource = \"{second_source}\"\ntarget = \"two\"\npermissions = {{ schema_version = 1 }}\n"
-            ),
-        )
-        .await
-        .unwrap();
-        fs::write(category.join(first_source), b"echo one\n")
-            .await
-            .unwrap();
-        fs::write(category.join(second_source), b"echo two\n")
+        let mut declarations = Vec::new();
+        for name in ["one", "two"] {
+            let source = format!("{name}.{source_extension}");
+            declarations.push(format!(
+                "[[files]]\nsource = \"{source}\"\ntarget = \"{name}\"\npermissions = {{ schema_version = 1 }}\n"
+            ));
+            fs::write(category.join(source), format!("echo {name}\n"))
+                .await
+                .unwrap();
+        }
+        fs::write(category.join("shine.toml"), declarations.join("\n"))
             .await
             .unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();

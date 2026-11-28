@@ -13,6 +13,11 @@ function subscription(...uris: string[]): string {
   return b64(`${uris.join("\n")}\n`);
 }
 
+function vmess(ps: string, add: string, id: string, fields: Record<string, string | number> = {}): string {
+  const record = { ps, add, id, port: 443, ...fields };
+  return `vmess://${b64(JSON.stringify(record))}`;
+}
+
 describe("Surge subscription conversion", () => {
   test("uses a neutral user agent so providers return URI subscriptions", () => {
     expect(SUBSCRIPTION_USER_AGENT).toBe("shine-subscription-generator/1");
@@ -65,26 +70,19 @@ describe("Surge subscription conversion", () => {
   });
 
   test("converts VMess TCP and WebSocket TLS fields", () => {
-    const tcp = `vmess://${b64(JSON.stringify({
-      ps: "TCP",
-      add: "tcp.example",
+    const tcp = vmess("TCP", "tcp.example", "00000000-0000-0000-0000-000000000001", {
       port: "80",
-      id: "00000000-0000-0000-0000-000000000001",
       aid: "0",
       net: "tcp",
-    }))}`;
-    const ws = `vmess://${b64(JSON.stringify({
-      ps: "WS",
-      add: "ws.example",
-      port: 443,
-      id: "00000000-0000-0000-0000-000000000002",
+    });
+    const ws = vmess("WS", "ws.example", "00000000-0000-0000-0000-000000000002", {
       aid: 0,
       net: "ws",
       path: "/socket",
       host: "cdn.example",
       tls: "tls",
       sni: "origin.example",
-    }))}`;
+    });
     const result = convertSubscription(subscription(tcp, ws));
 
     expect(result.output).toContain("TCP = vmess, tcp.example, 80");
@@ -117,13 +115,7 @@ describe("Surge subscription conversion", () => {
   test("skips VLESS, unsupported transports, invalid and duplicate nodes", () => {
     const ss = `ss://${b64("aes-128-gcm:secret")}@example.com:443#One`;
     const duplicate = `ss://${b64("aes-128-gcm:secret")}@example.com:443#Two`;
-    const grpc = `vmess://${b64(JSON.stringify({
-      ps: "gRPC",
-      add: "grpc.example",
-      port: 443,
-      id: "00000000-0000-0000-0000-000000000003",
-      net: "grpc",
-    }))}`;
+    const grpc = vmess("gRPC", "grpc.example", "00000000-0000-0000-0000-000000000003", { net: "grpc" });
     const result = convertSubscription(
       subscription(ss, duplicate, "vless://example", grpc, "not-a-uri"),
     );
@@ -154,13 +146,8 @@ describe("Surge subscription conversion", () => {
   });
 
   test("rejects configuration delimiters and control characters in remote fields", () => {
-    const good = `vmess://${b64(JSON.stringify({
-      ps: "Good",
-      add: "good.example",
-      port: 443,
-      id: "00000000-0000-0000-0000-000000000004",
-    }))}`;
-    const maliciousRecords = [
+    const good = vmess("Good", "good.example", "00000000-0000-0000-0000-000000000004");
+    const maliciousRecords: Record<string, string>[] = [
       { add: "bad.example\nInjected = direct" },
       { id: "uuid\r\nInjected = direct" },
       { net: "ws", path: "/socket\nInjected = direct" },
@@ -169,13 +156,7 @@ describe("Surge subscription conversion", () => {
       { add: "bad.example, direct" },
     ];
     const malicious = maliciousRecords.map((fields, index) =>
-      `vmess://${b64(JSON.stringify({
-        ps: `Bad ${index}`,
-        add: "bad.example",
-        port: 443,
-        id: `00000000-0000-0000-0000-0000000001${index}`,
-        ...fields,
-      }))}`
+      vmess(`Bad ${index}`, "bad.example", `00000000-0000-0000-0000-0000000001${index}`, fields)
     );
 
     const result = convertSubscription(subscription(good, ...malicious));

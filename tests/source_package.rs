@@ -26,15 +26,11 @@ fn source_package_keeps_required_files_without_dependency_trees() {
         edition = "2024"
         license = "MIT"
         readme = "README.md"
+        include = include
         [lib]
         path = "cli/src/lib.rs"
         [workspace]
     };
-    let mut package = toml::Value::Table(package);
-    package["package"]
-        .as_table_mut()
-        .unwrap()
-        .insert("include".into(), include);
     fs::write(
         fixture.0.join("Cargo.toml"),
         toml::to_string(&package).unwrap(),
@@ -70,14 +66,7 @@ fn source_package_keeps_required_files_without_dependency_trees() {
         fs::write(path, "// fixture\n").unwrap();
     }
     let output = Command::new(env!("CARGO"))
-        .args([
-            "package",
-            "--list",
-            "--allow-dirty",
-            "--offline",
-            "--manifest-path",
-        ])
-        .arg(fixture.0.join("Cargo.toml"))
+        .args(["package", "--list", "--allow-dirty", "--offline"])
         .current_dir(&fixture.0)
         .output()
         .unwrap();
@@ -88,17 +77,10 @@ fn source_package_keeps_required_files_without_dependency_trees() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap().replace('\\', "/");
     let paths: std::collections::BTreeSet<_> = stdout.lines().collect();
-    for path in required {
-        assert!(
-            paths.contains(path),
-            "missing required package member: {path}\n{stdout}"
-        );
-    }
-    for path in unwanted {
-        assert!(
-            !paths.contains(path),
-            "unexpected package member: {path}\n{stdout}"
-        );
+    for (members, included) in [(required.as_slice(), true), (unwanted.as_slice(), false)] {
+        for &path in members {
+            assert_eq!(paths.contains(path), included, "{path}\n{stdout}");
+        }
     }
     assert!(
         !paths

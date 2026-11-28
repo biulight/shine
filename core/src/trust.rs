@@ -246,35 +246,27 @@ mod tests {
         }
     }
 
+    fn decision(grant: &TrustGrantV1, requirement: &TrustRequirementV1) -> TrustDecisionV1 {
+        evaluate_trust(std::slice::from_ref(grant), requirement)
+    }
+
     #[test]
     fn exact_requirement_matches_and_scope_changes_fail_closed() {
         let requirement = requirement();
         let grant = TrustGrantV1::for_reviewed_requirement(&requirement);
-        assert_eq!(
-            evaluate_trust(std::slice::from_ref(&grant), &requirement),
-            TrustDecisionV1::Trusted
-        );
+        assert_eq!(decision(&grant, &requirement), TrustDecisionV1::Trusted);
 
         let mut other = requirement.clone();
         other.target = "app/other".to_string();
-        assert_eq!(
-            evaluate_trust(std::slice::from_ref(&grant), &other),
-            TrustDecisionV1::Missing
-        );
+        assert_eq!(decision(&grant, &other), TrustDecisionV1::Missing);
 
         other = requirement.clone();
         other.code_digest = SnapshotDigestV1::builder("changed").finish();
-        assert_eq!(
-            evaluate_trust(std::slice::from_ref(&grant), &other),
-            TrustDecisionV1::CodeChanged
-        );
+        assert_eq!(decision(&grant, &other), TrustDecisionV1::CodeChanged);
 
         other = requirement;
         other.permissions = PermissionSetV1::default();
-        assert_eq!(
-            evaluate_trust(std::slice::from_ref(&grant), &other),
-            TrustDecisionV1::Trusted
-        );
+        assert_eq!(decision(&grant, &other), TrustDecisionV1::Trusted);
     }
 
     #[test]
@@ -285,14 +277,14 @@ mod tests {
         let mut changed_code = requirement.clone();
         changed_code.code_digest = SnapshotDigestV1::builder("changed-code").finish();
         assert_eq!(
-            evaluate_trust(std::slice::from_ref(&grant), &changed_code),
+            decision(&grant, &changed_code),
             TrustDecisionV1::DevelopmentTrusted
         );
 
         let mut changed_permissions = changed_code.clone();
         changed_permissions.permissions = PermissionSetV1::default();
         assert_eq!(
-            evaluate_trust(std::slice::from_ref(&grant), &changed_permissions),
+            decision(&grant, &changed_permissions),
             TrustDecisionV1::DevelopmentTrusted
         );
 
@@ -302,7 +294,7 @@ mod tests {
             labels: vec!["/other/app/demo".to_string()],
         });
         assert_eq!(
-            evaluate_trust(std::slice::from_ref(&grant), &changed_source),
+            decision(&grant, &changed_source),
             TrustDecisionV1::SourceChanged
         );
 
@@ -325,7 +317,7 @@ mod tests {
         assert_eq!(decoded.mode, TrustModeV1::Snapshot);
         assert!(!decoded.matches(&requirement));
         assert_eq!(
-            evaluate_trust(std::slice::from_ref(&decoded), &requirement),
+            decision(&decoded, &requirement),
             TrustDecisionV1::UnsupportedGrantSchema
         );
     }
@@ -357,7 +349,7 @@ mod tests {
         let mut unsupported = TrustGrantV1::for_reviewed_requirement(&requirement);
         unsupported.schema_version += 1;
         assert_eq!(
-            evaluate_trust(&[unsupported.clone()], &requirement),
+            decision(&unsupported, &requirement),
             TrustDecisionV1::UnsupportedGrantSchema
         );
         assert_eq!(

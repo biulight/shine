@@ -124,36 +124,27 @@ mod tests {
 
     #[test]
     fn release_target_maps_supported_platforms() {
-        assert_eq!(
-            release_target("macos", "aarch64").unwrap(),
-            "darwin-aarch64"
-        );
-        assert_eq!(release_target("linux", "x86_64").unwrap(), "linux-x86_64");
-        assert_eq!(
-            release_target("windows", "x86_64").unwrap(),
-            "windows-x86_64"
-        );
-        assert_eq!(
-            release_target("windows", "aarch64").unwrap(),
-            "windows-aarch64"
-        );
+        for (os, arch, target) in [
+            ("macos", "aarch64", "darwin-aarch64"),
+            ("linux", "x86_64", "linux-x86_64"),
+            ("windows", "x86_64", "windows-x86_64"),
+            ("windows", "aarch64", "windows-aarch64"),
+        ] {
+            assert_eq!(release_target(os, arch).unwrap(), target);
+        }
     }
 
     #[test]
-    fn operating_system_names_and_unix_group_are_stable() {
-        assert_eq!(OperatingSystem::Macos.as_str(), "macos");
-        assert_eq!(OperatingSystem::Linux.as_str(), "linux");
-        assert_eq!(OperatingSystem::Windows.as_str(), "windows");
-        assert!(OperatingSystem::Macos.is_unix());
-        assert!(OperatingSystem::Linux.is_unix());
-        assert!(!OperatingSystem::Windows.is_unix());
-    }
-
-    #[test]
-    fn executable_name_is_platform_specific() {
-        assert_eq!(executable_name_for_os("linux"), "shine");
-        assert_eq!(executable_name_for_os("macos"), "shine");
-        assert_eq!(executable_name_for_os("windows"), "shine.exe");
+    fn platform_names_unix_group_and_executables_are_stable() {
+        for (os, name, unix, executable) in [
+            (OperatingSystem::Macos, "macos", true, "shine"),
+            (OperatingSystem::Linux, "linux", true, "shine"),
+            (OperatingSystem::Windows, "windows", false, "shine.exe"),
+        ] {
+            assert_eq!(os.as_str(), name);
+            assert_eq!(os.is_unix(), unix, "{name}");
+            assert_eq!(executable_name_for_os(name), executable, "{name}");
+        }
     }
 
     #[test]
@@ -162,16 +153,10 @@ mod tests {
             default_self_install_dest_for("linux", None).unwrap(),
             PathBuf::from("/usr/local/bin/shine")
         );
+        let local = PathBuf::from(r"C:\Users\me\AppData\Local");
         assert_eq!(
-            default_self_install_dest_for(
-                "windows",
-                Some(PathBuf::from(r"C:\Users\me\AppData\Local"))
-            )
-            .unwrap(),
-            PathBuf::from(r"C:\Users\me\AppData\Local")
-                .join("Programs")
-                .join("shine")
-                .join("shine.exe")
+            default_self_install_dest_for("windows", Some(local.clone())).unwrap(),
+            local.join("Programs").join("shine").join("shine.exe")
         );
     }
 

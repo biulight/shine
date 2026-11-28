@@ -2,6 +2,7 @@
 
 import errno
 import io
+from itertools import product
 import os
 import shutil
 from pathlib import Path
@@ -14,6 +15,17 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == "nt"
+
+
+def prepare_preview_installer(output):
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/prepare-preview-installer.py"),
+            str(output),
+        ],
+        check=True,
+    )
 
 
 class ReleaseInstallers(unittest.TestCase):
@@ -79,14 +91,7 @@ class ReleaseInstallers(unittest.TestCase):
                 env["NO_COLOR"] = "1"
             if preview_asset:
                 installer = root / ("install.ps1" if WINDOWS else "install.sh")
-                subprocess.run(
-                    [
-                        sys.executable,
-                        str(ROOT / "scripts/prepare-preview-installer.py"),
-                        str(installer),
-                    ],
-                    check=True,
-                )
+                prepare_preview_installer(installer)
                 env["TEST_INSTALLER"] = str(installer)
             if version is not None:
                 env["SHINE_VERSION"] = version
@@ -312,10 +317,15 @@ cp "$TEST_ARCHIVE" "$2"
                 )
 
     def test_versions_and_overrides(self):
-        for version in (None, "latest", "2.7.0", "preview"):
-            for custom in (False, True):
-                with self.subTest(version=version, custom=custom):
-                    self.run_installer(version, custom=custom)
+        for version, custom in product(
+            (None, "latest", "2.7.0", "preview"), (False, True)
+        ):
+            with self.subTest(installer="stable", version=version, custom=custom):
+                self.run_installer(version, custom=custom)
+            with self.subTest(installer="preview", version=version, custom=custom):
+                self.run_installer(
+                    version, preview_asset=True, existing=False, custom=custom
+                )
 
     def test_preview_asset_generation(self):
         for name, default, preview in (
@@ -325,29 +335,11 @@ cp "$TEST_ARCHIVE" "$2"
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
                 source = (ROOT / name).read_text(encoding="utf-8")
                 output = Path(temp) / name
-                subprocess.run(
-                    [
-                        sys.executable,
-                        str(ROOT / "scripts/prepare-preview-installer.py"),
-                        str(output),
-                    ],
-                    check=True,
-                )
+                prepare_preview_installer(output)
                 generated = output.read_text(encoding="utf-8")
                 self.assertNotEqual(generated, source)
                 self.assertEqual(generated.replace(preview, default), source)
                 self.assertEqual((ROOT / name).read_text(encoding="utf-8"), source)
-
-    def test_preview_asset_defaults_and_overrides(self):
-        for version in (None, "latest", "2.7.0", "preview"):
-            for custom in (False, True):
-                with self.subTest(version=version, custom=custom):
-                    self.run_installer(
-                        version, preview_asset=True, existing=False, custom=custom
-                    )
-        for failure in ("download", "missing"):
-            with self.subTest(failure=failure):
-                self.run_installer(preview_asset=True, failure=failure)
 
     def test_preview_fresh_install(self):
         self.run_installer("preview", existing=False)
@@ -369,8 +361,10 @@ cp "$TEST_ARCHIVE" "$2"
 
     def test_preview_failure_preserves_install(self):
         for failure in ("download", "missing"):
-            with self.subTest(failure=failure):
+            with self.subTest(installer="stable", failure=failure):
                 self.run_installer("preview", failure=failure)
+            with self.subTest(installer="preview", failure=failure):
+                self.run_installer(preview_asset=True, failure=failure)
 
 
 if __name__ == "__main__":

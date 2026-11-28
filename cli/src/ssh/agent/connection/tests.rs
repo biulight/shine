@@ -20,40 +20,47 @@ fn snapshot() -> WorkspaceSnapshot {
     }
 }
 
-async fn request(message: ClientMessage, broker: Option<&BrokerSession>) -> ServerMessage {
+const HELLO: ClientMessage = ClientMessage::Hello {
+    protocol_version: PROTOCOL_VERSION,
+};
+
+async fn handshake(peer: &mut tokio::io::DuplexStream) {
+    protocol::write_message(peer, &HELLO).await.unwrap();
+    let ack: ServerMessage = protocol::read_message(peer).await.unwrap();
+    assert!(matches!(
+        ack,
+        ServerMessage::HelloAck {
+            protocol_version: PROTOCOL_VERSION
+        }
+    ));
+}
+
+async fn request_error(message: ClientMessage, broker: Option<&BrokerSession>) -> String {
     let (agent, mut peer) = tokio::io::duplex(8192);
     let context = context();
     let server = handle_connection(agent, "session", &context, broker);
     let client = async {
-        protocol::write_message(
-            &mut peer,
-            &ClientMessage::Hello {
-                protocol_version: PROTOCOL_VERSION,
-            },
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            protocol::read_message::<_, ServerMessage>(&mut peer)
-                .await
-                .unwrap(),
-            ServerMessage::HelloAck {
-                protocol_version: PROTOCOL_VERSION
-            }
-        ));
+        handshake(&mut peer).await;
         protocol::write_message(&mut peer, &message).await.unwrap();
-        protocol::read_message::<_, ServerMessage>(&mut peer)
-            .await
-            .unwrap()
+        protocol::read_message(&mut peer).await.unwrap()
     };
     let (result, response) = tokio::join!(server, client);
     result.unwrap();
-    response
+    let ServerMessage::Error { message } = response else {
+        panic!("expected request to be rejected")
+    };
+    message
 }
 
 #[tokio::test]
 async fn every_request_checks_token_before_transfer_status_or_broker_dispatch() {
-    for token in ["wrong", "session"] {
+    for (token, expected) in [
+        ("wrong", "invalid session token"),
+        (
+            "session",
+            "secret broker is not enabled for this SSH session",
+        ),
+    ] {
         let messages = [
             ClientMessage::DirectSecret {
                 token: token.into(),
@@ -76,17 +83,7 @@ async fn every_request_checks_token_before_transfer_status_or_broker_dispatch() 
             },
         ];
         for message in messages {
-            let ServerMessage::Error { message } = request(message, None).await else {
-                panic!("secret request bypassed broker authorization")
-            };
-            assert_eq!(
-                message,
-                if token == "wrong" {
-                    "invalid session token"
-                } else {
-                    "secret broker is not enabled for this SSH session"
-                }
-            );
+            assert_eq!(request_error(message, None).await, expected);
         }
     }
     for message in [
@@ -103,9 +100,7 @@ async fn every_request_checks_token_before_transfer_status_or_broker_dispatch() 
             use_scp: false,
         },
     ] {
-        assert!(
-            matches!(request(message, None).await, ServerMessage::Error { message } if message == "invalid session token")
-        );
+        assert_eq!(request_error(message, None).await, "invalid session token");
     }
 }
 
@@ -142,12 +137,8 @@ async fn handshake_rejects_wrong_version_missing_hello_and_second_hello() {
     let context = context();
     let server = handle_connection(agent, "session", &context, None);
     let client = async {
-        let hello = ClientMessage::Hello {
-            protocol_version: PROTOCOL_VERSION,
-        };
-        protocol::write_message(&mut peer, &hello).await.unwrap();
-        let _: ServerMessage = protocol::read_message(&mut peer).await.unwrap();
-        protocol::write_message(&mut peer, &hello).await.unwrap();
+        handshake(&mut peer).await;
+        protocol::write_message(&mut peer, &HELLO).await.unwrap();
     };
     let (result, ()) = tokio::join!(server, client);
     assert!(
@@ -188,10 +179,10 @@ async fn enabled_broker_retains_exact_authorization_and_nonce_replay_rejection()
         ("session", "not authorized for this SSH session"),
         ("session", "nonce has already been used"),
     ] {
-        let response = request(message(token), Some(&broker)).await;
+        let error = request_error(message(token), Some(&broker)).await;
         assert!(
-            matches!(response, ServerMessage::Error { message } if message.contains(expected)),
-            "expected {expected}"
+            error.contains(expected),
+            "expected {expected:?}, got {error:?}"
         );
     }
     tokio::fs::remove_dir_all(dir).await.unwrap();

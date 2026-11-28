@@ -99,14 +99,13 @@ mod tests {
         let root = crate::test_support::make_temp_dir("shine-cache-document").await;
         let config = Config::new_for_test(&root);
         let path = root.join("cache.toml");
+        let read = || read_valid_cache(&path, "test", "snapshot", &config);
         for contents in [
             "version = 'CACHE_DOCUMENT_CANARY'\nproject_root='unused'\n[modes]\n",
             "version = 1\nproject_root = 'CACHE_DOCUMENT_CANARY' unexpected\n[modes]\n",
         ] {
             tokio::fs::write(&path, contents).await.unwrap();
-            let error = read_valid_cache(&path, "test", "snapshot", &config)
-                .await
-                .unwrap_err();
+            let error = read().await.unwrap_err();
             let diagnostic = format!("{error:#}\n{error:?}");
             assert!(
                 !diagnostic.contains("CACHE_DOCUMENT_CANARY"),
@@ -119,13 +118,12 @@ mod tests {
         tokio::fs::write(&path, "version=1\nproject_root='unchanged'\n[modes]\n")
             .await
             .unwrap();
-        assert!(
-            read_valid_cache(&path, "test", "snapshot", &config)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(read().await.unwrap().is_none());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn project_cache(dir: &Path, mode: &str) -> PathBuf {
+        cache_path(&dir.join("shine.workspace.toml"), mode).unwrap()
     }
 
     #[cfg(any(unix, windows))]
@@ -142,16 +140,11 @@ mod tests {
             std::ffi::OsString::from_wide(&[0xd800])
         };
         let root = std::env::temp_dir().join(format!("shine-cache-{}", uuid::Uuid::new_v4()));
-        let native = root.join(&raw).join("shine.workspace.toml");
-        let alias = root
-            .join(raw.to_string_lossy().as_ref())
-            .join("shine.workspace.toml");
+        let native = root.join(&raw);
+        let alias = root.join(raw.to_string_lossy().as_ref());
         assert_ne!(native, alias);
         for mode in ["development", "production"] {
-            assert_ne!(
-                cache_path(&native, mode).unwrap(),
-                cache_path(&alias, mode).unwrap()
-            );
+            assert_ne!(project_cache(&native, mode), project_cache(&alias, mode));
         }
     }
 
@@ -162,20 +155,13 @@ mod tests {
         std::fs::create_dir(&nested).unwrap();
         let canonical = std::fs::canonicalize(&root).unwrap();
         let expected_id = shine_core::digest::sha256_hex(canonical.to_str().unwrap().as_bytes());
-        let direct = cache_path(&root.join("shine.workspace.toml"), "development").unwrap();
+        let direct = project_cache(&root, "development");
         assert_eq!(direct.file_name().unwrap(), "env-development.toml");
         assert_eq!(
             direct.parent().unwrap().file_name().unwrap(),
             expected_id.as_str()
         );
-        assert_eq!(
-            direct,
-            cache_path(
-                &nested.join("..").join("shine.workspace.toml"),
-                "development"
-            )
-            .unwrap()
-        );
+        assert_eq!(direct, project_cache(&nested.join(".."), "development"));
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt;
@@ -184,8 +170,8 @@ mod tests {
                 let alias = root.join("project-\u{fffd}");
                 std::fs::create_dir(&alias).unwrap();
                 assert_ne!(
-                    cache_path(&native.join("shine.workspace.toml"), "development").unwrap(),
-                    cache_path(&alias.join("shine.workspace.toml"), "development").unwrap()
+                    project_cache(&native, "development"),
+                    project_cache(&alias, "development")
                 );
             }
         }

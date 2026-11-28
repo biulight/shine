@@ -54,20 +54,14 @@ mod tests {
 
     #[test]
     fn dpkg_requires_complete_packages_and_no_active_conflicts() {
-        let packages = vec!["docker-ce".into(), "docker-compose-plugin".into()];
-        let conflicts = vec!["docker.io".into()];
+        let packages = ["docker-ce".into(), "docker-compose-plugin".into()];
+        let conflicts = ["docker.io".into()];
+        let present = |bytes: Option<&[u8]>| is_present(bytes, &packages, &conflicts);
         let complete = "Package: docker-ce\nStatus: hold ok installed\n\nPackage: docker-compose-plugin\nStatus: install ok installed\n";
-        assert!(is_present(Some(complete.as_bytes()), &packages, &conflicts).unwrap());
-        assert!(
-            is_present(
-                Some(complete.replace('\n', "\r\n").as_bytes()),
-                &packages,
-                &conflicts
-            )
-            .unwrap()
-        );
-        assert!(!is_present(None, &packages, &conflicts).unwrap());
-        assert!(!is_present(Some(b""), &packages, &conflicts).unwrap());
+        assert!(present(Some(complete.as_bytes())).unwrap());
+        assert!(present(Some(complete.replace('\n', "\r\n").as_bytes())).unwrap());
+        assert!(!present(None).unwrap());
+        assert!(!present(Some(b"")).unwrap());
         for state in [
             "unpacked",
             "half-installed",
@@ -80,36 +74,25 @@ mod tests {
         ] {
             let db = format!("{complete}\nPackage: docker.io\nStatus: deinstall ok {state}\n");
             assert_eq!(
-                is_present(Some(db.as_bytes()), &packages, &conflicts).unwrap(),
-                matches!(state, "config-files" | "not-installed")
+                present(Some(db.as_bytes())).unwrap(),
+                matches!(state, "config-files" | "not-installed"),
+                "conflict in state {state}"
             );
             let partial = complete.replace("hold ok installed", &format!("install ok {state}"));
             assert_eq!(
-                is_present(Some(partial.as_bytes()), &packages, &conflicts).unwrap(),
-                state == "installed"
+                present(Some(partial.as_bytes())).unwrap(),
+                state == "installed",
+                "required package in state {state}"
             );
         }
-        assert!(
-            !is_present(
-                Some(
-                    complete
-                        .replace("hold ok installed", "install reinstreq installed")
-                        .as_bytes()
-                ),
-                &packages,
-                &conflicts
-            )
-            .unwrap()
-        );
-        assert!(
-            is_present(
-                Some(b"Package: docker-ce\nStatus: broken\n"),
-                &packages,
-                &conflicts
-            )
-            .is_err()
-        );
-        assert!(is_present(Some(b"Package: docker-ce\n"), &packages, &conflicts).is_err());
-        assert!(is_present(Some(&[0xff]), &packages, &conflicts).is_err());
+        let broken = complete.replace("hold ok installed", "install reinstreq installed");
+        assert!(!present(Some(broken.as_bytes())).unwrap());
+        for invalid in [
+            b"Package: docker-ce\nStatus: broken\n".as_slice(),
+            b"Package: docker-ce\n",
+            &[0xff],
+        ] {
+            assert!(present(Some(invalid)).is_err(), "{invalid:?}");
+        }
     }
 }

@@ -38,6 +38,8 @@ pub fn write_shine_toml_template(
 mod tests {
     use super::*;
 
+    const ALREADY_EXISTS: &str = "shine.toml already exists; use --force to overwrite";
+
     struct Directory(PathBuf);
 
     impl Directory {
@@ -65,56 +67,43 @@ mod tests {
 
         let error = write_shine_toml_template(&directory.0, false, "template").unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            "shine.toml already exists; use --force to overwrite"
-        );
+        assert_eq!(error.to_string(), ALREADY_EXISTS);
         assert_eq!(std::fs::read_link(&path).unwrap(), referent);
         assert!(!referent.exists());
     }
 
     #[test]
     fn concurrent_template_creation_preserves_the_only_winner() {
+        const WRITERS: usize = 8;
         let directory = Directory::new();
-        let barrier = std::sync::Barrier::new(8);
-        let results = std::thread::scope(|scope| {
-            let handles = (0..8)
-                .map(|index| {
-                    let root = &directory.0;
-                    let barrier = &barrier;
-                    scope.spawn(move || {
-                        let template = format!("writer = {index}\n").repeat(1024);
-                        barrier.wait();
-                        (
-                            template.clone(),
-                            write_shine_toml_template(root, false, &template),
-                        )
-                    })
-                })
-                .collect::<Vec<_>>();
-            handles
-                .into_iter()
-                .map(|handle| handle.join().unwrap())
-                .collect::<Vec<_>>()
+        let barrier = std::sync::Barrier::new(WRITERS);
+        let path = directory.0.join("shine.toml");
+        let mut winners = Vec::new();
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for index in 0..WRITERS {
+                let root = &directory.0;
+                let barrier = &barrier;
+                handles.push(scope.spawn(move || {
+                    let template = format!("writer = {index}\n").repeat(1024);
+                    barrier.wait();
+                    let result = write_shine_toml_template(root, false, &template);
+                    (template, result)
+                }));
+            }
+            for handle in handles {
+                let (template, result) = handle.join().unwrap();
+                match result {
+                    Ok((written, overwritten)) => {
+                        assert_eq!(written, path);
+                        assert!(!overwritten);
+                        winners.push(template);
+                    }
+                    Err(error) => assert_eq!(error.to_string(), ALREADY_EXISTS),
+                }
+            }
         });
-        let winners = results
-            .iter()
-            .filter(|(_, result)| result.is_ok())
-            .collect::<Vec<_>>();
         assert_eq!(winners.len(), 1);
-        assert_eq!(
-            winners[0].1.as_ref().unwrap(),
-            &(directory.0.join("shine.toml"), false)
-        );
-        assert_eq!(
-            std::fs::read_to_string(directory.0.join("shine.toml")).unwrap(),
-            winners[0].0
-        );
-        for (_, result) in results.iter().filter(|(_, result)| result.is_err()) {
-            assert_eq!(
-                result.as_ref().unwrap_err().to_string(),
-                "shine.toml already exists; use --force to overwrite"
-            );
-        }
+        assert_eq!(std::fs::read_to_string(path).unwrap(), winners[0]);
     }
 }

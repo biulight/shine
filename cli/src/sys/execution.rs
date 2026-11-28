@@ -238,52 +238,51 @@ pub(super) fn presentation_symbol_stderr(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use SysItemStatus::{Failed, Installed, Updated};
+
+    fn outcome(
+        item_id: &str,
+        label: &str,
+        status: SysItemStatus,
+        detail: &str,
+        logs: &[&str],
+    ) -> SysItemOutcome {
+        SysItemOutcome {
+            item_id: item_id.into(),
+            label: label.into(),
+            status,
+            detail: detail.into(),
+            logs: logs.iter().map(|&line| line.to_owned()).collect(),
+        }
+    }
 
     #[test]
     fn bootstrap_logs_are_tagged_safe_and_not_replayed_in_outcomes() {
-        assert_eq!(
-            installer_log_line("rust", "download"),
-            "    [rust] download"
-        );
-        assert_eq!(installer_log_line("rust", "warning"), "    [rust] warning");
-        assert_eq!(
-            installer_log_line("rust", "\x1b[2K\rfake\nrow"),
-            "    [rust] \\u{1b}[2K\\rfake\\nrow"
-        );
-        for status in [SysItemStatus::Installed, SysItemStatus::Failed] {
-            let outcome = SysItemOutcome {
-                item_id: "rust".into(),
-                label: "Rust".into(),
-                status,
-                detail: "result".into(),
-                logs: vec!["already streamed".into()],
-            };
+        for (text, expected) in [
+            ("download", "    [rust] download"),
+            ("warning", "    [rust] warning"),
+            ("\x1b[2K\rfake\nrow", "    [rust] \\u{1b}[2K\\rfake\\nrow"),
+        ] {
+            assert_eq!(installer_log_line("rust", text), expected);
+        }
+        let start = item_install_start_line("rust", "Rust", false);
+        for (status, expected) in [(Installed, "installed"), (Failed, "failed")] {
+            let outcome = outcome("rust", "Rust", status, "result", &["already streamed"]);
             let lines = bootstrap_outcome_lines(&outcome, 14);
             assert_eq!(lines.len(), 1);
-            for row in [
-                item_install_start_line("rust", "Rust", false),
-                installer_log_line("rust", "download"),
-                installer_log_line("rust", "warning"),
-                lines[0].clone(),
-            ] {
-                let plain = console::strip_ansi_codes(&row);
+            for row in [&start, &lines[0]] {
+                let plain = console::strip_ansi_codes(row);
                 let (prefix, _) = plain.split_once('[').unwrap();
                 assert_eq!(console::measure_text_width(prefix), 4, "{plain}");
             }
-            assert!(lines[0].contains(status_text(status)));
+            assert!(lines[0].contains(expected), "{}", lines[0]);
             assert!(!lines[0].contains("already streamed"));
         }
     }
 
     #[test]
     fn bootstrap_profile_diagnostics_are_not_lost() {
-        let outcome = SysItemOutcome {
-            item_id: "profile".into(),
-            label: "profile".into(),
-            status: SysItemStatus::Updated,
-            detail: String::new(),
-            logs: vec!["profile note".into()],
-        };
+        let outcome = outcome("profile", "profile", Updated, "", &["profile note"]);
         let lines = bootstrap_outcome_lines(&outcome, 14);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1], "    [profile] profile note");
@@ -315,34 +314,24 @@ mod tests {
         let width = sys_item_label_width(&selection, &labels);
         assert_eq!(width, 16);
         for label in labels.values() {
-            let outcome = SysItemOutcome {
-                item_id: "item".into(),
-                label: label.clone(),
-                status: SysItemStatus::Updated,
-                detail: "detail".into(),
-                logs: vec![],
-            };
+            let outcome = outcome("item", label, Updated, "detail", &[]);
             let line = &item_outcome_lines(&outcome, width)[0];
-            assert_eq!(
-                console::measure_text_width(line.split_once("updated").unwrap().0),
-                21
-            );
-            assert_eq!(
-                console::measure_text_width(line.split_once("detail").unwrap().0),
-                39
-            );
+            for (column, offset) in [("updated", 21), ("detail", 39)] {
+                let (prefix, _) = line.split_once(column).unwrap();
+                assert_eq!(console::measure_text_width(prefix), offset, "{line}");
+            }
         }
     }
 
     #[test]
     fn managed_item_outcome_lines_preserve_detail_and_log_order() {
-        let outcome = SysItemOutcome {
-            item_id: "split-dns".to_string(),
-            label: "Split DNS".to_string(),
-            status: SysItemStatus::Updated,
-            detail: "receipt refreshed".to_string(),
-            logs: vec!["first".to_string(), "second".to_string()],
-        };
+        let outcome = outcome(
+            "split-dns",
+            "Split DNS",
+            Updated,
+            "receipt refreshed",
+            &["first", "second"],
+        );
 
         assert_eq!(
             item_outcome_lines(&outcome, 14),

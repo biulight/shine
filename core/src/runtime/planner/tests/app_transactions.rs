@@ -1,6 +1,7 @@
 //! App transactions regressions.
 use super::*;
 use crate::action::ActionKindV1;
+use crate::runtime::tests::poll_once;
 
 async fn single_approved_action(
     runtime: &CoreRuntime<InMemoryHost>,
@@ -148,11 +149,7 @@ async fn waiting_app_install_revalidates_approval_before_preparation_effects() {
     let pending =
         runtime.install_apps_approved(request, &approval, &mut observer, &mut interaction);
     tokio::pin!(pending);
-    std::future::poll_fn(|cx| {
-        assert!(pending.as_mut().poll(cx).is_pending());
-        std::task::Poll::Ready(())
-    })
-    .await;
+    assert!(poll_once(pending.as_mut()).await.is_pending());
     // The in-memory host records acquisition only after the holder releases the lock.
     assert!(runtime.host().operations()[since..].is_empty());
     let destination = runtime.context().home_dir.join(".config/demo/config.toml");
@@ -192,14 +189,10 @@ async fn waiting_app_install_revalidates_approval_before_preparation_effects() {
     // Rejection releases the outer lifecycle guard as well as preserving resources.
     let next = runtime.host().acquire_operation_lock(&lock_path);
     tokio::pin!(next);
-    std::future::poll_fn(|cx| {
-        assert!(matches!(
-            next.as_mut().poll(cx),
-            std::task::Poll::Ready(Ok(_))
-        ));
-        std::task::Poll::Ready(())
-    })
-    .await;
+    assert!(matches!(
+        poll_once(next.as_mut()).await,
+        std::task::Poll::Ready(Ok(_))
+    ));
 }
 
 #[tokio::test]
@@ -616,13 +609,9 @@ async fn approved_privileged_app_install_journals_static_copy_creation() {
     let install =
         runtime.install_apps_approved(request, &approval, &mut observer, &mut interaction);
     tokio::pin!(install);
-    std::future::poll_fn(|cx| {
-        assert!(install.as_mut().poll(cx).is_pending());
-        let mut competing_app = std::pin::pin!(runtime.acquire_app_lifecycle_operation());
-        assert!(competing_app.as_mut().poll(cx).is_pending());
-        std::task::Poll::Ready(())
-    })
-    .await;
+    assert!(poll_once(install.as_mut()).await.is_pending());
+    let competing_app = runtime.acquire_app_lifecycle_operation();
+    assert!(poll_once(std::pin::pin!(competing_app)).await.is_pending());
     drop(privileged_guard);
     install.await.unwrap();
     let destination = PathBuf::from("/etc/demo/config.toml");

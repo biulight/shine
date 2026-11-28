@@ -63,6 +63,10 @@ fn recognized_calls_keep_identity_across_spelling_and_wrapper_matrix() {
         let expected_matching = report(&plain, Some(&declared));
         assert_eq!(differences(&expected_missing), 1, "{plain}");
         assert!(expected_matching.allowed, "{plain}");
+        let cases = [
+            (None, signature(&expected_missing)),
+            (Some(&declared), signature(&expected_matching)),
+        ];
         for member in [
             format!("{object}.{key}"),
             format!("({object})['{key}']"),
@@ -82,16 +86,14 @@ fn recognized_calls_keep_identity_across_spelling_and_wrapper_matrix() {
                     format!("const invoke={callee}; invoke({args});"),
                 ] {
                     let source = format!("{setup} {body}");
-                    assert_eq!(
-                        signature(&report(&source, None)),
-                        signature(&expected_missing),
-                        "{source}"
-                    );
-                    assert_eq!(
-                        signature(&report(&source, Some(&declared))),
-                        signature(&expected_matching),
-                        "{source}"
-                    );
+                    for (permission, expected) in &cases {
+                        let actual = report(&source, *permission);
+                        assert_eq!(
+                            &signature(&actual),
+                            expected,
+                            "{source}, declaration={permission:?}"
+                        );
+                    }
                 }
             }
         }
@@ -115,14 +117,7 @@ fn equivalent_builtin_import_forms_keep_the_same_object_identity() {
         ] {
             let code = format!("{import} {call};");
             for file in ["main.js", "main.ts"] {
-                let r = Session::default()
-                    .analyze(
-                        &BTreeMap::from([(file.into(), code.as_bytes())]),
-                        file,
-                        None,
-                        &EnvironmentContract::default(),
-                    )
-                    .unwrap();
+                let r = report_for_file(file, &code, None);
                 assert_eq!(signature(&r), signature(&expected), "{file}: {code}");
             }
         }
@@ -131,29 +126,27 @@ fn equivalent_builtin_import_forms_keep_the_same_object_identity() {
 
 #[test]
 fn member_write_matrix_preserves_unrelated_and_captured_functions() {
-    for dynamic in [false, true] {
-        let reference = if dynamic {
-            "alias[key]=other"
-        } else {
-            "alias.readFileSync=other"
-        };
+    for (reference, keys, expected_count) in [
+        (
+            "alias.readFileSync=other",
+            &[
+                "'readFileSync'",
+                r"'read\u0046ileSync'",
+                "('readFileSync' as const)",
+            ][..],
+            2,
+        ),
+        ("alias[key]=other", &["key"][..], 1),
+    ] {
         let build = |write: &str| {
             format!(
                 "import fs from 'node:fs'; const alias=(fs); const before=alias.readFileSync; {write}; alias.readFileSync('in'); fs.writeFileSync('out','data'); before('in');"
             )
         };
         let expected = report(&build(reference), None);
-        assert_eq!(differences(&expected), if dynamic { 1 } else { 2 });
+        assert_eq!(differences(&expected), expected_count);
+        let expected_signature = signature(&expected);
         for object in ["fs", "alias", "(alias as typeof fs)"] {
-            let keys = if dynamic {
-                vec!["key"]
-            } else {
-                vec![
-                    "'readFileSync'",
-                    r"'read\u0046ileSync'",
-                    "('readFileSync' as const)",
-                ]
-            };
             for key in keys {
                 for write in [
                     format!("{object}[{key}]=other"),
@@ -163,12 +156,8 @@ fn member_write_matrix_preserves_unrelated_and_captured_functions() {
                 ] {
                     let source = build(&write);
                     let actual = report(&source, None);
-                    assert_eq!(
-                        differences(&actual),
-                        differences(&expected),
-                        "{source}: {actual:?}"
-                    );
-                    assert_eq!(signature(&actual), signature(&expected), "{source}");
+                    assert_eq!(differences(&actual), expected_count, "{source}: {actual:?}");
+                    assert_eq!(signature(&actual), expected_signature, "{source}");
                 }
             }
         }

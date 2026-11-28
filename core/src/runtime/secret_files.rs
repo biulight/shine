@@ -463,6 +463,18 @@ mod tests {
             mode: "prod".into(), groups: vec!["keys".into()], release: vec!["keys.enc".into()],
             ciphertexts: BTreeMap::from([("keys.enc".into(), "ciphertext".into())]), permissions: BTreeMap::new(), app: None }
     }
+    fn declaration(auto_decrypt: bool) -> SecretFileDeclaration {
+        SecretFileDeclaration {
+            workspace: "shine.workspace.toml".into(),
+            file_group: "keys".into(),
+            mode: "prod".into(),
+            auto_decrypt,
+            unix_uid: None,
+            unix_gid: None,
+            unix_mode: None,
+        }
+    }
+
     #[test]
     fn plaintext_source_alias_is_rejected_before_auxiliary_install() {
         for target in ["private/keys.bin", "PRIVATE/KEYS.BIN"] {
@@ -475,21 +487,12 @@ mod tests {
                 .file("app/demo/keys.enc", b"cipher".to_vec())
                 .file(format!("app/demo/{target}"), b"must-not-cache".to_vec())
                 .build();
-            let declaration = SecretFileDeclaration {
-                workspace: "shine.workspace.toml".into(),
-                file_group: "keys".into(),
-                mode: "prod".into(),
-                auto_decrypt: true,
-                unix_uid: None,
-                unix_gid: None,
-                unix_mode: None,
-            };
             let result = resolve_declarations(
                 &snapshot,
                 "demo",
                 3,
                 RuntimePlatform::Linux,
-                &[declaration],
+                &[declaration(true)],
                 &mut Vec::new(),
                 false,
             );
@@ -525,26 +528,19 @@ mod tests {
     }
     #[test]
     fn file_release_workspace_paths_support_posix_peers_on_every_host() {
-        for path in ["/srv/service/shine.workspace.toml", "/shine.workspace.toml"] {
-            let mut valid = request();
-            valid.workspace_path = path.into();
-            assert!(valid.descriptor().is_ok(), "{path}");
-        }
-        for path in [
-            "relative/shine.workspace.toml",
-            "/srv/../shine.workspace.toml",
-            "C:relative/shine.workspace.toml",
-            "\\relative\\shine.workspace.toml",
+        for (path, valid) in [
+            ("/srv/service/shine.workspace.toml", true),
+            ("/shine.workspace.toml", true),
+            ("relative/shine.workspace.toml", false),
+            ("/srv/../shine.workspace.toml", false),
+            ("C:relative/shine.workspace.toml", false),
+            (r"\relative\shine.workspace.toml", false),
+            #[cfg(windows)]
+            (r"C:\service\shine.workspace.toml", true),
         ] {
-            let mut invalid = request();
-            invalid.workspace_path = path.into();
-            assert!(invalid.descriptor().is_err(), "{path}");
-        }
-        #[cfg(windows)]
-        {
-            let mut local = request();
-            local.workspace_path = r"C:\service\shine.workspace.toml".into();
-            assert!(local.descriptor().is_ok());
+            let mut req = request();
+            req.workspace_path = path.into();
+            assert_eq!(req.descriptor().is_ok(), valid, "{path}");
         }
     }
     #[test]
@@ -570,15 +566,7 @@ mod tests {
     }
     #[test]
     fn secret_permissions_reject_broad_modes_and_windows_unix_fields() {
-        let mut declaration = SecretFileDeclaration {
-            workspace: "shine.workspace.toml".into(),
-            file_group: "keys".into(),
-            mode: "prod".into(),
-            auto_decrypt: false,
-            unix_uid: None,
-            unix_gid: None,
-            unix_mode: None,
-        };
+        let mut declaration = declaration(false);
         assert_eq!(
             declaration
                 .permissions(RuntimePlatform::Linux)
@@ -598,16 +586,14 @@ mod tests {
     #[test]
     fn secret_fingerprint_is_keyed_and_binary_exact() {
         // Frozen HMAC-SHA256 vector includes the domain separator and its NUL.
+        let fingerprint = keyed_fingerprint(b"one", b"password").unwrap();
         assert_eq!(
-            keyed_fingerprint(b"one", b"password").unwrap(),
+            fingerprint,
             "4b536494beaab275040de9c659d17186ea5ed125815b0b94d6126500ee5477f3"
         );
+        assert_ne!(fingerprint, keyed_fingerprint(b"two", b"password").unwrap());
         assert_ne!(
-            keyed_fingerprint(b"one", b"password").unwrap(),
-            keyed_fingerprint(b"two", b"password").unwrap()
-        );
-        assert_ne!(
-            keyed_fingerprint(b"one", b"password").unwrap(),
+            fingerprint,
             keyed_fingerprint(b"one", b"password\0").unwrap()
         );
     }

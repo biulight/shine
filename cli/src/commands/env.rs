@@ -527,16 +527,22 @@ mod phone_recipient_tests {
         identity: EnvIdentityCommand,
     }
 
+    fn parse_init(flags: &str) -> Result<IdentityCli, clap::Error> {
+        IdentityCli::try_parse_from(
+            ["identity", "init"]
+                .into_iter()
+                .chain(flags.split_whitespace()),
+        )
+    }
+
     #[test]
     fn phone_recipient_cli_defaults_and_explicit_types() {
-        for (extra, expected) in [
-            (vec![], PhoneRecipientType::Tag),
-            (vec!["--recipient-type", "tag"], PhoneRecipientType::Tag),
-            (vec!["--recipient-type", "phone"], PhoneRecipientType::Phone),
+        for (flags, expected) in [
+            ("--phone", PhoneRecipientType::Tag),
+            ("--phone --recipient-type tag", PhoneRecipientType::Tag),
+            ("--phone --recipient-type phone", PhoneRecipientType::Phone),
         ] {
-            let mut args = vec!["identity", "init", "--phone"];
-            args.extend(extra);
-            let parsed = IdentityCli::try_parse_from(args).unwrap();
+            let parsed = parse_init(flags).unwrap();
             let EnvIdentitySubcommand::Init { recipient_type, .. } = parsed.identity.command else {
                 panic!("expected init")
             };
@@ -546,37 +552,19 @@ mod phone_recipient_tests {
 
     #[test]
     fn phone_recipient_cli_rejects_invalid_combinations() {
-        for args in [
-            vec!["init", "--recipient-type", "tag"],
-            vec!["init", "--phone", "--recipient-type", "unknown"],
-            vec!["init", "--touch-id", "--recipient-type", "tag"],
-            vec![
-                "init",
-                "--recipient-type",
-                "tag",
-                "--output",
-                "identity.txt",
-            ],
-            vec!["init", "--recipient-type", "tag", "--force"],
-            vec![
-                "init",
-                "--recipient-type",
-                "tag",
-                "--access-control",
-                "passcode",
-            ],
-            vec!["init", "--phone", "--touch-id"],
-            vec!["init", "--phone", "--output", "identity.txt"],
-            vec!["init", "--phone", "--force"],
-            vec!["init", "--phone", "--access-control", "passcode"],
+        for flags in [
+            "--recipient-type tag",
+            "--phone --recipient-type unknown",
+            "--touch-id --recipient-type tag",
+            "--recipient-type tag --output identity.txt",
+            "--recipient-type tag --force",
+            "--recipient-type tag --access-control passcode",
+            "--phone --touch-id",
+            "--phone --output identity.txt",
+            "--phone --force",
+            "--phone --access-control passcode",
         ] {
-            assert!(
-                IdentityCli::try_parse_from(
-                    std::iter::once("identity").chain(args.iter().copied())
-                )
-                .is_err(),
-                "accepted {args:?}"
-            );
+            assert!(parse_init(flags).is_err(), "accepted {flags}");
         }
     }
 }
@@ -588,13 +576,16 @@ mod workspace_export_tests {
 
     #[test]
     fn export_format_argument_contract() {
-        let prefix = ["shine", "env", "workspace", "export"];
+        let parse = |flags: &str| {
+            let prefix = ["shine", "env", "workspace", "export"];
+            Cli::try_parse_from(prefix.into_iter().chain(flags.split_whitespace()))
+        };
         for args in [
             "--format dotenv --mode prod --output out.env",
             "--format dotenv --mode prod --output out.env --force --include-secrets",
             "--format files --mode prod --file-group signing --file-group account --dry-run",
         ] {
-            Cli::try_parse_from(prefix.into_iter().chain(args.split_whitespace())).unwrap();
+            parse(args).unwrap();
         }
         for args in [
             "--format dotenv --mode prod",
@@ -607,10 +598,7 @@ mod workspace_export_tests {
             "--format files --mode prod --file-group signing --force",
             "--format files --mode prod --file-group signing --include-secrets",
         ] {
-            assert!(
-                Cli::try_parse_from(prefix.into_iter().chain(args.split_whitespace())).is_err(),
-                "{args}"
-            );
+            assert!(parse(args).is_err(), "{args}");
         }
     }
 }

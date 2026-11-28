@@ -39,6 +39,11 @@ mod tests {
 
     #[test]
     fn completion_distinguishes_protection_partial_success_and_preview_failures() {
+        let outcome = |target, status| LifecycleOutcomeV1::new(target, None::<String>, status, []);
+        assert!(
+            !anyhow::anyhow!("command incomplete; see reported results")
+                .is::<crate::output::ReportedCommandFailure>()
+        );
         for status in [
             LifecycleStatus::Preserved,
             LifecycleStatus::Conflict,
@@ -47,26 +52,12 @@ mod tests {
             for partial in [false, true] {
                 let mut result = LifecycleResultV1::new(LifecycleOperation::Uninstall, false);
                 if partial {
-                    result.push(LifecycleOutcomeV1::new(
-                        "app/removed",
-                        None::<String>,
-                        LifecycleStatus::Changed,
-                        [],
-                    ));
+                    result.push(outcome("app/removed", LifecycleStatus::Changed));
                 }
-                result.push(LifecycleOutcomeV1::new(
-                    "app/kept",
-                    None::<String>,
-                    status,
-                    [],
-                ));
+                result.push(outcome("app/kept", status));
                 assert_eq!(summary_label(&result, false), "Uninstall incomplete");
                 let error = check_completion(&result, false).unwrap_err();
                 assert!(error.is::<crate::output::ReportedCommandFailure>());
-                assert!(
-                    !anyhow::anyhow!("command incomplete; see reported results")
-                        .is::<crate::output::ReportedCommandFailure>()
-                );
                 assert_eq!(
                     check_completion(&result, true).is_err(),
                     status == LifecycleStatus::Failed
@@ -74,12 +65,7 @@ mod tests {
             }
         }
         let mut complete = LifecycleResultV1::new(LifecycleOperation::Uninstall, false);
-        complete.push(LifecycleOutcomeV1::new(
-            "shell/sample/one",
-            None::<String>,
-            LifecycleStatus::Changed,
-            [],
-        ));
+        complete.push(outcome("shell/sample/one", LifecycleStatus::Changed));
         assert_eq!(summary_label(&complete, false), "Uninstall complete");
         assert!(check_completion(&complete, false).is_ok());
         assert_eq!(summary_label(&complete, true), "Uninstall preview");

@@ -13,37 +13,32 @@ test("Bun checks execute with the runtime pinned in mise.toml", async () => {
   expect(Bun.version).toBe(config.tools.bun);
 });
 
-test("Bun pre-commit hook covers all maintained TypeScript sources and tooling inputs", async () => {
+test.each([
+  {
+    id: "bun-check", glob: "presets/**/*.ts",
+    inputs: ["package.json", "tsconfig.json", "bun.lock", "presets/shell/agent/cc.providers.toml"],
+    excluded: ["docs/manual/index.md", "cli/src/main.rs", "presets/app/surge/shine.toml"],
+  },
+  {
+    id: "cargo-test", glob: "presets/**/*",
+    inputs: ["Cargo.toml", "Cargo.lock", ".config/nextest.toml", "tests/builtin_presets.rs",
+      "tests/builtin_presets/support.rs", "core/src/runtime/mod.rs"],
+    excluded: ["docs/manual/index.md"],
+  },
+])("$id pre-commit hook covers its preset and tooling inputs", async ({ id, glob, inputs, excluded }) => {
   const config = Bun.YAML.parse(
     await Bun.file(join(ROOT, ".pre-commit-config.yaml")).text(),
   ) as HookConfig;
-  const hook = config.repos.flatMap((repo) => repo.hooks).find((hook) => hook.id === "bun-check");
-  expect(hook?.entry).toBe("bash -c 'mise exec -- bun run --bun check:ts'");
+  const hook = config.repos.flatMap((repo) => repo.hooks).find((hook) => hook.id === id);
+  if (id === "bun-check") {
+    expect(hook?.entry).toBe("bash -c 'mise exec -- bun run --bun check:ts'");
+  }
   expect(hook?.files).toBeDefined();
   const filter = new RegExp(hook!.files!);
-  const paths = [".pre-commit-config.yaml", "mise.toml", "package.json", "tsconfig.json", "bun.lock", "presets/shell/agent/cc.providers.toml"];
-  for await (const path of new Bun.Glob("presets/**/*.ts").scan({ cwd: ROOT, onlyFiles: true })) {
-    paths.push(path.replaceAll("\\", "/"));
-  }
-  const missed = paths.filter((path) => !filter.test(path));
-  expect(missed).toEqual([]);
-  for (const unrelated of ["docs/manual/index.md", "cli/src/main.rs", "presets/app/surge/shine.toml"]) {
-    expect(filter.test(unrelated)).toBe(false);
-  }
-});
-
-test("Rust regression hook covers preset content and integration-test inputs", async () => {
-  const config = Bun.YAML.parse(
-    await Bun.file(join(ROOT, ".pre-commit-config.yaml")).text(),
-  ) as HookConfig;
-  const hook = config.repos.flatMap((repo) => repo.hooks).find((hook) => hook.id === "cargo-test");
-  expect(hook?.files).toBeDefined();
-  const filter = new RegExp(hook!.files!);
-  const paths = ["Cargo.toml", "Cargo.lock", ".config/nextest.toml", ".pre-commit-config.yaml", "mise.toml",
-    "tests/builtin_presets.rs", "tests/builtin_presets/support.rs", "core/src/runtime/mod.rs"];
-  for await (const path of new Bun.Glob("presets/**/*").scan({ cwd: ROOT, onlyFiles: true })) {
+  const paths = [".pre-commit-config.yaml", "mise.toml", ...inputs];
+  for await (const path of new Bun.Glob(glob).scan({ cwd: ROOT, onlyFiles: true })) {
     paths.push(path.replaceAll("\\", "/"));
   }
   expect(paths.filter((path) => !filter.test(path))).toEqual([]);
-  expect(filter.test("docs/manual/index.md")).toBe(false);
+  expect(excluded.filter((path) => filter.test(path))).toEqual([]);
 });

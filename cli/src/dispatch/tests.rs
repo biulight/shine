@@ -1531,160 +1531,71 @@ fn cli_rejects_install_force_options() {
 
 #[test]
 fn cli_accepts_sys_bootstrap_options() {
-    let verbose = Cli::try_parse_from(["shine", "sys", "bootstrap", "--verbose"]).unwrap();
-    assert!(matches!(
-        verbose.command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap { verbose: true, .. }
+    let parse = |args: &str| {
+        Cli::try_parse_from(
+            ["shine", "sys", "bootstrap"]
+                .into_iter()
+                .chain(args.split_whitespace()),
+        )
+    };
+    let none: &[&str] = &[];
+    let ordered: &[&str] = &["rust", "mise"];
+    for (args, expected_preset, positional, exact) in [
+        ("", None, none, none),
+        ("--verbose", None, none, none),
+        ("--dry-run", None, none, none),
+        ("--force-profile", None, none, none),
+        ("--proxy", None, none, none),
+        ("--preset recommended", Some("recommended"), none, none),
+        (
+            "--preset recommended --dry-run",
+            Some("recommended"),
+            none,
+            none,
+        ),
+        ("rust mise", None, ordered, none),
+        ("--item rust --item mise --yes", None, none, ordered),
+    ] {
+        let Commands::Sys {
+            command:
+                SysCommands::Bootstrap {
+                    items,
+                    exact_items,
+                    preset,
+                    verbose,
+                    dry_run,
+                    force_profile,
+                    proxy,
+                    yes,
+                },
+        } = parse(args).unwrap().command
+        else {
+            panic!("expected sys bootstrap: {args}")
+        };
+        assert_eq!(items, positional, "{args}");
+        assert_eq!(exact_items, exact, "{args}");
+        assert_eq!(preset.as_deref(), expected_preset, "{args}");
+        for (flag, actual) in [
+            ("--verbose", verbose),
+            ("--dry-run", dry_run),
+            ("--force-profile", force_profile),
+            ("--proxy", proxy),
+            ("--yes", yes),
+        ] {
+            assert_eq!(
+                actual,
+                args.split_whitespace().any(|arg| arg == flag),
+                "{args}: {flag}"
+            );
         }
-    ));
-    let cli = Cli::try_parse_from(["shine", "sys", "bootstrap"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap {
-                items,
-                preset: None,
-                dry_run: false,
-                force_profile: false,
-                proxy: false,
-                ..
-            }
-        } if items.is_empty()
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "--dry-run"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap {
-                items,
-                preset: None,
-                dry_run: true,
-                force_profile: false,
-                proxy: false,
-                ..
-            }
-        } if items.is_empty()
-    ));
-
-    let cli =
-        Cli::try_parse_from(["shine", "sys", "bootstrap", "--preset", "recommended"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap {
-                items,
-                preset: Some(ref preset),
-                dry_run: false,
-                force_profile: false,
-                proxy: false,
-                ..
-            }
-        } if items.is_empty() && preset == "recommended"
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "--force-profile"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap {
-                items,
-                preset: None,
-                dry_run: false,
-                force_profile: true,
-                proxy: false,
-                ..
-            }
-        } if items.is_empty()
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "--proxy"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap {
-                items,
-                preset: None,
-                dry_run: false,
-                force_profile: false,
-                proxy: true,
-                ..
-            }
-        } if items.is_empty()
-    ));
-
-    let cli = Cli::try_parse_from([
-        "shine",
-        "sys",
-        "bootstrap",
-        "--preset",
-        "recommended",
-        "--dry-run",
-    ])
-    .unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap {
-                items,
-                preset: Some(ref preset),
-                dry_run: true,
-                force_profile: false,
-                proxy: false,
-                ..
-            }
-        } if items.is_empty() && preset == "recommended"
-    ));
-
-    let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "rust", "mise"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap {
-                items,
-                preset: None,
-                ..
-            }
-        } if items == ["rust", "mise"]
-    ));
-
-    let cli = Cli::try_parse_from([
-        "shine",
-        "sys",
-        "bootstrap",
-        "--item",
-        "rust",
-        "--item",
-        "mise",
-        "--yes",
-    ])
-    .unwrap();
-    assert!(matches!(
-        cli.command,
-        Commands::Sys {
-            command: SysCommands::Bootstrap {
-                items,
-                exact_items,
-                yes: true,
-                ..
-            }
-        } if items.is_empty() && exact_items == ["rust", "mise"]
-    ));
-
-    assert!(
-        Cli::try_parse_from([
-            "shine",
-            "sys",
-            "bootstrap",
-            "mise",
-            "--preset",
-            "recommended",
-        ])
-        .is_err()
-    );
-    assert!(Cli::try_parse_from(["shine", "sys", "bootstrap", "rust", "--item", "mise",]).is_err());
-    assert!(Cli::try_parse_from(["shine", "sys", "bootstrap", "--dry-run", "--yes",]).is_err());
+    }
+    for conflict in [
+        "mise --preset recommended",
+        "rust --item mise",
+        "--dry-run --yes",
+    ] {
+        assert!(parse(conflict).is_err(), "{conflict}");
+    }
 }
 
 #[test]

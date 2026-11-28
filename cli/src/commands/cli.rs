@@ -416,43 +416,33 @@ mod security_review_tests {
 
     #[test]
     fn every_security_review_entry_accepts_verbose() {
-        for args in [
-            vec!["install", "app/demo"],
-            vec!["uninstall", "shell/demo"],
-            vec!["upgrade"],
-            vec!["app", "install"],
-            vec!["app", "uninstall"],
-            vec!["app", "recover"],
-            vec!["app", "refresh", "demo"],
-            vec!["app", "artifact", "apply", "demo"],
-            vec!["app", "artifact", "remove", "demo"],
-            vec!["shell", "install"],
-            vec!["shell", "uninstall"],
-            vec!["shell", "recover"],
-            vec!["sys", "apply"],
-            vec!["sys", "uninstall", "demo"],
-            vec!["sys", "recover"],
-            vec!["sys", "bootstrap"],
-            vec!["sys", "profile", "enable", "demo"],
-            vec!["sys", "profile", "disable", "demo"],
+        for command in [
+            "install app/demo",
+            "uninstall shell/demo",
+            "upgrade",
+            "app install",
+            "app uninstall",
+            "app recover",
+            "app refresh demo",
+            "app artifact apply demo",
+            "app artifact remove demo",
+            "shell install",
+            "shell uninstall",
+            "shell recover",
+            "sys apply",
+            "sys uninstall demo",
+            "sys recover",
+            "sys bootstrap",
+            "sys profile enable demo",
+            "sys profile disable demo",
         ] {
-            let mut command = vec!["shine"];
-            command.extend(args);
-            assert!(
-                !Cli::try_parse_from(&command)
-                    .unwrap()
-                    .command
-                    .security_plan_verbose(),
-                "{command:?}"
-            );
-            command.push("--verbose");
-            assert!(
-                Cli::try_parse_from(&command)
-                    .unwrap()
-                    .command
-                    .security_plan_verbose(),
-                "{command:?}"
-            );
+            for verbose in [false, true] {
+                let args = std::iter::once("shine")
+                    .chain(command.split_ascii_whitespace())
+                    .chain(verbose.then_some("--verbose"));
+                let parsed = Cli::try_parse_from(args).unwrap();
+                assert_eq!(parsed.command.security_plan_verbose(), verbose, "{command}");
+            }
         }
     }
 }

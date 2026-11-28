@@ -1,4 +1,5 @@
 //! Instrument the real in-memory host; no parallel file/backup implementation.
+use super::{ReadFuture, poll_once};
 use crate::runtime::*;
 use std::{
     future::Future,
@@ -8,7 +9,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    task::Poll,
 };
 
 pub(crate) struct LockedHost {
@@ -48,40 +48,25 @@ impl LockedHost {
 }
 
 impl FileSystemObservationHost for LockedHost {
-    fn canonicalize<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
+    fn canonicalize<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, PathBuf> {
         self.inner.canonicalize(path)
     }
-    fn read<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, HostError>> + Send + 'a>> {
+    fn read<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, Vec<u8>> {
         Box::pin(async move {
             self.assert_locked();
             self.inner.read(path).await
         })
     }
-    fn metadata<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<FileMetadata, HostError>> + Send + 'a>> {
+    fn metadata<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, FileMetadata> {
         Box::pin(async move {
             self.assert_locked();
             self.inner.metadata(path).await
         })
     }
-    fn read_dir<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<PathBuf>, HostError>> + Send + 'a>> {
+    fn read_dir<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, Vec<PathBuf>> {
         self.inner.read_dir(path)
     }
-    fn read_link<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
+    fn read_link<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, PathBuf> {
         self.inner.read_link(path)
     }
 }
@@ -213,15 +198,6 @@ impl PrivilegedFileSystemHost for LockedHost {
     }
 }
 
-async fn assert_pending(future: Pin<&mut impl Future>) {
-    let mut future = future;
-    std::future::poll_fn(|cx| {
-        assert!(future.as_mut().poll(cx).is_pending());
-        Poll::Ready(())
-    })
-    .await;
-}
-
 pub(crate) async fn check_backup_boundaries(
     install: impl AsyncFn(&LockedHost, &Path) -> anyhow::Result<crate::install::InstallOutcome>,
     uninstall: impl AsyncFn(
@@ -232,18 +208,26 @@ pub(crate) async fn check_backup_boundaries(
     use crate::install::{AppEntry, AppInstallStrategy, hash_content};
     let destination = std::env::temp_dir().join("shine-privileged-boundary");
     let backup = crate::install::backup_path(&destination);
+    let failing_host = |pause_restore| {
+        let host = LockedHost::new(backup.clone(), pause_restore);
+        host.inner.put_file(&destination, b"original".to_vec());
+        host.inner.fail_write_after(&destination, 0);
+        host
+    };
+    let assert_backup_retained = async |host: &LockedHost| {
+        assert!(host.inner.read(&destination).await.is_err());
+        assert_eq!(host.inner.read(&backup).await.unwrap(), b"original");
+    };
     // Pause inside backup restoration: prove ownership persists across the await,
     // and that cancellation releases the lock without claiming to restore bytes.
     for cancel in [false, true] {
-        let host = LockedHost::new(backup.clone(), true);
-        host.inner.put_file(&destination, b"original".to_vec());
-        host.inner.fail_write_after(&destination, 0);
+        let host = failing_host(true);
         let mut operation = Box::pin(install(&host, &destination));
-        assert_pending(operation.as_mut()).await;
+        assert!(poll_once(operation.as_mut()).await.is_pending());
         assert!(host.paused.load(Ordering::SeqCst));
         host.assert_locked();
         let mut competitor = Box::pin(host.inner.acquire_privileged_operation());
-        assert_pending(competitor.as_mut()).await;
+        assert!(poll_once(competitor.as_mut()).await.is_pending());
         if cancel {
             drop(operation);
         } else {
@@ -253,8 +237,7 @@ pub(crate) async fn check_backup_boundaries(
         assert!(!host.held.load(Ordering::SeqCst));
         let guard = competitor.await.unwrap();
         if cancel {
-            assert!(host.inner.read(&destination).await.is_err());
-            assert_eq!(host.inner.read(&backup).await.unwrap(), b"original");
+            assert_backup_retained(&host).await;
         } else {
             assert_eq!(host.inner.read(&destination).await.unwrap(), b"original");
             assert!(host.inner.read(&backup).await.is_err());
@@ -262,17 +245,14 @@ pub(crate) async fn check_backup_boundaries(
         drop(guard);
     }
     // A failed rollback retains the backup and the original write error.
-    let host = LockedHost::new(backup.clone(), false);
-    host.inner.put_file(&destination, b"original".to_vec());
-    host.inner.fail_write_after(&destination, 0);
+    let host = failing_host(false);
     host.inner.fail_rename_after(&backup, &destination, 0);
     assert_eq!(
         install(&host, &destination).await.unwrap_err().to_string(),
         "privileged write"
     );
     assert!(!host.held.load(Ordering::SeqCst));
-    assert!(host.inner.read(&destination).await.is_err());
-    assert_eq!(host.inner.read(&backup).await.unwrap(), b"original");
+    assert_backup_retained(&host).await;
 
     // Uninstall restoration errors propagate after removal, preserving backup bytes.
     host.inner.put_file(&destination, b"managed".to_vec());
@@ -291,7 +271,6 @@ pub(crate) async fn check_backup_boundaries(
         "privileged move"
     );
     assert!(!host.held.load(Ordering::SeqCst));
-    assert!(host.inner.read(&destination).await.is_err());
-    assert_eq!(host.inner.read(&backup).await.unwrap(), b"original");
+    assert_backup_retained(&host).await;
     let _guard = host.inner.acquire_privileged_operation().await.unwrap();
 }

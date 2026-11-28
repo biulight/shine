@@ -488,56 +488,30 @@ mod tests {
 
     #[tokio::test]
     async fn file_chunks_reject_reordered_empty_and_changed_length_frames() {
-        for chunk in [
-            Chunk {
-                nonce: "n".into(),
-                index: 0,
-                offset: 1,
-                length: 2,
-                data: Zeroizing::new("YQ==".into()),
-            },
-            Chunk {
-                nonce: "n".into(),
-                index: 0,
-                offset: 0,
-                length: 2,
-                data: Zeroizing::new(String::new()),
-            },
-            Chunk {
-                nonce: "n".into(),
-                index: 0,
-                offset: 0,
-                length: 1,
-                data: Zeroizing::new("YWJj".into()),
-            },
+        let chunk = |offset, length, data: &str| Chunk {
+            nonce: "n".into(),
+            index: 0,
+            offset,
+            length,
+            data: Zeroizing::new(data.into()),
+        };
+        for (frames, expected) in [
+            (vec![chunk(1, 2, "YQ==")], "association/order mismatch"),
+            (vec![chunk(0, 2, "")], "empty intermediate"),
+            (vec![chunk(0, 1, "YWJj")], "chunk length"),
+            (
+                vec![chunk(0, 2, "YQ=="), chunk(1, 3, "YQ==")],
+                "length changed",
+            ),
         ] {
             let mut wire = Vec::new();
-            protocol::write_message(&mut wire, &chunk).await.unwrap();
-            assert!(
-                receive_blob(&mut std::io::Cursor::new(wire), "n", 0, 10)
-                    .await
-                    .is_err()
-            );
-        }
-        let mut wire = Vec::new();
-        for (offset, length) in [(0, 2), (1, 3)] {
-            protocol::write_message(
-                &mut wire,
-                &Chunk {
-                    nonce: "n".into(),
-                    index: 0,
-                    offset,
-                    length,
-                    data: Zeroizing::new("YQ==".into()),
-                },
-            )
-            .await
-            .unwrap();
-        }
-        assert!(
-            receive_blob(&mut std::io::Cursor::new(wire), "n", 0, 10)
+            for frame in frames {
+                protocol::write_message(&mut wire, &frame).await.unwrap();
+            }
+            let error = receive_blob(&mut wire.as_slice(), "n", 0, 10)
                 .await
-                .is_err()
-        );
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{expected}: {error}");
+        }
     }
 }

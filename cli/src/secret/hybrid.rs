@@ -598,19 +598,15 @@ mod controlled_process_tests {
         let dir =
             std::env::temp_dir().join(format!("shine-hybrid-controlled-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
-        let identity = dir.join("identity");
-        std::fs::write(&identity, "test").unwrap();
+        let identities = [dir.join("identity")];
+        std::fs::write(&identities[0], "test").unwrap();
         let mut material = vec![9; 24];
         material.extend_from_slice(&[7; 32]);
         let key = format!("{KEY_PREFIX}{}", B64.encode(material));
-        let ciphertext = encode(
-            &[7; 32],
-            &[9; 24],
-            key.as_bytes(),
-            key.as_bytes(),
-            b"exact\n",
-        )
-        .unwrap();
+        let envelope = |age_wrapper: &[u8], plaintext: &[u8]| {
+            encode(&[7; 32], &[9; 24], key.as_bytes(), age_wrapper, plaintext).unwrap()
+        };
+        let ciphertext = envelope(key.as_bytes(), b"exact\n");
         let payload = ciphertext.strip_prefix(PREFIX).unwrap();
         unsafe {
             std::env::set_var("PATH", &dir);
@@ -629,32 +625,22 @@ mod controlled_process_tests {
             assert_eq!(decrypt(payload, &[], None).await.unwrap(), "exact\n");
             tool(&dir, "age", false);
             assert_eq!(
-                decrypt(payload, std::slice::from_ref(&identity), Some("age"))
-                    .await
-                    .unwrap(),
+                decrypt(payload, &identities, Some("age")).await.unwrap(),
                 "exact\n"
             );
             if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
-                assert!(select(std::slice::from_ref(&identity), None).await.is_err());
+                assert!(select(&identities, None).await.is_err());
             }
             tool(&dir, "gpg", true);
             // age works, but cancellation/failure of selected GPG is terminal.
-            assert!(
-                decrypt(payload, std::slice::from_ref(&identity), Some("gpg"))
-                    .await
-                    .is_err()
-            );
+            assert!(decrypt(payload, &identities, Some("gpg")).await.is_err());
             std::fs::remove_file(dir.join("gpg")).unwrap();
-            assert_eq!(
-                select(std::slice::from_ref(&identity), None).await.unwrap(),
-                BackendKind::Age
-            );
-            let oversized =
-                encode(&[7; 32], &[9; 24], key.as_bytes(), &[b'x'; 4096], b"secret").unwrap();
+            assert_eq!(select(&identities, None).await.unwrap(), BackendKind::Age);
+            let oversized = envelope(&[b'x'; 4096], b"secret");
             assert!(
                 decrypt(
                     oversized.strip_prefix(PREFIX).unwrap(),
-                    std::slice::from_ref(&identity),
+                    &identities,
                     Some("age")
                 )
                 .await

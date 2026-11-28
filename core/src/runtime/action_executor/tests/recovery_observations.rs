@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::tests::poll_once;
 
 const ORIGINAL: &[u8] = br#"{"proxy":"old","containersProxy":"old"}"#;
 const DESIRED: &[u8] = br#"{"proxy":"new","containersProxy":"new"}"#;
@@ -92,11 +93,7 @@ async fn recovery_revalidates_observations_after_each_lock_wait() {
             let since = runtime.host().operations().len();
             let recovery = runtime.recover_app_operation_approved(&approval);
             tokio::pin!(recovery);
-            std::future::poll_fn(|cx| {
-                assert!(std::future::Future::poll(recovery.as_mut(), cx).is_pending());
-                std::task::Poll::Ready(())
-            })
-            .await;
+            assert!(poll_once(recovery.as_mut()).await.is_pending());
             if !privileged {
                 assert_eq!(runtime.host().operations().len(), since);
             }

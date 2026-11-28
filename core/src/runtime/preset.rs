@@ -302,11 +302,17 @@ fn category_root(root: &Path, logical_path: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    use PresetSourceKind::{Embedded, External};
+
+    fn snapshot_digest(builder: PresetSnapshotBuilder) -> SnapshotDigestV1 {
+        builder.build().digest_v1().unwrap()
+    }
+
     #[test]
     fn digests_bind_effective_executable_intent() {
         let path = "app/demo/helper";
         let snapshot = |executable| {
-            PresetSnapshot::builder(PresetSourceKind::External)
+            PresetSnapshot::builder(External)
                 .file_with_executable(path, b"helper".to_vec(), executable)
                 .build()
         };
@@ -317,25 +323,22 @@ mod tests {
             plain.code_digest_v1([path]).unwrap(),
             executable.code_digest_v1([path]).unwrap()
         );
-        let overlay = |base_executable| {
-            PresetSnapshot::builder(PresetSourceKind::External)
+        let overlay_digests = |base_executable| {
+            let snapshot = PresetSnapshot::builder(External)
                 .file_with_executable(path, b"shadowed".to_vec(), base_executable)
                 .overlay_file_with_executable(path, b"helper".to_vec(), true)
-                .build()
+                .build();
+            (
+                snapshot.digest_v1().unwrap(),
+                snapshot.code_digest_v1([path]).unwrap(),
+            )
         };
-        assert_eq!(
-            overlay(false).digest_v1().unwrap(),
-            overlay(true).digest_v1().unwrap()
-        );
-        assert_eq!(
-            overlay(false).code_digest_v1([path]).unwrap(),
-            overlay(true).code_digest_v1([path]).unwrap()
-        );
+        assert_eq!(overlay_digests(false), overlay_digests(true));
     }
 
     #[test]
     fn immutable_snapshot_rejects_paths_outside_known_kinds() {
-        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+        let snapshot = PresetSnapshot::builder(External)
             .file("../secret", Vec::new())
             .build();
         let report = snapshot.validate();
@@ -345,60 +348,41 @@ mod tests {
 
     #[test]
     fn digest_binds_effective_content_and_layer_but_not_physical_root() {
-        let first = PresetSnapshot::builder(PresetSourceKind::External)
-            .base_root(PathBuf::from("first-root"))
-            .file("app/demo/shine.toml", b"metadata".to_vec())
-            .file("app/demo/config.toml", b"content".to_vec())
-            .build();
-        let relocated = PresetSnapshot::builder(PresetSourceKind::External)
-            .base_root(PathBuf::from("other-root"))
-            .file("app/demo/shine.toml", b"metadata".to_vec())
-            .file("app/demo/config.toml", b"content".to_vec())
-            .build();
-        let changed_content = PresetSnapshot::builder(PresetSourceKind::External)
-            .file("app/demo/shine.toml", b"changed".to_vec())
-            .file("app/demo/config.toml", b"content".to_vec())
-            .build();
-        let overlay = PresetSnapshot::builder(PresetSourceKind::External)
-            .file("app/demo/shine.toml", b"metadata".to_vec())
-            .file("app/demo/config.toml", b"base".to_vec())
-            .overlay_file("app/demo/config.toml", b"content".to_vec())
-            .build();
+        let config = "app/demo/config.toml";
+        let files = |root: &str, metadata: &[u8], content: &[u8]| {
+            PresetSnapshot::builder(External)
+                .base_root(root)
+                .file("app/demo/shine.toml", metadata.to_vec())
+                .file(config, content.to_vec())
+        };
+        let root = "first-root";
+        let original = |root| snapshot_digest(files(root, b"metadata", b"content"));
+        let first = original(root);
+        assert_eq!(first, original("other-root"));
+        assert_ne!(first, snapshot_digest(files(root, b"changed", b"content")));
 
-        assert_eq!(first.digest_v1().unwrap(), relocated.digest_v1().unwrap());
-        assert_ne!(
-            first.digest_v1().unwrap(),
-            changed_content.digest_v1().unwrap()
-        );
-        assert_ne!(first.digest_v1().unwrap(), overlay.digest_v1().unwrap());
+        let overlay = files(root, b"metadata", b"base").overlay_file(config, b"content".to_vec());
+        assert_ne!(first, snapshot_digest(overlay));
     }
 
     #[test]
     fn code_digest_binds_selected_content_and_effective_layer() {
-        let embedded = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file("app/demo/shine.toml", b"metadata".to_vec())
-            .file("app/demo/run.sh", b"echo ok".to_vec())
-            .build();
-        let external = PresetSnapshot::builder(PresetSourceKind::External)
-            .file("app/demo/shine.toml", b"metadata".to_vec())
-            .file("app/demo/run.sh", b"echo ok".to_vec())
-            .build();
         let paths = ["app/demo/shine.toml", "app/demo/run.sh"];
-        assert_ne!(
-            embedded.code_digest_v1(paths).unwrap(),
-            external.code_digest_v1(paths).unwrap()
-        );
+        let digest = |source| {
+            PresetSnapshot::builder(source)
+                .file(paths[0], b"metadata".to_vec())
+                .file(paths[1], b"echo ok".to_vec())
+                .build()
+                .code_digest_v1(paths)
+                .unwrap()
+        };
+        assert_ne!(digest(Embedded), digest(External));
     }
 
     #[test]
     fn digest_binds_logical_path_without_host_path_parsing() {
-        let first = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file("app/demo/config.toml", b"content".to_vec())
-            .build();
-        let renamed = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file("app/demo/renamed.toml", b"content".to_vec())
-            .build();
-
-        assert_ne!(first.digest_v1().unwrap(), renamed.digest_v1().unwrap());
+        let file = |path: &str| PresetSnapshot::builder(Embedded).file(path, b"content".to_vec());
+        let first = snapshot_digest(file("app/demo/config.toml"));
+        assert_ne!(first, snapshot_digest(file("app/demo/renamed.toml")));
     }
 }

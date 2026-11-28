@@ -14,6 +14,8 @@ checker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checker)
 SHA = "123456789" + "a" * 31
 DATE = "2026-11-14"
+PREVIEW = "shine 2.10.0-preview"
+PREVIEW_OUTPUT = f"{PREVIEW} ({SHA[:9]} {DATE})"
 
 
 class ReleaseVersion(unittest.TestCase):
@@ -29,23 +31,18 @@ class ReleaseVersion(unittest.TestCase):
                     f"shine {version} ({SHA[:9]} {DATE})\r\n", SHA, DATE
                 )
 
-    def test_rejects_missing_or_partial_provenance(self):
-        for suffix in ("", f" ({SHA[:9]})", f" ({DATE})"):
-            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
-                checker.check_version("shine 2.10.0-preview" + suffix, SHA, DATE)
-
-    def test_rejects_wrong_commit_or_date(self):
-        for sha, date in (("987654321", DATE), (SHA[:9], "2026-11-13"), (SHA, DATE)):
-            with self.subTest(sha=sha, date=date), self.assertRaises(ValueError):
-                checker.check_version(f"shine 2.10.0-preview ({sha} {date})", SHA, DATE)
-
-    def test_rejects_empty_or_extra_output(self):
-        good = f"shine 2.10.0-preview ({SHA[:9]} {DATE})"
+    def test_rejects_invalid_version_output(self):
         for output in (
+            PREVIEW,
+            f"{PREVIEW} ({SHA[:9]})",
+            f"{PREVIEW} ({DATE})",
+            f"{PREVIEW} (987654321 {DATE})",
+            f"{PREVIEW} ({SHA[:9]} 2026-11-13)",
+            f"{PREVIEW} ({SHA} {DATE})",
             "",
-            "warning\n" + good,
-            good + "\nextra",
-            good.replace("2.10.0-preview", "unknown"),
+            "warning\n" + PREVIEW_OUTPUT,
+            PREVIEW_OUTPUT + "\nextra",
+            PREVIEW_OUTPUT.replace("2.10.0-preview", "unknown"),
         ):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 checker.check_version(output, SHA, DATE)
@@ -53,11 +50,11 @@ class ReleaseVersion(unittest.TestCase):
     def test_rejects_invalid_expected_metadata(self):
         for sha, date in (("", DATE), (SHA[:8], DATE), (SHA, ""), (SHA, "2026-02-30")):
             with self.subTest(sha=sha, date=date), self.assertRaises(ValueError):
-                checker.check_version("shine 2.10.0-preview", sha, date)
+                checker.check_version(f"{PREVIEW} ({sha[:9]} {date})", sha, date)
 
     def test_cli_exit_status_and_output(self):
-        good = f"shine 2.10.0-preview ({SHA[:9]} {DATE})\n"
-        for output, code in ((good, 0), ("shine 2.10.0-preview\n", 1)):
+        good = PREVIEW_OUTPUT + "\n"
+        for output, code in ((good, 0), (PREVIEW + "\n", 1)):
             with self.subTest(output=output):
                 result = subprocess.run(
                     [sys.executable, str(SCRIPT), SHA, DATE],
